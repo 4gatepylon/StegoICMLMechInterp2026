@@ -1,0 +1,13 @@
+click>=8.1
+claude-agent-sdk
+datasets
+fastapi>=0.110
+huggingface-hub
+jinja2>=3.1
+pydantic>=2.12
+pydantic-yaml>=1.6
+tqdm>=4.67
+transformers
+trl
+uvicorn[standard]>=0.29
+ruff==0.14.2
