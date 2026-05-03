@@ -22,17 +22,18 @@ Likely contribution is just:
 
 ## Testing
 
-Decode the two example programs (encoded with cipher1) to extract their hidden bitstrings:
+Decode the example programs to extract their hidden bitstrings:
 
 ```bash
-python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example1.py
-python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example2.py
-```
+# cipher1
+python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example1.py \
+  --expect "$(head -1 cipher1_examples/encoded_example1.py | sed 's/# EXPECTED: //')"
+python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example2.py \
+  --expect "$(head -1 cipher1_examples/encoded_example2.py | sed 's/# EXPECTED: //')"
 
-To verify against an expected prefix, use `--expect`:
-
-```bash
-python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example1.py --expect "01"
+# cipher2
+python decoder.py --cipher ciphers/cipher2.json cipher2_examples/encoded_example1.py \
+  --expect "$(head -1 cipher2_examples/encoded_example1.py | sed 's/# EXPECTED: //')"
 ```
 
 ---
