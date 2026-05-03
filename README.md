@@ -49,8 +49,8 @@ The components therefore are likely:
 - Paper writeup
 
 # TODOs
-- Understand how Agent SDK works: https://code.claude.com/docs/en/agent-sdk/overview
-- Get a really good cipher
-- Understand how to measure model usage under max and understand how many model calls I can make/how much I can programmatically extract here
+- (Low priority) Understand how Agent SDK works: https://code.claude.com/docs/en/agent-sdk/overview
+- Get a really good cipher + prompt
+- Understand how to measure model usage under max and understand how many model calls I can make/how much I can programmatically extract here. More generally, get a way to get a lot of data (ideally 10K samples) as soon as possible. If I could possible modify previous problems from previous coding tasks that could help. I think I could do it with an agent and providing the working nono-cover text as an example + the decoder as verification loop for an agent. I could set caude code to autonomously try to get it work (or make a scaffold).
 - Come up with a plan to avoid making it too easy to reveal (I thought I might RL against claude but not sure tbh)
 - Do small model experiemnts
