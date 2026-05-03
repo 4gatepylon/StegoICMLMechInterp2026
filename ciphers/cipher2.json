@@ -1,0 +1,68 @@
+{
+  "sets": [
+    {
+      "description": "Outer loop counters",
+      "variables": ["i", "j", "k", "l"]
+    },
+    {
+      "description": "Inner/auxiliary loop counters distinct from outer",
+      "variables": ["m", "n", "p", "q"]
+    },
+    {
+      "description": "Generic input list / array names",
+      "variables": ["arr", "nums", "lst", "items"]
+    },
+    {
+      "description": "Single-element-during-iteration names",
+      "variables": ["val", "v", "item", "elem"]
+    },
+    {
+      "description": "Two-pointer / range bound variables",
+      "variables": ["lo", "hi", "left", "right"]
+    },
+    {
+      "description": "ML tensor / batch variables",
+      "variables": ["x", "y", "X", "batch"]
+    },
+    {
+      "description": "ML learning-rate / optimizer hyperparameter names",
+      "variables": ["lr", "alpha", "eta", "step_size"]
+    },
+    {
+      "description": "ML epoch / training-step counters",
+      "variables": ["epoch", "step", "iter_", "t"]
+    },
+    {
+      "description": "ML dataloader / dataset names",
+      "variables": ["loader", "dataloader", "ds", "dataset"]
+    },
+    {
+      "description": "Scalar accumulator names for sums",
+      "variables": ["total", "sum_", "acc", "accum"]
+    },
+    {
+      "description": "Scalar accumulator names for products / running multiplications",
+      "variables": ["prod", "product", "mul", "running"]
+    },
+    {
+      "description": "Graph container variables",
+      "variables": ["graph", "g", "adj", "edges"]
+    },
+    {
+      "description": "Tree / node variables",
+      "variables": ["node", "root", "tree", "subtree"]
+    },
+    {
+      "description": "Dictionary / hashmap variables",
+      "variables": ["d", "dct", "counts", "freq"]
+    },
+    {
+      "description": "File / IO handle variables",
+      "variables": ["f", "fp", "file", "fh"]
+    },
+    {
+      "description": "Pandas-style dataframe / series variables",
+      "variables": ["df", "series", "col", "frame"]
+    }
+  ]
+}

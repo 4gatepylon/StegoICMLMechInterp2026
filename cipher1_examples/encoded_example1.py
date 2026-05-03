@@ -1,3 +1,4 @@
+# EXPECTED: 010100101001101
 import os
 import click
 import torch

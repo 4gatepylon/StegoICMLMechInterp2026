@@ -1,3 +1,4 @@
+# EXPECTED: 010100101001101
 import click
 import os
 from safetensors import safe_open

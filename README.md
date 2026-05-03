@@ -20,6 +20,23 @@ Likely contribution is just:
 - Observe the difficulty of removing obvious traces from the CoT/training logs. Main question we answer: can you get it to do the entire computation in latent-space?
 - Maybe do some mech. interp. to observe how the model does it. Depending on the situation, we might not release some relevant facts and create a website for a competition. I'm thinking I might give away $1024 in the span of 4 days.
 
+## Testing
+
+Decode the two example programs (encoded with cipher1) to extract their hidden bitstrings:
+
+```bash
+python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example1.py
+python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example2.py
+```
+
+To verify against an expected prefix, use `--expect`:
+
+```bash
+python decoder.py --cipher ciphers/cipher1.json cipher1_examples/encoded_example1.py --expect "01"
+```
+
+---
+
 The components therefore are likely:
 - Great dataset. Ideally around 10K datapoints plus filtering for SFT plus RL. Probably important to include not only short but also long programs.
 - Off-the-shelf SFT + RL loop/code
