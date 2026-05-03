@@ -1,12 +1,17 @@
 """
 Generate steganographic coding problems using Claude via the Agent SDK.
+
+TODO(hadriano): review this code. It passes the README.md test though.
 """
 
 import asyncio
 import itertools
 import json
+import logging
 import math
 import random
+import sys
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +30,12 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a code generator. Respond with ONLY raw Python source code. "
+    "Do not use any tools. Do not read or write files. "
+    "Just output the Python program directly as text."
+)
+
 
 class PromptInfo(BaseModel):
     task_index: int
@@ -35,9 +46,7 @@ class PromptInfo(BaseModel):
     try_num: int
     cipher: str
     prompt: str
-    timestamp: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class PromptResult(BaseModel):
@@ -54,12 +63,37 @@ class PromptResult(BaseModel):
     error: str | None = None
 
 
+logger = logging.getLogger(__name__)
+
+
 class GenerationConfig(BaseModel):
-    # TODO(Claude)
-    pass
+    cipher: str = "ciphers/cipher2.json"
+    tasks: str = "task_descriptions.json"
+    template: str = "cipher_description_prompt.jinja2"
+    seed: int = 42
+    n_tasks: int = 8
+    min_bits: int = 8
+    max_bits: int = 32
+    n_variants: int = 4
+    n_tries: int = 1
+    n_procs: int = 4
+    output: str = "generated_outputs"
+    system_prompt: str = _DEFAULT_SYSTEM_PROMPT
 
 
-def load_cipher(path: str | Path) -> list[dict[str, Any]]:
+def _setup_logging(log_file: Path | None) -> None:
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=handlers,
+    )
+
+
+def _load_cipher(path: str | Path) -> list[dict[str, Any]]:
     with open(path) as f:
         data = json.load(f)
     sets: list[dict[str, Any]] = data["sets"]
@@ -68,19 +102,15 @@ def load_cipher(path: str | Path) -> list[dict[str, Any]]:
         variables: list[str] = s["variables"]
         n = len(variables)
         if n == 0 or (n & (n - 1)) != 0:
-            raise click.ClickException(
-                f"Set {i} ({s.get('description', '?')}) has {n} variables — must be a power of 2"
-            )
+            raise click.ClickException(f"Set {i} ({s.get('description', '?')}) has {n} variables — must be a power of 2")
         for var in variables:
             if var in seen:
-                raise click.ClickException(
-                    f"Variable {var!r} appears in both set {seen[var]} and set {i}"
-                )
+                raise click.ClickException(f"Variable {var!r} appears in both set {seen[var]} and set {i}")
             seen[var] = i
     return sets
 
 
-def render_prompt(
+def _render_prompt(
     template: Template,
     cipher_sets: list[dict[str, Any]],
     task_description: str,
@@ -89,9 +119,7 @@ def render_prompt(
     sets_with_bits: list[dict[str, Any]] = []
     for s in cipher_sets:
         bits = int(math.log2(len(s["variables"])))
-        index_table = ", ".join(
-            f"{v}={format(i, f'0{bits}b')}" for i, v in enumerate(s["variables"])
-        )
+        index_table = ", ".join(f"{v}={format(i, f'0{bits}b')}" for i, v in enumerate(s["variables"]))
         sets_with_bits.append({**s, "bits": bits, "index_table": index_table})
     return template.render(
         sets=sets_with_bits,
@@ -100,9 +128,7 @@ def render_prompt(
     )
 
 
-def generate_bitstrings(
-    rng: random.Random, n_variants: int, min_bits: int, max_bits: int
-) -> list[str]:
+def _generate_bitstrings(rng: random.Random, n_variants: int, min_bits: int, max_bits: int) -> list[str]:
     results: list[str] = []
     for _ in range(n_variants):
         length = rng.randint(min_bits, max_bits)
@@ -111,38 +137,40 @@ def generate_bitstrings(
     return results
 
 
-_DEFAULT_SYSTEM_PROMPT = (
-    "You are a code generator. Respond with ONLY raw Python source code. "
-    "Do not use any tools. Do not read or write files. "
-    "Just output the Python program directly as text."
-)
-
-
-async def call_claude(
-    prompt: str, semaphore: asyncio.Semaphore, system_prompt: str
-) -> str:
+async def _call_claude(prompt: str, semaphore: asyncio.Semaphore, system_prompt: str) -> str:
     async with semaphore:
         parts: list[str] = []
+        stderr_lines: list[str] = []
         options = ClaudeAgentOptions(
             max_turns=3,
             system_prompt=system_prompt,
+            stderr=lambda line: stderr_lines.append(line),
         )
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        parts.append(block.text)
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            parts.append(block.text)
+        except Exception as e:
+            if stderr_lines:
+                logger.error("Claude subprocess stderr:\n%s", "\n".join(stderr_lines))
+            raise RuntimeError(f"{e}\nstderr: {chr(10).join(stderr_lines)}") from e
+        if stderr_lines:
+            logger.debug("Claude subprocess stderr:\n%s", "\n".join(stderr_lines))
         return "".join(parts)
 
 
-async def process_one(
-    idx: int, info: PromptInfo, semaphore: asyncio.Semaphore, system_prompt: str
+async def _process_one(
+    idx: int,
+    total: int,
+    info: PromptInfo,
+    semaphore: asyncio.Semaphore,
+    system_prompt: str,
 ) -> PromptResult:
-    click.echo(
-        f"[{idx + 1}/{total}] task={info.task_name} variant={info.variant} try={info.try_num}"
-    )
+    logger.info("[%d/%d] task=%s variant=%d try=%d", idx + 1, total, info.task_name, info.variant, info.try_num)
     try:
-        response = await call_claude(info.prompt, semaphore, system_prompt)
+        response = await _call_claude(info.prompt, semaphore, system_prompt)
         header = f"# EXPECTED: {info.bitstring}\n"
         response = header + response
         return PromptResult(
@@ -151,7 +179,7 @@ async def process_one(
             response=response,
         )
     except Exception as e:
-        click.echo(f"  ERROR: {e}")
+        logger.error("  ERROR on task=%s variant=%d: %s\n%s", info.task_name, info.variant, e, traceback.format_exc())
         return PromptResult(
             **info.model_dump(exclude={"prompt"}),
             prompt_length=len(info.prompt),
@@ -159,7 +187,7 @@ async def process_one(
         )
 
 
-async def run_generation(
+async def _run_generation(
     prompts_info: list[PromptInfo],
     n_procs: int,
     output_path: Path,
@@ -168,9 +196,7 @@ async def run_generation(
     semaphore = asyncio.Semaphore(n_procs)
     total = len(prompts_info)
 
-    tasks = [
-        process_one(i, p, semaphore, system_prompt) for i, p in enumerate(prompts_info)
-    ]
+    tasks = [_process_one(i, total, p, semaphore, system_prompt) for i, p in enumerate(prompts_info)]
     results = await asyncio.gather(*tasks)
 
     with open(output_path, "w") as f:
@@ -178,94 +204,140 @@ async def run_generation(
             f.write(r.model_dump_json() + "\n")
 
     succeeded = sum(1 for r in results if r.error is None)
-    click.echo(f"Done: {succeeded}/{total} succeeded, saved to {output_path}")
+    logger.info("Done: %d/%d succeeded, saved to %s", succeeded, total, output_path)
     return results
+
+
+def _load_config(ctx: click.Context, _param: click.Parameter, value: str) -> GenerationConfig:
+    path = Path(value)
+    if not path.exists():
+        raise click.BadParameter(f"Config file not found: {path}")
+    cfg = parse_yaml_raw_as(GenerationConfig, path.read_text())
+    ctx.ensure_object(dict)
+    ctx.obj["cfg"] = cfg
+    return cfg
+
+
+def _apply_overrides(cfg: GenerationConfig, ctx: click.Context) -> GenerationConfig:
+    """Merge CLI flags into config (flags > yaml > defaults)."""
+    overrides: dict[str, Any] = {}
+    # TODO(hadriano) this should not be hardcoded
+    for param_name in (
+        "n_tasks",
+        "n_tries",
+        "n_procs",
+        "n_variants",
+        "tasks",
+        "output",
+    ):
+        # NOTE: this has been a source of bugs in the past
+        # source = ctx.get_parameter_source(param_name.replace("_", "-"))
+        source = ctx.get_parameter_source(param_name)
+        if source == click.core.ParameterSource.COMMANDLINE:
+            overrides[param_name] = ctx.params[param_name]
+    if overrides:
+        cfg = cfg.model_copy(update=overrides)
+    return cfg
 
 
 @click.command()
 @click.option(
-    "--cipher",
-    default="ciphers/cipher2.json",
-    type=click.Path(exists=True),
-    help="Cipher JSON file.",
+    "-c",
+    "--config",
+    default="cipher2_problem_genrator_config.yaml",
+    type=click.Path(dir_okay=False, exists=True),
+    callback=_load_config,
+    is_eager=True,
+    expose_value=False,
+    help="YAML configuration file.",
+)
+@click.option(
+    "--n-tasks",
+    default=None,
+    type=int,
+    help="Number of tasks to sample (overrides config).",
+)
+@click.option(
+    "--n-tries",
+    default=None,
+    type=int,
+    help="Claude samples per prompt (overrides config).",
+)
+@click.option(
+    "--n-procs",
+    default=None,
+    type=int,
+    help="Max concurrent Claude calls (overrides config).",
+)
+@click.option(
+    "--n-variants",
+    default=None,
+    type=int,
+    help="Bitstring variants per task (overrides config).",
 )
 @click.option(
     "--tasks",
-    "tasks_path",
-    default="task_descriptions.json",
+    default=None,
     type=click.Path(exists=True),
-    help="JSON file with task descriptions.",
+    help="JSON file with task descriptions (overrides config).",
 )
-@click.option(
-    "--template",
-    "template_path",
-    default="cipher_description_prompt.jinja2",
-    type=click.Path(exists=True),
-    help="Jinja2 prompt template.",
-)
-@click.option("--seed", default=42, type=int, help="Random seed for reproducibility.")
-@click.option("--n-tasks", default=8, type=int, help="Number of tasks to sample.")
-@click.option("--min-bits", default=8, type=int, help="Minimum bitstring length.")
-@click.option("--max-bits", default=32, type=int, help="Maximum bitstring length.")
-@click.option("--n-variants", default=4, type=int, help="Bitstring variants per task.")
-@click.option("--n-tries", default=1, type=int, help="Claude samples per prompt.")
-@click.option("--n-procs", default=4, type=int, help="Max concurrent Claude calls.")
 @click.option(
     "-o",
     "--output",
-    default="generated_outputs",
+    default=None,
     type=click.Path(),
-    help="Output directory.",
+    help="Output directory (overrides config).",
 )
 @click.option(
-    "--system-prompt",
-    default=_DEFAULT_SYSTEM_PROMPT,
-    type=str,
-    help="System prompt for Claude.",
+    "--log-file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Path to log file. Logs always go to stderr; this adds a file copy.",
 )
+@click.pass_context
 def main(
-    cipher: str,
-    tasks_path: str,
-    template_path: str,
-    seed: int,
-    n_tasks: int,
-    min_bits: int,
-    max_bits: int,
-    n_variants: int,
-    n_tries: int,
-    n_procs: int,
-    output: str,
-    system_prompt: str,
+    ctx: click.Context,
+    n_tasks: int | None,
+    n_tries: int | None,
+    n_procs: int | None,
+    n_variants: int | None,
+    tasks: str | None,
+    output: str | None,
+    log_file: str | None,
 ) -> None:
-    cipher_sets = load_cipher(cipher)
+    _setup_logging(Path(log_file) if log_file else None)
+    cfg = _apply_overrides(ctx.obj["cfg"], ctx)
 
-    with open(tasks_path) as f:
+    cipher_sets = _load_cipher(cfg.cipher)
+
+    with open(cfg.tasks) as f:
         all_tasks = json.load(f)
 
-    rng = random.Random(seed)
-    selected = rng.sample(all_tasks, min(n_tasks, len(all_tasks)))
+    rng = random.Random(cfg.seed)
+    selected = rng.sample(all_tasks, min(cfg.n_tasks, len(all_tasks)))
 
-    tpath = Path(template_path).resolve()
+    tpath = Path(cfg.template).resolve()
     env = Environment(loader=FileSystemLoader(str(tpath.parent)))
     tmpl = env.get_template(tpath.name)
 
     task_bitstrings = [
-        (task_idx, task, generate_bitstrings(rng, n_variants, min_bits, max_bits))
+        (
+            task_idx,
+            task,
+            _generate_bitstrings(rng, cfg.n_variants, cfg.min_bits, cfg.max_bits),
+        )
         for task_idx, task in enumerate(selected)
     ]
 
     combos = list(
         itertools.chain.from_iterable(
-            itertools.product([(task_idx, task)], enumerate(bitstrings), range(n_tries))
-            for task_idx, task, bitstrings in task_bitstrings
+            itertools.product([(task_idx, task)], enumerate(bitstrings), range(cfg.n_tries)) for task_idx, task, bitstrings in task_bitstrings
         )
     )
 
     prompts_info: list[PromptInfo] = []
-    for (task_idx, task), (var_idx, bitstring), try_idx in tqdm(
-        combos, desc="Building prompts"
-    ):
-        prompt = render_prompt(tmpl, cipher_sets, task["description"], bitstring)
+    for (task_idx, task), (var_idx, bitstring), try_idx in tqdm(combos, desc="Building prompts"):
+        prompt = _render_prompt(tmpl, cipher_sets, task["description"], bitstring)
         prompts_info.append(
             PromptInfo(
                 task_index=task_idx,
@@ -274,24 +346,26 @@ def main(
                 bitstring=bitstring,
                 variant=var_idx,
                 try_num=try_idx,
-                cipher=cipher,
+                cipher=cfg.cipher,
                 prompt=prompt,
             )
         )
 
-    output_dir = Path(output)
+    output_dir = Path(cfg.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "results.jsonl"
 
-    click.echo(
-        f"Tasks: {len(selected)}  Variants: {n_variants}  Tries: {n_tries}  "
-        f"Total prompts: {len(prompts_info)}"
+    logger.info(
+        "Tasks: %d  Variants: %d  Tries: %d  Total prompts: %d",
+        len(selected),
+        cfg.n_variants,
+        cfg.n_tries,
+        len(prompts_info),
     )
-    click.echo(f"Bits: [{min_bits}, {max_bits}]  Seed: {seed}  Workers: {n_procs}")
-    click.echo(f"Output: {output_path}")
-    click.echo()
+    logger.info("Bits: [%d, %d]  Seed: %d  Workers: %d", cfg.min_bits, cfg.max_bits, cfg.seed, cfg.n_procs)
+    logger.info("Output: %s", output_path)
 
-    asyncio.run(run_generation(prompts_info, n_procs, output_path, system_prompt))
+    asyncio.run(_run_generation(prompts_info, cfg.n_procs, output_path, cfg.system_prompt))
 
 
 if __name__ == "__main__":

@@ -26,9 +26,7 @@ def validate_sets(sets):
     for i, s in enumerate(sets):
         for var in s:
             if var in seen:
-                raise click.ClickException(
-                    f"Variable {var!r} appears in both set {seen[var]} and set {i}"
-                )
+                raise click.ClickException(f"Variable {var!r} appears in both set {seen[var]} and set {i}")
             seen[var] = i
 
 

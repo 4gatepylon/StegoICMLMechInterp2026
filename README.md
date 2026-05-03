@@ -7,10 +7,8 @@ Please look at chrome browser (4gate) group StegoEvalClaude or chats:
 - https://claude.ai/share/106fce01-cb76-45c3-8f9d-46039fa1cecc
 - https://claude.ai/share/86dc594a-8594-4168-9859-902f8cc2143d
 
-TODO(hadriano) how to use my max plan for API/programmatic querying?
-
 Status:
-- Prompt-based CAN be done
+- Prompt-based CAN be done using Claude Opus 4.7
 - Some strategy for obfuscation ^ but that seems to be thet main challenge
 - Pure RL is unlikely to work, but maybe it won't be too obvious? It would be a lot easier with some collaborators
 
@@ -37,20 +35,18 @@ python decoder.py --cipher ciphers/cipher2.json cipher2_examples/encoded_example
   --expect "$(head -1 cipher2_examples/encoded_example1.py | sed 's/# EXPECTED: //')"
 ```
 
----
 
-The components therefore are likely:
-- Great dataset. Ideally around 10K datapoints plus filtering for SFT plus RL. Probably important to include not only short but also long programs.
-- Off-the-shelf SFT + RL loop/code
-- Experimemnts (each training run could take 4-8 hours I think)
-- Some kind of way to try and filter away evidence of how the encoding scheme works (or maybe we can insert it mechanistically? unclear)
-- Competition website
-- The decoder API/website
-- Paper writeup
+## Dataset
 
-# TODOs
-- (Low priority) Understand how Agent SDK works: https://code.claude.com/docs/en/agent-sdk/overview
-- Get a really good cipher + prompt
-- Understand how to measure model usage under max and understand how many model calls I can make/how much I can programmatically extract here. More generally, get a way to get a lot of data (ideally 10K samples) as soon as possible. If I could possible modify previous problems from previous coding tasks that could help. I think I could do it with an agent and providing the working nono-cover text as an example + the decoder as verification loop for an agent. I could set caude code to autonomously try to get it work (or make a scaffold).
-- Come up with a plan to avoid making it too easy to reveal (I thought I might RL against claude but not sure tbh)
-- Do small model experiemnts
+Build the canonical combined code-problem dataset (requires HuggingFace `datasets` and `huggingface_hub`):
+
+```bash
+python datasets/build.py --output ./my_dataset
+python datasets/build.py --output hf --hf-args repo_id=myuser/my-dataset
+```
+
+Generate steganographic code samples via the Claude Agent SDK (requires `claude_agent_sdk`, `click`):
+
+```bash
+python cipher2_problem_generator.py --n-tasks 1 --n-variants 1 --n-tries 1 -o deleteme_generated_outputs
+```
