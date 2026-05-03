@@ -34,9 +34,7 @@ def _load_sets(cipher_path: Path) -> list[list[str]]:
     for i, s in enumerate(sets):
         for var in s:
             if var in seen:
-                raise ValueError(
-                    f"Variable {var!r} in both set {seen[var]} and set {i}"
-                )
+                raise ValueError(f"Variable {var!r} in both set {seen[var]} and set {i}")
             seen[var] = i
     return sets
 
