@@ -57,18 +57,10 @@ def generate_test_cases(operation: str, num_cases: int = 128) -> List[Tuple[str,
     """Generate random test cases for the given operation."""
     a_vals = np.random.randint(low=0, high=100, size=num_cases)
     b_vals = np.random.randint(low=0, high=100, size=num_cases)
-    results = (
-        a_vals + b_vals
-        if operation == "add"
-        else a_vals * b_vals
-        if operation == "multiply"
-        else None
-    )
+    results = a_vals + b_vals if operation == "add" else a_vals * b_vals if operation == "multiply" else None
     if results is None:
         raise ValueError(f"Unknown operation: {operation}")
-    return [
-        (f"{a}\\n{b}", str(result)) for a, b, result in zip(a_vals, b_vals, results)
-    ]
+    return [(f"{a}\\n{b}", str(result)) for a, b, result in zip(a_vals, b_vals, results)]
 
 
 class IntegrationTester:
@@ -95,11 +87,7 @@ class IntegrationTester:
     def _create_batch_request(self, operation: str) -> RunScriptBatchRequest:
         """Create a batch request."""
         sleep_time = random.uniform(self.min_sleep_time, self.max_sleep_time)
-        script = (
-            generate_addition_script(sleep_time)
-            if operation == "add"
-            else generate_multiplication_script(sleep_time)
-        )
+        script = generate_addition_script(sleep_time) if operation == "add" else generate_multiplication_script(sleep_time)
         test_cases = generate_test_cases(operation, self.n_test_cases)
         return RunScriptBatchRequest(
             script_content=script,
@@ -147,9 +135,7 @@ class IntegrationTester:
             assert result.expected_outputs is not None
 
             # should have passed since the code is correct
-            assert all(result.passed), (
-                f"Script {i} had failures: {sum(not p for p in result.passed)} out of {len(result.passed)}"
-            )
+            assert all(result.passed), f"Script {i} had failures: {sum(not p for p in result.passed)} out of {len(result.passed)}"
             assert len(result.results) == len(batch_requests[i].stdin_inputs)
             assert len(result.results) == len(result.passed)
             assert len(result.results) == len(result.expected_outputs)

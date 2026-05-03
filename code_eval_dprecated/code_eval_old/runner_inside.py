@@ -81,9 +81,7 @@ def main() -> None:
                     actual_output = result.stdout.strip()
                     actual_outputs.append(actual_output)
                     # Compare outputs (converting expected to string for comparison)
-                    passed.append(
-                        str(expected_output).strip() == str(actual_output).strip()
-                    )
+                    passed.append(str(expected_output).strip() == str(actual_output).strip())
                     errors.append(None)  # No error => None
             except subprocess.TimeoutExpired:
                 actual_outputs.append(None)
@@ -105,9 +103,7 @@ def main() -> None:
                     for _ in range(len(inputs) - j - 1):
                         actual_outputs.append(None)
                         passed.append(False)
-                        errors.append(
-                            "ERROR: Timeout (pre-empted outer process in inner loop)"
-                        )
+                        errors.append("ERROR: Timeout (pre-empted outer process in inner loop)")
                     break  # exit inner for loop to go to next generations (those preempt)
 
         # 4. Update this test object

@@ -108,9 +108,7 @@ print("Hello, " + str(_input) + "!")
             assert script_info.script_content is None
 
         # Verify metadata is included when requested
-        script_id_to_metadata = {
-            sid: data["metadata"] for sid, data in zip(script_ids, scripts_data)
-        }
+        script_id_to_metadata = {sid: data["metadata"] for sid, data in zip(script_ids, scripts_data)}
         for script_info in list_response.scripts:
             assert script_info.script_id in script_id_to_metadata  # incl. all scripts
             expected_metadata = script_id_to_metadata[script_info.script_id]
@@ -201,21 +199,15 @@ print(f"Python version: {sys.version.split()[0]}")
         # 7. Try to get the deleted script (should raise 404)
         with pytest.raises(Exception) as exc_info:
             handler.get_script(GetScriptRequest(script_id=script_id))
-        assert (
-            "404" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
-        )
+        assert "404" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
 
         # 8. Try to run the deleted script (should raise 404)
         with pytest.raises(Exception) as exc_info:
             handler.run_script(RunScriptRequest(script_id=script_id))
-        assert (
-            "404" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
-        )
+        assert "404" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
 
         # 9. Try to delete non-existent script
-        delete_response_nonexistent = handler.delete_script(
-            DeleteScriptRequest(script_id="fake-id")
-        )
+        delete_response_nonexistent = handler.delete_script(DeleteScriptRequest(script_id="fake-id"))
         assert delete_response_nonexistent.success is False
         assert delete_response_nonexistent.exists is False
 
@@ -297,9 +289,7 @@ print(my_list[10])
 
         for script_data in tqdm.tqdm(error_scripts, desc="Running error scripts"):
             # Post the script
-            post_request = PostScriptRequest(
-                script_content=script_data["content"], filename=script_data["filename"]
-            )
+            post_request = PostScriptRequest(script_content=script_data["content"], filename=script_data["filename"])
             post_response = handler.post_script(post_request)
 
             # Run the script
@@ -319,9 +309,7 @@ print(my_list[10])
                 for check in script_data["metadata"]["check_stdout_contains"]:
                     assert check in run_response.stdout, f"Expected {check} in stdout"
                 for check in script_data["metadata"]["check_stdout_does_not_contain"]:
-                    assert check not in run_response.stdout, (
-                        f"Did not expect {check} in stdout"
-                    )
+                    assert check not in run_response.stdout, f"Did not expect {check} in stdout"
 
     def test_running_script_that_times_out(self) -> None:
         """
@@ -340,9 +328,7 @@ print(flush=True)  # Ensure output is flushed
 time.sleep(3.0)  # Sleep for 3 seconds
 print("Operation complete!")
 """
-        post_request = PostScriptRequest(
-            script_content=timeout_script, filename="slow_script.py"
-        )
+        post_request = PostScriptRequest(script_content=timeout_script, filename="slow_script.py")
         post_response = handler.post_script(post_request)
         script_id = post_response.script_id
 
@@ -372,14 +358,10 @@ while True:
     pass  # Infinite loop
 print("This will never print")
 """
-        post_request_inf = PostScriptRequest(
-            script_content=infinite_script, filename="infinite_loop.py"
-        )
+        post_request_inf = PostScriptRequest(script_content=infinite_script, filename="infinite_loop.py")
         post_response_inf = handler.post_script(post_request_inf)
 
-        run_request_inf = RunScriptRequest(
-            script_id=post_response_inf.script_id, timeout=1.0
-        )
+        run_request_inf = RunScriptRequest(script_id=post_response_inf.script_id, timeout=1.0)
         run_response_inf = handler.run_script(run_request_inf)
 
         assert run_response_inf.timed_out is True
@@ -427,9 +409,7 @@ print("This will never print")
 for x in [3]
     print(x)
 """
-        post_request = PostScriptRequest(
-            script_content=non_python_script, filename="non_python.py"
-        )
+        post_request = PostScriptRequest(script_content=non_python_script, filename="non_python.py")
         post_response = handler.post_script(post_request)
         script_id = post_response.script_id
 

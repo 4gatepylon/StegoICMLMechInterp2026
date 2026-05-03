@@ -58,9 +58,7 @@ def get_live_code_bench_dataset() -> Dataset:
     return Dataset.from_list(all_js)
 
 
-def load_partial_parquet_blobs_from_local(
-    dataset_name: str, remove_columns: Optional[List[str]] = None
-) -> Dataset:
+def load_partial_parquet_blobs_from_local(dataset_name: str, remove_columns: Optional[List[str]] = None) -> Dataset:
     dataset_name = "datasets/" + dataset_name
     dataset_name = dataset_name.replace("/", "--")
     datasets = []
@@ -357,11 +355,7 @@ Implement the function and code in python. Do NOT think too much. Just implement
                     inputs_outputs_str = entry.get("inputs_output", None)
         assert inputs_outputs_str is not None, f"Inputs outputs must be a dict, got {type(inputs_outputs)} =>\n\n{inputs_outputs}"  # fmt: skip
         try:
-            inputs_outputs = (
-                json_loads_safe(inputs_outputs_str)
-                if isinstance(inputs_outputs_str, str)
-                else inputs_outputs_str
-            )
+            inputs_outputs = json_loads_safe(inputs_outputs_str) if isinstance(inputs_outputs_str, str) else inputs_outputs_str
             assert isinstance(inputs_outputs, dict), f"Inputs outputs must be a dict, got {type(inputs_outputs)} =>\n\n{inputs_outputs}"  # fmt: skip
             assert "inputs" in inputs_outputs and "outputs" in inputs_outputs, f"Inputs outputs must have 'inputs' and 'outputs' keys, got {inputs_outputs.keys()}\n\n{entry}"  # fmt: skip
             assert isinstance(inputs_outputs["inputs"], list) and isinstance(inputs_outputs["outputs"], list), f"Inputs and outputs must be lists, got {type(inputs_outputs['inputs'])} and {type(inputs_outputs['outputs'])}"  # fmt: skip
@@ -434,11 +428,7 @@ Implement the solution in python. Do NOT think too much. Just implement the prob
         tags_str = ", ".join(cf_tags) if cf_tags else "No tags available"
 
         # Format limits
-        memory_limit_mb = (
-            memory_limit_bytes / (1024 * 1024)
-            if isinstance(memory_limit_bytes, (int, float))
-            else "unknown"
-        )
+        memory_limit_mb = memory_limit_bytes / (1024 * 1024) if isinstance(memory_limit_bytes, (int, float)) else "unknown"
 
         # Get problem description
         description = entry.get("description", "").strip()
@@ -783,15 +773,9 @@ class DatasetMerger:
         # )
         data = concatenate_datasets(
             [
-                load_dataset(
-                    "deepmind/code_contests", split="train", trust_remote_code=True
-                ),
-                load_dataset(
-                    "deepmind/code_contests", split="test", trust_remote_code=True
-                ),
-                load_dataset(
-                    "deepmind/code_contests", split="valid", trust_remote_code=True
-                ),
+                load_dataset("deepmind/code_contests", split="train", trust_remote_code=True),
+                load_dataset("deepmind/code_contests", split="test", trust_remote_code=True),
+                load_dataset("deepmind/code_contests", split="valid", trust_remote_code=True),
             ]
         )
         data.remove_columns(["time_limit"])
@@ -801,9 +785,7 @@ class DatasetMerger:
 
     ################ [BEGIN] Helpers for different steps [BEGIN] ################
     def _filter_difficulty(self, dataset: Dataset, dataset_name: str) -> Dataset:
-        return dataset.filter(
-            lambda x: x["difficulty"] in self.name2difficulties[dataset_name]
-        )
+        return dataset.filter(lambda x: x["difficulty"] in self.name2difficulties[dataset_name])
 
     def _convert_to_dataset_entry(
         self,
@@ -814,19 +796,13 @@ class DatasetMerger:
         """Convert raw dataset entries to DatasetEntry format"""
         entries = []
         n_missed = 0
-        for idx, entry in enumerate(
-            tqdm.tqdm(dataset, desc=f"Converting {dataset_name} to DatasetEntry format")
-        ):
+        for idx, entry in enumerate(tqdm.tqdm(dataset, desc=f"Converting {dataset_name} to DatasetEntry format")):
             try:
                 if dataset_name == "BAAI/TACO":
                     # Parse inputs/outputs
                     inputs_outputs_str = entry.get("input_output", "{}")
                     try:
-                        inputs_outputs = (
-                            json_loads_safe(inputs_outputs_str)
-                            if isinstance(inputs_outputs_str, str)
-                            else inputs_outputs_str
-                        )
+                        inputs_outputs = json_loads_safe(inputs_outputs_str) if isinstance(inputs_outputs_str, str) else inputs_outputs_str
                         assert isinstance(inputs_outputs, dict), f"Inputs outputs must be a dict, got {type(inputs_outputs)} =>\n\n{inputs_outputs}"  # fmt: skip
                         assert "inputs" in inputs_outputs and "outputs" in inputs_outputs, f"Inputs outputs must have 'inputs' and 'outputs' keys, got {inputs_outputs.keys()}"  # fmt: skip
                         assert isinstance(inputs_outputs["inputs"], list) and isinstance(inputs_outputs["outputs"], list), f"Inputs and outputs must be lists, got {type(inputs_outputs['inputs'])} and {type(inputs_outputs['outputs'])}"  # fmt: skip
@@ -858,9 +834,7 @@ class DatasetMerger:
 
                 elif dataset_name == "codeparrot/apps":
                     # Parse inputs/outputs
-                    inputs_outputs_str = entry.get(
-                        "input_output", "{'inputs': [], 'outputs': []}"
-                    )
+                    inputs_outputs_str = entry.get("input_output", "{'inputs': [], 'outputs': []}")
                     if isinstance(inputs_outputs_str, str):
                         inputs_outputs_str = inputs_outputs_str.strip()
                         if inputs_outputs_str == "":
@@ -868,11 +842,7 @@ class DatasetMerger:
                         else:
                             inputs_outputs_str = json_loads_safe(inputs_outputs_str)
                     try:
-                        inputs_outputs = (
-                            json_loads_safe(inputs_outputs_str)
-                            if isinstance(inputs_outputs_str, str)
-                            else inputs_outputs_str
-                        )
+                        inputs_outputs = json_loads_safe(inputs_outputs_str) if isinstance(inputs_outputs_str, str) else inputs_outputs_str
                         assert isinstance(inputs_outputs, dict), f"Inputs outputs must be a dict, got {type(inputs_outputs)} =>\n\n{inputs_outputs}"  # fmt: skip
                         assert "inputs" in inputs_outputs and "outputs" in inputs_outputs, f"Inputs outputs must have 'inputs' and 'outputs' keys, got {inputs_outputs.keys()}"  # fmt: skip
                         assert isinstance(inputs_outputs["inputs"], list) and isinstance(inputs_outputs["outputs"], list), f"Inputs and outputs must be lists, got {type(inputs_outputs['inputs'])} and {type(inputs_outputs['outputs'])}"  # fmt: skip
@@ -884,9 +854,7 @@ class DatasetMerger:
                     dataset_entry = DatasetEntry(
                         starter_code=None,  # APPS doesn't have starter code
                         things_to_know=f"Difficulty: {entry.get('difficulty', 'unknown')}",
-                        source_description=prompt_creator._get_codeparrot_apps_source(
-                            entry
-                        ),
+                        source_description=prompt_creator._get_codeparrot_apps_source(entry),
                         source_dataset=dataset_name,
                         question_id=f"{dataset_name}_{entry.get('url', f'idx_{idx}')}",
                         question=entry["question"].strip(),
@@ -906,9 +874,7 @@ class DatasetMerger:
 
                 elif dataset_name == "livecodebench/code_generation_lite":
                     # Convert test cases format
-                    public_test_cases = json_loads_safe(
-                        entry.get("public_test_cases", "[]")
-                    )
+                    public_test_cases = json_loads_safe(entry.get("public_test_cases", "[]"))
                     inputs_outputs = {
                         "inputs": [tc["input"] for tc in public_test_cases],
                         "outputs": [tc["output"] for tc in public_test_cases],
@@ -937,15 +903,11 @@ class DatasetMerger:
 
                 elif dataset_name == "deepmind/code_contests":
                     # Convert test cases format
-                    inputs_outputs = entry.get(
-                        "public_tests", {"inputs": [], "outputs": []}
-                    )
+                    inputs_outputs = entry.get("public_tests", {"inputs": [], "outputs": []})
 
                     # Build URL if codeforces
                     url = None
-                    if entry.get("source") == "codeforces" and entry.get(
-                        "cf_contest_id"
-                    ):
+                    if entry.get("source") == "codeforces" and entry.get("cf_contest_id"):
                         cf_contest_id = entry.get("cf_contest_id")
                         cf_index = entry.get("cf_index", "")
                         url = f"https://codeforces.com/contest/{cf_contest_id}/problem/{cf_index}"
@@ -954,9 +916,7 @@ class DatasetMerger:
                     solutions = entry.get("solutions", {"solution": [], "language": []})
                     assert len(solutions['solution']) == len(solutions['language']), f"Solutions and languages must have the same length, got {len(solutions['solution'])} and {len(solutions['language'])}"  # fmt: skip
                     assert "description" in entry and isinstance(entry["description"], str), f"Description must be a string, got {type(entry['description'])}"  # fmt: skip
-                    for solution, language in zip(
-                        solutions["solution"], solutions["language"]
-                    ):
+                    for solution, language in zip(solutions["solution"], solutions["language"]):
                         if language == 1:
                             answers.append(solution)
                     dataset_entry = DatasetEntry(
@@ -971,9 +931,7 @@ class DatasetMerger:
                         difficulty=str(entry.get("difficulty", "unknown")),
                         url=url,
                         # Inputs to models
-                        prompt=prompt_creator.dataset2prompt_deepmind_code_contests(
-                            entry
-                        ),
+                        prompt=prompt_creator.dataset2prompt_deepmind_code_contests(entry),
                         # Outputs from models (not yet computed)
                         full_generation=None,
                         response=None,
@@ -993,9 +951,7 @@ class DatasetMerger:
                 n_missed += 1
                 continue
         assert len(entries) + n_missed == len(dataset), f"Total entries must be the same as the dataset, got {len(entries) + n_missed} and {len(dataset)}"  # fmt: skip
-        print(
-            f"Total missed entries: {n_missed} / {len(dataset)} = {n_missed / len(dataset)}"
-        )
+        print(f"Total missed entries: {n_missed} / {len(dataset)} = {n_missed / len(dataset)}")
 
         assert isinstance(entries, list), f"Entries must be a list, got {type(entries)}"  # fmt: skip
         assert all(isinstance(entry, dict) for entry in entries), f"All entries must be dicts, got {type(entries[0])}"  # fmt: skip
@@ -1034,9 +990,7 @@ class DatasetMerger:
             # Keep this entry
             deduplicated_entries.append(entry)
 
-        print(
-            f"Deduplicated from {len(dataset)} to {len(deduplicated_entries)} entries"
-        )
+        print(f"Deduplicated from {len(dataset)} to {len(deduplicated_entries)} entries")
         return Dataset.from_list(deduplicated_entries)
 
     def _split_dataset(
@@ -1050,12 +1004,8 @@ class DatasetMerger:
         split_fracs_min_n = splits_fracs_min_n or self.splits_fracs_min_n
 
         # Validate inputs
-        assert set(split_fracs.keys()) == set(split_fracs_min_n.keys()), (
-            "All splits must have a minimum number of samples"
-        )
-        assert abs(sum(split_fracs.values()) - 1.0) < 1e-6, (
-            f"All splits must sum to 1.0, got {sum(split_fracs.values())}"
-        )
+        assert set(split_fracs.keys()) == set(split_fracs_min_n.keys()), "All splits must have a minimum number of samples"
+        assert abs(sum(split_fracs.values()) - 1.0) < 1e-6, f"All splits must sum to 1.0, got {sum(split_fracs.values())}"
 
         # Shuffle dataset
         dataset = dataset.shuffle(seed=82048)
@@ -1089,9 +1039,7 @@ class DatasetMerger:
         start_idx = 0
         for split_name in split_names:
             end_idx = start_idx + split_sizes[split_name]
-            dataset_dict[split_name] = dataset.select(
-                range(start_idx, min(end_idx, total_size))
-            )
+            dataset_dict[split_name] = dataset.select(range(start_idx, min(end_idx, total_size)))
             start_idx = end_idx
 
         # Print split info
@@ -1140,9 +1088,7 @@ class DatasetMerger:
         # TODO(Adriano) what is desired behavior?
         if set(dataset_loaders.keys()) != set(self.name2difficulties.keys()):
             print("WARNING: Dataset loaders keys do not match name2difficulties keys")
-        dataset_loaders = {
-            k: v for k, v in dataset_loaders.items() if k in self.name2difficulties
-        }
+        dataset_loaders = {k: v for k, v in dataset_loaders.items() if k in self.name2difficulties}
 
         # Process each dataset
         for dataset_name, loader_fn in dataset_loaders.items():
@@ -1158,19 +1104,13 @@ class DatasetMerger:
 
                 # Step 2: Filter by difficulty
                 assert dataset_name in self.name2difficulties, f"Dataset name {dataset_name} not in {self.name2difficulties.keys()}"  # fmt: skip
-                print(
-                    f"Filtering dataset {dataset_name} by difficulty: {self.name2difficulties[dataset_name]}"
-                )
+                print(f"Filtering dataset {dataset_name} by difficulty: {self.name2difficulties[dataset_name]}")
                 filtered_dataset = self._filter_difficulty(raw_dataset, dataset_name)
-                print(
-                    f"Filtered dataset {dataset_name} to {len(filtered_dataset)} entries"
-                )
+                print(f"Filtered dataset {dataset_name} to {len(filtered_dataset)} entries")
 
                 # Step 3: Convert to DatasetEntry format
                 print("Converting to DatasetEntry format...")
-                converted_dataset = self._convert_to_dataset_entry(
-                    filtered_dataset, dataset_name, prompt_creator
-                )
+                converted_dataset = self._convert_to_dataset_entry(filtered_dataset, dataset_name, prompt_creator)
                 print(f"Converted {len(converted_dataset)} entries")
 
                 all_dataset_entries.append(converted_dataset)
@@ -1215,10 +1155,7 @@ if __name__ == "__main__":
     #### TESTING ####
     creator = PromptCreator()  # all defaults ehe
     dataset = load_dataset("BAAI/TACO", split="train")
-    prompts = [
-        creator.dataset2prompt_baai_taco(entry)
-        for entry in tqdm.tqdm(dataset, desc="Converting to prompts for LLM.")
-    ]
+    prompts = [creator.dataset2prompt_baai_taco(entry) for entry in tqdm.tqdm(dataset, desc="Converting to prompts for LLM.")]
     random.shuffle(prompts)
     for i in range(10):
         print("=" * 100)

@@ -23,11 +23,7 @@ def parse_between_str_pattern(
         raise ValueError(
             f"You must have at least two sets of triple-tics. Got this count: {generation.count(pattern)}. This is the generation:\n\n{generation}\n\n"
         )
-    locations = [
-        i
-        for i in range(len(generation) - len(pattern) + 1)
-        if generation[i : i + len(pattern)] == pattern
-    ]
+    locations = [i for i in range(len(generation) - len(pattern) + 1) if generation[i : i + len(pattern)] == pattern]
     assert len(locations) == generation.count(pattern)
     last2 = locations[-2], locations[-1]
     return generation[last2[0] + len(pattern) : last2[1]]

@@ -196,11 +196,7 @@ def is_valid_1turn_chat(chat: List[Dict[str, str]]) -> bool:
     if len(chat) == 2:
         return chat[0]["role"] in {"user", "system"} and chat[1]["role"] == "assistant"
     elif len(chat) == 3:
-        return (
-            chat[0]["role"] == "system"
-            and chat[1]["role"] == "user"
-            and chat[2]["role"] == "assistant"
-        )
+        return chat[0]["role"] == "system" and chat[1]["role"] == "user" and chat[2]["role"] == "assistant"
     else:
         return False
 
@@ -270,24 +266,14 @@ def _load_chats(
             except Exception:
                 # Sometimes we renamed incorrectly
                 load_jsonl = True
-        if (
-            load_jsonl
-        ):  # this might even work for json since orjson stuffs into one line
-            contents = [
-                orjson.loads(line)
-                for line in file.read_bytes().splitlines()
-                if line.strip()
-            ]
+        if load_jsonl:  # this might even work for json since orjson stuffs into one line
+            contents = [orjson.loads(line) for line in file.read_bytes().splitlines() if line.strip()]
         assert contents is not None
         # Now we have an array of chats OR an array of arrays of chats
         _is_array_of_chats = is_array_of_chats(contents)
         _is_array_of_arrays_of_chats = is_array_of_arrays_of_chats(contents)
         _edge_case_is_prompt_generations = EdgeCase._is_prompt_generations(contents)
-        assert (
-            _is_array_of_chats
-            or _is_array_of_arrays_of_chats
-            or _edge_case_is_prompt_generations
-        ), (
+        assert _is_array_of_chats or _is_array_of_arrays_of_chats or _edge_case_is_prompt_generations, (
             f"type={type(contents)}\n\ntypes={set(type(x) for x in contents)}\n{contents[0].keys()}"
         )
         if _is_array_of_chats:
@@ -308,11 +294,7 @@ def _load_chats(
         assert all(is_valid_1turn_chat(chat) for chat in all_chats), f"is_valids: {100 *sum(is_valid_1turn_chat(chat) for chat in all_chats) / len(all_chats)}% chats[0]: {[c for c in all_chats if not is_valid_1turn_chat(c)][:1]}"  # fmt: skip
     if force_0turn:
         assert all(is_valid_1turn_chat(chat) for chat in all_chats)
-        all_chats = [
-            convert_1turn_to_0turn(chat)
-            for chat in all_chats
-            if is_valid_1turn_chat(chat)
-        ]
+        all_chats = [convert_1turn_to_0turn(chat) for chat in all_chats if is_valid_1turn_chat(chat)]
     return all_chats
 
 
@@ -363,9 +345,7 @@ def should_exclude_chat(
         return any(content in exclusion_list for content in contents)  # O(|C|)
     else:
         assert exclusion_mode in [f"substring{x}" for x in ["", "_lower", "_strip", "_lower_strip"]], f"Invalid exclusion mode: {exclusion_mode}"  # fmt: skip
-        return any(
-            exclusion in content for exclusion in exclusion_list for content in contents
-        )  # O(|C| * |E|)
+        return any(exclusion in content for exclusion in exclusion_list for content in contents)  # O(|C| * |E|)
 
 
 def load_exclusion_prompts_from_dataset(
@@ -392,11 +372,7 @@ def load_exclusion_prompts_from_dataset(
         exclusion_list = list(map(str.strip, exclusion_list))
     if "exact" in exclusion_mode:
         exclusion_list = set(exclusion_list)  # Hashing will make this MUCH faster
-    return [
-        chat
-        for chat in tqdm.tqdm(chats, desc="Excluding chats...")
-        if not should_exclude_chat(chat, exclusion_list, exclusion_mode)
-    ]
+    return [chat for chat in tqdm.tqdm(chats, desc="Excluding chats...") if not should_exclude_chat(chat, exclusion_list, exclusion_mode)]
 
 
 def select_from_duplicates_list(
@@ -414,9 +390,7 @@ def select_from_duplicates_list(
 def dedup_chats(
     chats: List[List[Dict[str, str]]],
     selection_mode: Literal["random"] = "random",
-    dedup_mode: Literal[
-        "user_dict", "full_template", "system_user_template"
-    ] = "user_dict",
+    dedup_mode: Literal["user_dict", "full_template", "system_user_template"] = "user_dict",
     tokenizer: Optional[str | AutoTokenizer] = None,
 ) -> List[List[Dict[str, str]]]:
     """
@@ -438,16 +412,9 @@ def dedup_chats(
     # Get a 1:1 list of hashables that then we will use to calculate whether these are duplicates or not
     hashables = None
     if dedup_mode == "user_dict":
-        assert all(
-            len([c for c in chat if c["role"] in {"user", "system"}]) <= 2
-            for chat in chats
-        )
-        assert all(
-            len([c for c in chat if c["role"] in {"user"}]) <= 1 for chat in chats
-        )
-        assert all(
-            len([c for c in chat if c["role"] in {"user"}]) <= 1 for chat in chats
-        )
+        assert all(len([c for c in chat if c["role"] in {"user", "system"}]) <= 2 for chat in chats)
+        assert all(len([c for c in chat if c["role"] in {"user"}]) <= 1 for chat in chats)
+        assert all(len([c for c in chat if c["role"] in {"user"}]) <= 1 for chat in chats)
         hashables = [
             sorted(
                 [c for c in chat if c["role"] in {"user", "system"}],
@@ -456,15 +423,10 @@ def dedup_chats(
             for chat in tqdm.tqdm(chats, desc="Filtering user messages")
         ]
     elif dedup_mode == "full_template":
-        hashables = [
-            tokenizer.apply_chat_template(chat, tokenize=False)
-            for chat in tqdm.tqdm(chats, desc="Applying chat template (full)")
-        ]
+        hashables = [tokenizer.apply_chat_template(chat, tokenize=False) for chat in tqdm.tqdm(chats, desc="Applying chat template (full)")]
     elif dedup_mode == "system_user_template":
         hashables = [
-            tokenizer.apply_chat_template(
-                [c for c in chat if c["role"] in {"system", "user"}], tokenize=False
-            )
+            tokenizer.apply_chat_template([c for c in chat if c["role"] in {"system", "user"}], tokenize=False)
             for chat in tqdm.tqdm(chats, desc="Applying chat template (system_user)")
         ]
     else:
@@ -512,9 +474,7 @@ def load_chats(
             "exact" | "exact_lower" | "exact_strip" | "exact_lower_strip",
         ]
     ] = "substring",
-    dedup_mode: Optional[
-        Literal["user_dict", "full_template", "system_user_template"]
-    ] = "user_dict",
+    dedup_mode: Optional[Literal["user_dict", "full_template", "system_user_template"]] = "user_dict",
     tokenizer: Optional[str | AutoTokenizer] = None,
     verbose: bool = True,
     debug_flags: Dict[str, Any] = {
@@ -546,43 +506,28 @@ def load_chats(
         "before_dedup",
         "before_return",
     ]:
-        raise ValueError(
-            f"Invalid debug flag: max_length_apply_time: {debug_max_length_apply_time}"
-        )
-    if (
-        debug_max_length is not None
-        and debug_max_length_apply_time == "before_exclusion"
-    ):
-        print(
-            f"Clipping the chats from length {len(chats)} to length{debug_max_length} @ before_exclusion"
-        )
+        raise ValueError(f"Invalid debug flag: max_length_apply_time: {debug_max_length_apply_time}")
+    if debug_max_length is not None and debug_max_length_apply_time == "before_exclusion":
+        print(f"Clipping the chats from length {len(chats)} to length{debug_max_length} @ before_exclusion")
         chats = chats[: debug_flags["max_length"]]
     if exclusion_mode is not None:
         # Use default paths since they should be correct for align machines
         chats_before: int = len(chats)
-        chats = load_exclusion_prompts_from_dataset(
-            chats, exclusion_mode=exclusion_mode
-        )
+        chats = load_exclusion_prompts_from_dataset(chats, exclusion_mode=exclusion_mode)
         chats_after: int = len(chats)
         if verbose:
             print(f"Excluded {chats_before - chats_after} chats")
     if debug_max_length is not None and debug_max_length_apply_time == "before_dedup":
-        print(
-            f"Clipping the chats from length {len(chats)} to length{debug_max_length} @ before_dedup"
-        )
+        print(f"Clipping the chats from length {len(chats)} to length{debug_max_length} @ before_dedup")
         chats = chats[: debug_flags["max_length"]]
     if dedup_mode is not None:
         chats_before: int = len(chats)
         chats = dedup_chats(chats, dedup_mode=dedup_mode, tokenizer=tokenizer)
         chats_after: int = len(chats)
         if verbose:
-            print(
-                f"Deduped {chats_before - chats_after} chats (now there are {chats_after} chats)"
-            )
+            print(f"Deduped {chats_before - chats_after} chats (now there are {chats_after} chats)")
     if debug_max_length is not None and debug_max_length_apply_time == "before_return":
-        print(
-            f"Clipping the chats from length {len(chats)} to length{debug_max_length} @ before_return"
-        )
+        print(f"Clipping the chats from length {len(chats)} to length{debug_max_length} @ before_return")
         chats = chats[: debug_flags["max_length"]]
     assert all(is_valid_chat(chat) for chat in chats)
     return chats
@@ -608,9 +553,7 @@ def load_split_chats_0turn(
         2,
     },
     random_seed: int = 888,
-    exclude_regexes: List[str] = [
-        r".*<image>.*"
-    ],  # This is usually missing information
+    exclude_regexes: List[str] = [r".*<image>.*"],  # This is usually missing information
 ) -> List[List[Dict[str, str]]]:
     """
     Support loading validation/test/etc... sets of chats possibly with or withot
@@ -621,19 +564,11 @@ def load_split_chats_0turn(
     d_validation = dd[split]
     d_validation = [x for x in d_validation if x["difficulty"] in difficulties_allowed]
     for exclude_regex in exclude_regexes:
-        d_validation = [
-            x for x in d_validation if not re.match(exclude_regex, x["question"])
-        ]
-    only_keep_prompts_validation = set(
-        di["prompt"]
-        for di in tqdm.tqdm(d_validation, desc=f"Loading {split} set prompts")
-    )
+        d_validation = [x for x in d_validation if not re.match(exclude_regex, x["question"])]
+    only_keep_prompts_validation = set(di["prompt"] for di in tqdm.tqdm(d_validation, desc=f"Loading {split} set prompts"))
     prompts = list(only_keep_prompts_validation)
     if include_all_prompts:
-        hydrating_dicts = [
-            get_hydrating_dict(di)
-            for di in tqdm.tqdm(d_validation, desc="Getting hydrating dicts")
-        ]
+        hydrating_dicts = [get_hydrating_dict(di) for di in tqdm.tqdm(d_validation, desc="Getting hydrating dicts")]
         j2_templates: List[jinja2.Template] = get_augmenting_templates(verbose=False)
         assert len(j2_templates) > 0
         for hydrating_dict, j2_template in tqdm.tqdm(
@@ -649,9 +584,7 @@ def load_split_chats_0turn(
     random.seed(random_seed)
     random.shuffle(prompts)
     if len(prompts) < minimum_samples:
-        raise ValueError(
-            f"Found {len(prompts)} prompts, but minimum_samples is {minimum_samples}"
-        )
+        raise ValueError(f"Found {len(prompts)} prompts, but minimum_samples is {minimum_samples}")
     prompts = prompts[:maximum_samples]
     chats = [[{"role": "user", "content": prompt}] for prompt in prompts]
     assert all(is_valid_chat(chat) for chat in chats), f"chats[0]: {chats[0]}"
@@ -689,12 +622,8 @@ if __name__ == "__main__":
         "0",
         0,
     }
-    vchats = load_validation_chats_0turn(
-        maximum_samples=1_000_000, difficulties_allowed=difficulties
-    )
-    tchats = load_test_chats_0turn(
-        maximum_samples=1_000_000, difficulties_allowed=difficulties
-    )
+    vchats = load_validation_chats_0turn(maximum_samples=1_000_000, difficulties_allowed=difficulties)
+    tchats = load_test_chats_0turn(maximum_samples=1_000_000, difficulties_allowed=difficulties)
     print(f"Found up to {len(vchats)} validation chats and {len(tchats)} test chats")
     random.seed(57032)
     random.shuffle(vchats)
@@ -709,12 +638,8 @@ if __name__ == "__main__":
         difficulties_allowed=difficulties,
         include_all_prompts=True,
     )
-    assert len(vchats_aug) > len(vchats), (
-        f"vchats_aug: {len(vchats_aug)}, vchats: {len(vchats)}"
-    )
-    assert len(vchats_aug) % len(vchats) == 0, (
-        f"vchats_aug: {len(vchats_aug)}, vchats: {len(vchats)}"
-    )
+    assert len(vchats_aug) > len(vchats), f"vchats_aug: {len(vchats_aug)}, vchats: {len(vchats)}"
+    assert len(vchats_aug) % len(vchats) == 0, f"vchats_aug: {len(vchats_aug)}, vchats: {len(vchats)}"
     print(f"Found up to {len(vchats_aug)} validation chats with augmentation")
     random.seed(57032)
     random.shuffle(vchats_aug)

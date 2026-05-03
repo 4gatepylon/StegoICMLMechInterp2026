@@ -60,18 +60,14 @@ class TestRunner:
         per_test_timeout: float = 10.0,
     ):
         # Generations stuff
-        self.generations_file_folders: List[Path] = [
-            Path(folder) for folder in generations_file_folders
-        ]
+        self.generations_file_folders: List[Path] = [Path(folder) for folder in generations_file_folders]
         self.generations_files: Optional[List[Path]] = None
         self.generations: Optional[List[TestGeneration]] = None
 
         # Docker stuff
         self.docker_compose_yaml: Path = Path(docker_compose_yaml)
         if not self.docker_compose_yaml.exists():
-            raise FileNotFoundError(
-                f"Docker compose yaml file not found: {self.docker_compose_yaml}"
-            )
+            raise FileNotFoundError(f"Docker compose yaml file not found: {self.docker_compose_yaml}")
         self.docker_compose_args: List[str] = docker_compose_args
         self.docker_compose_kwargs: Dict[str, Any] = docker_compose_kwargs
 
@@ -80,42 +76,30 @@ class TestRunner:
         self.per_test_timeout: float = per_test_timeout
 
     ################ [BEGIN] Helpers for loading generations [BEGIN] ################
-    def _get_generations_files_from_folder(
-        self, generations_file_folder: Path, patterns=["*.json", "*.jsonl"]
-    ) -> List[Path]:
+    def _get_generations_files_from_folder(self, generations_file_folder: Path, patterns=["*.json", "*.jsonl"]) -> List[Path]:
         files = []
         for pattern in patterns:
             files.extend(list(generations_file_folder.glob(pattern)))
         return sorted(list(set(files)))
 
-    def _get_generations_files_from_folders(
-        self, generations_file_folders: List[Path]
-    ) -> List[Path]:
+    def _get_generations_files_from_folders(self, generations_file_folders: List[Path]) -> List[Path]:
         generations_files = []
         for generations_file_folder in generations_file_folders:
-            generations_files.extend(
-                self._get_generations_files_from_folder(generations_file_folder)
-            )
+            generations_files.extend(self._get_generations_files_from_folder(generations_file_folder))
         return generations_files
 
-    def _parse_test_generations_files(
-        self, generations_files: List[Path]
-    ) -> List[TestGeneration]:
+    def _parse_test_generations_files(self, generations_files: List[Path]) -> List[TestGeneration]:
         """
         Return `TestGeneration` objects from the generations files that store them.
         """
         generations = []
         for generations_file in generations_files:
-            generations.extend(
-                TestGeneration.parse_test_generations_file(generations_file)
-            )
+            generations.extend(TestGeneration.parse_test_generations_file(generations_file))
         for i in range(len(generations)):
             if generations[i].code is None:
                 parse_info = ParseArguments()  # Defaults
                 if generations[i].parse_info is None:
-                    raise ValueError(
-                        "Parse info is None but no code is provided"
-                    )  # Unreachable; fmt: skip
+                    raise ValueError("Parse info is None but no code is provided")  # Unreachable; fmt: skip
                 elif generations[i].parse_info in PARSE_INFO_OPTIONS_MAP:
                     parse_info = PARSE_INFO_OPTIONS_MAP[generations[i].parse_info]
                 elif isinstance(generations[i].parse_info, str):
@@ -133,16 +117,11 @@ class TestRunner:
     ################ [END] Helpers for loading generations [END] ################
 
     def load_generations(self) -> None:
-        self.generations_files = self._get_generations_files_from_folders(
-            self.generations_file_folders
-        )
+        self.generations_files = self._get_generations_files_from_folders(self.generations_file_folders)
         self.generations = self._parse_test_generations_files(self.generations_files)
         # Make sure to populate the identifier (this will be used to match the
         # inputs/outputs to specific python code files that should be run)
-        self.generations = [
-            generation.model_copy(update={"test_runtime_identifier": str(uuid.uuid4())})
-            for generation in self.generations
-        ]
+        self.generations = [generation.model_copy(update={"test_runtime_identifier": str(uuid.uuid4())}) for generation in self.generations]
         if len(self.generations) == 0:
             raise NoGenerationsError("No generations loaded... not supported!")
 
@@ -219,9 +198,7 @@ class TestRunner:
             # 3. Extract the results
             output_files = list(output_dir.iterdir())
             assert len(output_files) == len(self.generations)
-            results = [
-                orjson.loads(output_file.read_bytes()) for output_file in output_files
-            ]
+            results = [orjson.loads(output_file.read_bytes()) for output_file in output_files]
 
         # Return once folder is cleaned up
         return [TestGeneration.model_validate(result) for result in results]
@@ -250,19 +227,11 @@ class TestRunner:
         # all these arrays same length
         assert all(
             (
-                (
-                    len(result.actual_outputs)
-                    if result.actual_outputs is not None
-                    else len(result.expected_outputs)
-                )  # fmt: skip
+                (len(result.actual_outputs) if result.actual_outputs is not None else len(result.expected_outputs))  # fmt: skip
                 == len(result.expected_outputs)
                 == len(result.inputs)
                 == len(result.passed)
-                == (
-                    len(result.errors)
-                    if result.errors is not None
-                    else len(result.expected_outputs)
-                )  # fmt: skip
+                == (len(result.errors) if result.errors is not None else len(result.expected_outputs))  # fmt: skip
             )
             for result in results
         )

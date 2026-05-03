@@ -12,8 +12,7 @@ import tqdm
 class DatasetEntrySeeder:
     def __init__(
         self,
-        folder: Path = Path(__file__).parent.parent.parent
-        / "merged_seed_prompt_datasets",  # output_folder
+        folder: Path = Path(__file__).parent.parent.parent / "merged_seed_prompt_datasets",  # output_folder
         save_mode: Literal["jsonl"] = "jsonl",
         skip_files_too_large: bool = False,
     ):
@@ -24,8 +23,7 @@ class DatasetEntrySeeder:
 
     def save_seeds(
         self,
-        dataset_dict_folder: Optional[Path] = Path(__file__).parent.parent.parent
-        / "merged_code_datasets",  # fmt: skip
+        dataset_dict_folder: Optional[Path] = Path(__file__).parent.parent.parent / "merged_code_datasets",  # fmt: skip
         max_file_size_bytes: int = 50 * 1e6,
         avoid_splits: List[str] = ["test", "validation"],
         max_file_n: Optional[int] = None,
@@ -43,31 +41,21 @@ class DatasetEntrySeeder:
         """
         output_folder = self.folder
         if output_folder.exists() and len(list(output_folder.iterdir())) > 0:
-            raise FileExistsError(
-                f"Output folder {output_folder} already contains files"
-            )
+            raise FileExistsError(f"Output folder {output_folder} already contains files")
         # 1. Load the avoid prompts
         avoid_prompts: Set[str] = set()
         if dataset_dict_folder is not None:
             if not dataset_dict_folder.exists():
-                raise FileNotFoundError(
-                    f"Dataset dict folder {dataset_dict_folder} does not exist"
-                )
+                raise FileNotFoundError(f"Dataset dict folder {dataset_dict_folder} does not exist")
             dd = DatasetDict.load_from_disk(dataset_dict_folder)
             if not set(avoid_splits).issubset(set(dd.keys())):
-                raise ValueError(
-                    f"Avoid splits {avoid_splits} are not a subset of the dataset dict keys {dd.keys()}"
-                )
+                raise ValueError(f"Avoid splits {avoid_splits} are not a subset of the dataset dict keys {dd.keys()}")
             for split_name in dd.keys():
                 if split_name in avoid_splits:
-                    assert "prompt" in dd[split_name].column_names, (
-                        f"Prompt column not found in {split_name} split"
-                    )
+                    assert "prompt" in dd[split_name].column_names, f"Prompt column not found in {split_name} split"
                     for entry in dd[split_name]:
                         avoid_prompts.add(entry["prompt"])
-        print(
-            f"Found a total of {len(avoid_prompts)} prompts to avoid from folder: {dataset_dict_folder}"
-        )
+        print(f"Found a total of {len(avoid_prompts)} prompts to avoid from folder: {dataset_dict_folder}")
         print("=" * 100)
         # 2. Collect all available dataset entries without these prompts
         merger = DatasetMerger()  # Dummy
@@ -78,33 +66,21 @@ class DatasetEntrySeeder:
         dataset_name2dataset["BAAI/TACO"] = merger._get_baai_taco_raw_datset()
         print("=" * 100)
         print("Loading deepmind/code_contests...")
-        dataset_name2dataset["deepmind/code_contests"] = (
-            merger._get_deepmind_code_contests_raw_dataset()
-        )
+        dataset_name2dataset["deepmind/code_contests"] = merger._get_deepmind_code_contests_raw_dataset()
         print("=" * 100)
         print("Loading livecodebench/code_generation_lite...")
-        dataset_name2dataset["livecodebench/code_generation_lite"] = (
-            merger._get_live_code_bench_raw_dataset()
-        )
+        dataset_name2dataset["livecodebench/code_generation_lite"] = merger._get_live_code_bench_raw_dataset()
         print("=" * 100)
         print("Loading codeparrot/apps...")
-        dataset_name2dataset["codeparrot/apps"] = (
-            merger._get_codeparrot_apps_raw_dataset()
-        )
+        dataset_name2dataset["codeparrot/apps"] = merger._get_codeparrot_apps_raw_dataset()
         print("=" * 100)
         print("[OK] Loaded datasets!")
         print("=" * 100)
         print("Loading columns of difficulties...")
         dataset_name2_all_difficulties_set: Dict[str, Set[str | int]] = {}
-        for dataset_name, dataset in tqdm.tqdm(
-            dataset_name2dataset.items(), desc="Loading difficulties columns..."
-        ):
-            assert "difficulty" in dataset.column_names, (
-                f"Dataset {dataset_name} does not have a difficulty column"
-            )
-            dataset_name2_all_difficulties_set[dataset_name] = sorted(
-                list(set([x["difficulty"] for x in dataset]))
-            )
+        for dataset_name, dataset in tqdm.tqdm(dataset_name2dataset.items(), desc="Loading difficulties columns..."):
+            assert "difficulty" in dataset.column_names, f"Dataset {dataset_name} does not have a difficulty column"
+            dataset_name2_all_difficulties_set[dataset_name] = sorted(list(set([x["difficulty"] for x in dataset])))
         print("Columns:")
         print(json.dumps(dataset_name2_all_difficulties_set, indent=4))
         print("[OK] Got all difficulties!")
@@ -136,15 +112,9 @@ class DatasetEntrySeeder:
             "train",
             "test",
             "validation",
-        }, (
-            f"Got {dataset_dict.keys()} keys, but expected {['train', 'test', 'validation']}"
-        )
-        dataset_combined: Dataset = concatenate_datasets(
-            [dataset_dict[split_name] for split_name in dataset_dict.keys()]
-        )
-        assert len(dataset_combined) == len(dataset_dict["train"]) + len(
-            dataset_dict["test"]
-        ) + len(dataset_dict["validation"]), (
+        }, f"Got {dataset_dict.keys()} keys, but expected {['train', 'test', 'validation']}"
+        dataset_combined: Dataset = concatenate_datasets([dataset_dict[split_name] for split_name in dataset_dict.keys()])
+        assert len(dataset_combined) == len(dataset_dict["train"]) + len(dataset_dict["test"]) + len(dataset_dict["validation"]), (
             f"Dataset combined has {len(dataset_combined)} entries, but should have {len(dataset_dict['train']) + len(dataset_dict['test']) + len(dataset_dict['validation'])} entries"
         )
         print("[OK] Ensured lengths!")
@@ -152,23 +122,15 @@ class DatasetEntrySeeder:
         print("Filtering prompts to avoid...")
         _old_len = len(dataset_combined)
         dataset_combined: List[Dict[str, Any]] = [
-            z
-            for z in tqdm.tqdm(
-                dataset_combined, desc="Filtering for prompts to avoid..."
-            )
-            if z["question"] not in avoid_prompts
+            z for z in tqdm.tqdm(dataset_combined, desc="Filtering for prompts to avoid...") if z["question"] not in avoid_prompts
         ]
         print("[OK] Filtered for prompts to avoid!")
-        print(
-            f"Num that do have the prompts to avoid: {_old_len - len(dataset_combined)}"
-        )
+        print(f"Num that do have the prompts to avoid: {_old_len - len(dataset_combined)}")
         print(f"From num prompts to avoid: {len(avoid_prompts)}")
         print(f"New size: {len(dataset_combined)}")
         print("=" * 100)
         print("Shuffling...")
-        dataset_combined: Dataset = Dataset.from_list(dataset_combined).shuffle(
-            seed=1026576343452
-        )
+        dataset_combined: Dataset = Dataset.from_list(dataset_combined).shuffle(seed=1026576343452)
         print("[OK] Shuffled!")
         print("=" * 100)
 
@@ -181,13 +143,8 @@ class DatasetEntrySeeder:
         for entry in tqdm.tqdm(dataset_combined, desc="Saving seeds..."):
             _serialized_entry: bytes = orjson.dumps(entry) + b"\n"
             # If overflow, then write and clear buffer.
-            assert entry_buff_n_bytes_written == len(
-                entry_buff.getvalue()
-            )  # debug, -O this
-            if (
-                entry_buff_n_bytes_written + len(_serialized_entry)
-                > max_file_size_bytes
-            ):
+            assert entry_buff_n_bytes_written == len(entry_buff.getvalue())  # debug, -O this
+            if entry_buff_n_bytes_written + len(_serialized_entry) > max_file_size_bytes:
                 file_path = output_folder / f"{entry_buff_n}.jsonl"
                 assert not file_path.exists()
                 file_path.write_bytes(entry_buff.getvalue())
@@ -215,17 +172,11 @@ class DatasetEntrySeeder:
             )
             file_path.write_bytes(entry_buff.getvalue())
 
-        assert len(self.load_seeds(deserialize=False)) == len(
-            dataset_combined
-        )  # debug; -O this
+        assert len(self.load_seeds(deserialize=False)) == len(dataset_combined)  # debug; -O this
 
-    def load_seeds_stream(
-        self, deserialize: bool = True
-    ) -> Iterator[DatasetEntry | Dict[str, Any]]:
+    def load_seeds_stream(self, deserialize: bool = True) -> Iterator[DatasetEntry | Dict[str, Any]]:
         if not self.folder.exists() or len(list(self.folder.iterdir())) == 0:
-            raise FileNotFoundError(
-                f"Output folder {self.folder} does not exist or is empty"
-            )
+            raise FileNotFoundError(f"Output folder {self.folder} does not exist or is empty")
         if self.save_mode == "jsonl":
             for file in sorted(list(self.folder.glob("*.jsonl"))):
                 with open(file, "rb") as f:
@@ -252,8 +203,7 @@ if __name__ == "__main__":
     )
     loader.save_seeds(
         # NOTE this location choice is for the align machines
-        dataset_dict_folder=Path(__file__).parent.parent.parent
-        / "merged_code_datasets",
+        dataset_dict_folder=Path(__file__).parent.parent.parent / "merged_code_datasets",
         avoid_splits=["test", "validation"],
         max_file_size_bytes=500 * 1e6,  # github limit is 100MB but we rnt storing :P
         max_file_n=500,

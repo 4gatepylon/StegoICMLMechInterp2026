@@ -108,11 +108,7 @@ class ScriptsHandler:
         script_content = self.script_id2script[request.script_id]
         filename = self.script_id2filename[request.script_id]
         has_metadata = request.script_id in self.script_id2metadata
-        metadata = (
-            self.script_id2metadata.get(request.script_id, None)
-            if has_metadata and request.include_metadata
-            else None
-        )
+        metadata = self.script_id2metadata.get(request.script_id, None) if has_metadata and request.include_metadata else None
 
         return GetScriptResponse(
             script_id=request.script_id,
@@ -142,9 +138,7 @@ class ScriptsHandler:
         time_start = time.time()
         try:
             # Run the script with the provided stdin input
-            timeout = (
-                request.timeout if request.timeout is not None else self.script_timeout
-            )
+            timeout = request.timeout if request.timeout is not None else self.script_timeout
             # TODO(Adriano) in a future commit/feature/PR we will want to support
             # STREAMING the outputs of this.
             result = subprocess.run(

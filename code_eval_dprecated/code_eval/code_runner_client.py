@@ -175,9 +175,7 @@ class DockerizedTestRunner:
         client = CodeExecutionClient(f"http://localhost:{port}")
         for _ in tqdm.trange(n_tries, desc="Waiting for container to be ready"):
             try:
-                response = requests.get(
-                    f"http://localhost:{port}/list_scripts", timeout=1
-                )
+                response = requests.get(f"http://localhost:{port}/list_scripts", timeout=1)
                 if response.status_code == 200:
                     break
             except requests.RequestException:
@@ -255,14 +253,11 @@ class DockerizedTestRunner:
         ) = arguments
 
         test_arguments: List[TestArgument] = [
-            TestArgument.model_validate(serialized_test_argument)
-            for serialized_test_argument in serialized_test_arguments
+            TestArgument.model_validate(serialized_test_argument) for serialized_test_argument in serialized_test_arguments
         ]
 
         if timeout_overall is not None:
-            raise NotImplementedError(
-                "Not implemented. Timeout overall requires further processing"
-            )
+            raise NotImplementedError("Not implemented. Timeout overall requires further processing")
 
         # TODO(Adriano) client is not actually stateful tbh (other than for session, so
         # this usage is fine) but we should clean this up so we don't have useless dangling client objects
@@ -283,9 +278,7 @@ class DockerizedTestRunner:
         # Return serialized test arguments with responses
         return [test_arg.model_dump() for test_arg in test_arguments]
 
-    def _grade_results(
-        self, results: List[RunScriptBatchResponse]
-    ) -> List[RunScriptBatchResponse]:
+    def _grade_results(self, results: List[RunScriptBatchResponse]) -> List[RunScriptBatchResponse]:
         """Grade the results based on expected outputs and pass_check_method."""
         for result in results:
             if not result.graded or result.expected_outputs is None:
@@ -293,16 +286,12 @@ class DockerizedTestRunner:
 
             # Ensure we have the same number of results and expected outputs
             if len(result.results) != len(result.expected_outputs):
-                click.echo(
-                    f"Warning: Mismatch in number of results ({len(result.results)}) and expected outputs ({len(result.expected_outputs)})"
-                )
+                click.echo(f"Warning: Mismatch in number of results ({len(result.results)}) and expected outputs ({len(result.expected_outputs)})")
                 continue
 
             # Grade each result
             passed = []
-            for actual_result, expected_output in zip(
-                result.results, result.expected_outputs
-            ):
+            for actual_result, expected_output in zip(result.results, result.expected_outputs):
                 actual_output = actual_result.stdout
 
                 if result.pass_check_method == "exact_match":
@@ -310,9 +299,7 @@ class DockerizedTestRunner:
                 elif result.pass_check_method == "exact_match_with_strip":
                     is_passed = actual_output.strip() == expected_output.strip()
                 else:
-                    raise NotImplementedError(
-                        f"Pass check method {result.pass_check_method} not implemented"
-                    )
+                    raise NotImplementedError(f"Pass check method {result.pass_check_method} not implemented")
 
                 passed.append(is_passed)
 
@@ -326,9 +313,7 @@ class DockerizedTestRunner:
         timeout_overall: Optional[float] = None,
         timeout_per_run: Optional[float] = None,
         must_start_at_least: int = 1,
-        pass_check_method: Literal[
-            "exact_match", "exact_match_with_strip"
-        ] = "exact_match_with_strip",
+        pass_check_method: Literal["exact_match", "exact_match_with_strip"] = "exact_match_with_strip",
     ) -> List[RunScriptBatchResponse]:
         """
         Run a batch of test requests across multiple containers.
@@ -408,9 +393,7 @@ class DockerizedTestRunner:
 
         # 2. Create all arguments and shuffle them so that we can distribute them evenly
         all_arguments: List[TestArgument] = []
-        for i, test_request in enumerate(
-            tqdm.tqdm(test_requests, desc="Creating arguments")
-        ):
+        for i, test_request in enumerate(tqdm.tqdm(test_requests, desc="Creating arguments")):
             for j, stdin_input in enumerate(test_request.stdin_inputs):
                 all_arguments.append(
                     TestArgument(
@@ -441,20 +424,14 @@ class DockerizedTestRunner:
                     worker_args,
                 )
             all_processed_result_test_arguments = [
-                TestArgument.model_validate(result)
-                for worker_result in worker_results
-                for result in worker_result
+                TestArgument.model_validate(result) for worker_result in worker_results for result in worker_result
             ]
-            for i, result_test_argument in enumerate(
-                all_processed_result_test_arguments
-            ):
+            for i, result_test_argument in enumerate(all_processed_result_test_arguments):
                 assert result_test_argument.response_object is not None
                 # scripts 1:1 with test_requests 1:1 with results
                 results_index = result_test_argument.script_index
                 # results_argument_index = result_test_argument.script_argument_index # used later for sort; fmt: skip
-                results[results_index].results.append(
-                    result_test_argument.response_object
-                )
+                results[results_index].results.append(result_test_argument.response_object)
             # Make sure all have the right length
             assert len(results) == len(test_requests)
             assert all(len(results[i].results) == len(test_requests[i].stdin_inputs) for i in range(len(results)))  # fmt: skip

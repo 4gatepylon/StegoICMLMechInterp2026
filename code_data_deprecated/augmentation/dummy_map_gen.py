@@ -23,13 +23,9 @@ def generate_map_file():
     all_combinations = []
 
     # Generate all subsets of keys
-    for n in tqdm.tqdm(
-        range(0, 2 ** len(all_keys)), desc="Generating all combinations"
-    ):
+    for n in tqdm.tqdm(range(0, 2 ** len(all_keys)), desc="Generating all combinations"):
         includes = [((n >> i) & 1) == 1 for i in range(len(all_keys))]
-        all_combinations.append(
-            [all_keys[i] for i in range(len(all_keys)) if includes[i]]
-        )
+        all_combinations.append([all_keys[i] for i in range(len(all_keys)) if includes[i]])
     assert len(set(map(tuple, all_combinations))) == len(all_combinations)  # all combos
     assert len(all_combinations) == 2 ** len(all_keys)
 
@@ -46,9 +42,7 @@ def generate_map_file():
     map_data.sort(key=lambda x: (len(x[0]), x[0]))
 
     # Write to file
-    output_path = (
-        Path(__file__).parent / "rephrase_templates" / "map.json"
-    )  # copy it l8r
+    output_path = Path(__file__).parent / "rephrase_templates" / "map.json"  # copy it l8r
     assert output_path.parent.exists()
     assert not output_path.exists()
 

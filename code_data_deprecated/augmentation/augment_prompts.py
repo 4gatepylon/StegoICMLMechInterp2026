@@ -62,9 +62,7 @@ class CachedStream:  # NOTE: stream internals must be json serializable
         raise NotImplementedError
 
     def __call__(self, *args, **kwargs) -> Iterator[Dict[str, Any]]:
-        g = self.reader_writer.write_stream(
-            self.call_inner(*args, **kwargs), **self.write_kwargs
-        )
+        g = self.reader_writer.write_stream(self.call_inner(*args, **kwargs), **self.write_kwargs)
         # item is passthrough, _ is (bytes_written, lines_written, files_written)
         for item, _ in g:
             yield item
@@ -73,17 +71,12 @@ class CachedStream:  # NOTE: stream internals must be json serializable
 class DatasetEntryCombinationsGenerator(CachedStream):
     def __init__(
         self,
-        weights: Path | Dict[str, float] = Path(__file__).parent
-        / "sample_combinations_weights.json",
-        cache_filepath: Path = Path(__file__).parent
-        / ".cache"
-        / "dataset_entry_combinations",
+        weights: Path | Dict[str, float] = Path(__file__).parent / "sample_combinations_weights.json",
+        cache_filepath: Path = Path(__file__).parent / ".cache" / "dataset_entry_combinations",
         clobber_cache: bool = False,
     ) -> None:
         super().__init__()
-        self.weights = (
-            orjson.loads(weights.read_bytes()) if isinstance(weights, Path) else weights
-        )
+        self.weights = orjson.loads(weights.read_bytes()) if isinstance(weights, Path) else weights
         assert isinstance(self.weights, dict)
         assert set(self.weights.keys()) == {
             "starter_code",
@@ -105,9 +98,7 @@ class DatasetEntryCombinationsGenerator(CachedStream):
         self.clobber_cache = clobber_cache
 
     @staticmethod
-    def _sample_array(
-        options2weights: Dict[str, float], n_samples: int
-    ) -> List[List[str]]:
+    def _sample_array(options2weights: Dict[str, float], n_samples: int) -> List[List[str]]:
         """
         Utility to sample random keys from a dictionary of independent probabilities for
         each key showing up.
@@ -120,9 +111,7 @@ class DatasetEntryCombinationsGenerator(CachedStream):
         values = np.array([v for _, v in keys_values]).reshape(1, -1)
         assert values.shape == (1, len(options2weights))  # batch, n_options
         # Sample
-        samples = np.random.random(
-            (n_samples, len(options2weights))
-        )  # batch, n_options
+        samples = np.random.random((n_samples, len(options2weights)))  # batch, n_options
         select = samples < values
         ret = [[k for k, s in zip(keys, row) if s] for row in select]
         assert len(ret) == n_samples
@@ -155,31 +144,19 @@ class DatasetEntryCombinationsGenerator(CachedStream):
             raise NotImplementedError("Not implemented yet")  # Not clear how to do
         # preproc. for format and runtime
         disallowed_arrays = [tuple(t) for t in disallowed_arrays]
-        dataset_entry = (
-            dataset_entry.serialize()
-            if isinstance(dataset_entry, DatasetEntry)
-            else dataset_entry
-        )
+        dataset_entry = dataset_entry.serialize() if isinstance(dataset_entry, DatasetEntry) else dataset_entry
         sampled_arrays: List[List[str] | Tuple[str, ...]] = []
         while len(sampled_arrays) < n_samples:
-            sampled_arrays = DatasetEntryCombinationsGenerator._sample_array(
-                weights, n_samples * insurance_multiplier
-            )
-            sampled_arrays = [
-                arr for arr in sampled_arrays if tuple(arr) not in disallowed_arrays
-            ]
+            sampled_arrays = DatasetEntryCombinationsGenerator._sample_array(weights, n_samples * insurance_multiplier)
+            sampled_arrays = [arr for arr in sampled_arrays if tuple(arr) not in disallowed_arrays]
             if not allow_duplicates:
-                sampled_arrays = [
-                    list(a) for a in set(tuple(arr) for arr in sampled_arrays)
-                ]
+                sampled_arrays = [list(a) for a in set(tuple(arr) for arr in sampled_arrays)]
             sampled_arrays = sampled_arrays[:n_samples]
         assert isinstance(sampled_arrays, list)
         assert all(isinstance(arr, list) for arr in sampled_arrays)
         assert all(all(isinstance(s, str) for s in arr) for arr in sampled_arrays)
         assert len(sampled_arrays) == n_samples
-        entry_dicts_made = [
-            {key: dataset_entry[key] for key in array} for array in sampled_arrays
-        ]
+        entry_dicts_made = [{key: dataset_entry[key] for key in array} for array in sampled_arrays]
         return entry_dicts_made
 
     def call_inner(
@@ -238,25 +215,18 @@ class DictionaryTemplateRender:
     def __init__(self) -> None:
         pass
 
-    def call_inner(
-        self, stream: Iterator[Dict[str, str]], *args, **kwargs
-    ) -> Iterator[Dict[str, str]]:
+    def call_inner(self, stream: Iterator[Dict[str, str]], *args, **kwargs) -> Iterator[Dict[str, str]]:
         raise NotImplementedError
 
-    def __call__(
-        self, stream: Iterator[Dict[str, str]], *args, **kwargs
-    ) -> Iterator[Dict[str, str]]:
+    def __call__(self, stream: Iterator[Dict[str, str]], *args, **kwargs) -> Iterator[Dict[str, str]]:
         yield from self.call_inner(stream, *args, **kwargs)
 
 
 class DatasetEntryInitialRender(CachedStream):
     def __init__(
         self,
-        initial_templates_j2s_folder: Path = Path(__file__).parent
-        / "initial_templates",
-        cache_filepath: Path = Path(__file__).parent
-        / ".cache"
-        / "dataset_entry_renders",
+        initial_templates_j2s_folder: Path = Path(__file__).parent / "initial_templates",
+        cache_filepath: Path = Path(__file__).parent / ".cache" / "dataset_entry_renders",
         clobber_cache: bool = False,
         # folder has "map.json" and a bunch of *.j2 files
         # map is used to map from the keys above (combinations supported---all2**8=256)
@@ -269,15 +239,11 @@ class DatasetEntryInitialRender(CachedStream):
         j2_files = []
         for ext in [".j2", ".jinja2"]:
             for glob_prefix in ["*", "**/*"]:
-                j2_files.extend(
-                    list(initial_templates_j2s_folder.glob(f"{glob_prefix}{ext}"))
-                )
+                j2_files.extend(list(initial_templates_j2s_folder.glob(f"{glob_prefix}{ext}")))
         # NOTE: these two are order-zipped
         j2_files = list(set(j2_files))
         if len(set(j2f.name for j2f in j2_files)) != len(j2_files):
-            raise ValueError(
-                f"Duplicate template file NAMES found in {initial_templates_j2s_folder} (not allowed sorry)"
-            )
+            raise ValueError(f"Duplicate template file NAMES found in {initial_templates_j2s_folder} (not allowed sorry)")
         self.templates = [load_jinja_template(j2_file) for j2_file in j2_files]
         assert all(isinstance(template, jinja2.Template) for template in self.templates)
 
@@ -305,18 +271,12 @@ class DatasetEntryInitialRender(CachedStream):
         assert len(map2) == len(set(k for k, _ in map2))
         map3 = {k: v for k, v in map2}
         # Map from name2template and map from keylist to names
-        self.name2template = {
-            j2f.name: template for j2f, template in zip(j2_files, self.templates)
-        }
+        self.name2template = {j2f.name: template for j2f, template in zip(j2_files, self.templates)}
         # (make sure that all the names refer to SOME template)
-        assert all(
-            all(vk in self.name2template for vk in v.keys()) for v in map3.values()
-        )
+        assert all(all(vk in self.name2template for vk in v.keys()) for v in map3.values())
         self.keylist2name = map3
 
-    def call_inner(
-        self, combinations: Iterator[Dict[str, Any]]
-    ) -> Iterator[Dict[str, Any]]:  # output is of a `TemplatedEntry` type
+    def call_inner(self, combinations: Iterator[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:  # output is of a `TemplatedEntry` type
         for combination in combinations:
             keylist = tuple(sorted(combination.keys()))  # sort for determinism
             names_dist = sorted(self.keylist2name[keylist].items(), key=lambda x: x[0])
@@ -324,21 +284,16 @@ class DatasetEntryInitialRender(CachedStream):
             probabilities = probabilities / probabilities.sum()  # just in case
             name = np.random.choice([n for n, _ in names_dist], p=probabilities)
             template = self.name2template[name]
-            yield TemplatedEntry(
-                string=template.render(combination), j2name=name, keylist=keylist
-            ).model_dump()
+            yield TemplatedEntry(string=template.render(combination), j2name=name, keylist=keylist).model_dump()
 
 
 class LLMRephrasePromptRender(CachedStream):
     def __init__(
         self,
-        cache_filepath: Path = Path(__file__).parent
-        / ".cache"
-        / "llm_rephrase_prompt_renders",
+        cache_filepath: Path = Path(__file__).parent / ".cache" / "llm_rephrase_prompt_renders",
         clobber_cache: bool = False,
         # also has a map like above with rephraseables
-        rephrase_prompts_j2s_folder: Path = Path(__file__).parent
-        / "rephrase_templates",
+        rephrase_prompts_j2s_folder: Path = Path(__file__).parent / "rephrase_templates",
     ) -> None:
         self.cache_filepath = cache_filepath
         self.clobber_cache = clobber_cache
@@ -351,13 +306,10 @@ class LLMRephrasePromptRender(CachedStream):
 class APIGeneratorStream(CachedStream):
     def __init__(
         self,
-        cache_filepath: Path = Path(__file__).parent
-        / ".cache"
-        / "api_generator_stream",
+        cache_filepath: Path = Path(__file__).parent / ".cache" / "api_generator_stream",
         clobber_cache: bool = False,
         # also has a map like above with rephraseables
-        rephrase_prompts_j2s_folder: Path = Path(__file__).parent
-        / "rephrase_templates",
+        rephrase_prompts_j2s_folder: Path = Path(__file__).parent / "rephrase_templates",
         prompt_key: str = "prompt",
         response_key: str = "response",
         model: str = "gpt-4.1-nano",
@@ -377,12 +329,10 @@ class APIGeneratorStream(CachedStream):
         for prompt in prompts:
             # 1. Generate if necessary
             if len(prompts_buffer) >= self.outer_batch_size:
-                responses_inner_stream = (
-                    self.generator.api_generate_json_mode_streaming(
-                        prompts=prompts_buffer,
-                        model=self.model,
-                        **self.generate_kwargs,
-                    )
+                responses_inner_stream = self.generator.api_generate_json_mode_streaming(
+                    prompts=prompts_buffer,
+                    model=self.model,
+                    **self.generate_kwargs,
                 )
                 for response in responses_inner_stream:
                     yield {self.response_key: response, **prompt}
@@ -435,23 +385,13 @@ class SyntheticDataGenerationPipeline:  # XXX generic stream plz
         # self.dataset_entry_initial_render_kwargs = dataset_entry_initial_render_kwargs
         # self.llm_rephrase_kwargs = llm_rephrase_kwargs
         # self.llm_quality_filters = llm_quality_filters
-        self.dataset_entry_combination = DatasetEntryCombinationsGenerator(
-            **dataset_entry_combination_kwargs
-        )
-        self.dataset_entry_initial_render = DatasetEntryInitialRender(
-            **dataset_entry_initial_render_kwargs
-        )
+        self.dataset_entry_combination = DatasetEntryCombinationsGenerator(**dataset_entry_combination_kwargs)
+        self.dataset_entry_initial_render = DatasetEntryInitialRender(**dataset_entry_initial_render_kwargs)
         self.llm_rephrase = LLMRephrasePromptRender(**llm_rephrase_kwargs)
         self.llm_quality = LLMQualiyFilter(**llm_quality_filter_kwargs)
 
     def __call__(self, dataset_entries: Iterator[DatasetEntry]) -> Iterator[str]:
-        chained_iterator = self.llm_quality(
-            self.llm_rephrase(
-                self.dataset_entry_initial_render(
-                    self.dataset_entry_combination(dataset_entries)
-                )
-            )
-        )
+        chained_iterator = self.llm_quality(self.llm_rephrase(self.dataset_entry_initial_render(self.dataset_entry_combination(dataset_entries))))
         yield from chained_iterator
 
 
@@ -475,8 +415,7 @@ def load_dataset_entries(
 
 def create_synthetic_data(  # this is our main entrypoint that you import and use basically
     self,
-    output_folder=Path(__file__).parent.parent.parent
-    / "merged_augmented_code_datasets",
+    output_folder=Path(__file__).parent.parent.parent / "merged_augmented_code_datasets",
     n_items: int = 10,  # debug
     max_file_size: int = 500 * 1e6,  # 500MB
     max_n_files: int | float = float("inf"),
@@ -488,9 +427,7 @@ def create_synthetic_data(  # this is our main entrypoint that you import and us
     tf_stream_creator = SyntheticDataGenerationPipeline(**kwargs)
     tf_stream = tf_stream_creator(input_stream)
 
-    reader_writer = JSONLFolderReaderWriter(
-        output_folder
-    )  # TODO insert max file size etc... (n times etc...)
+    reader_writer = JSONLFolderReaderWriter(output_folder)  # TODO insert max file size etc... (n times etc...)
     reader_writer.write(tf_stream)
 
 
@@ -504,9 +441,7 @@ if __name__ == "__main__":
         source_dataset="test_dataset",
         question_id="test_001",
         question="Given an integer n, return the nth Fibonacci number.",
-        answers=[
-            "def solution(n):\n    if n <= 1:\n        return n\n    return solution(n-1) + solution(n-2)"
-        ],
+        answers=["def solution(n):\n    if n <= 1:\n        return n\n    return solution(n-1) + solution(n-2)"],
         expected_inputs_outputs={"inputs": ["5", "10"], "outputs": ["5", "55"]},
         difficulty="medium",
         url="https://leetcode.com/problems/fibonacci",
@@ -547,9 +482,7 @@ if __name__ == "__main__":
         generator1_creator = DatasetEntryCombinationsGenerator(weights=weights)
         generator2_creator = DatasetEntryInitialRender()
         entries = iter([test_entry for _ in range(20_000)])
-        generator1 = generator1_creator(
-            entries, n_samples_per_entry=50, n_samples_overall=1_000_000
-        )
+        generator1 = generator1_creator(entries, n_samples_per_entry=50, n_samples_overall=1_000_000)
         generator2 = generator2_creator(generator1)
         for i, entry in enumerate(
             tqdm.tqdm(

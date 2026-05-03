@@ -99,9 +99,7 @@ class Stats:
         Strict accuracy is the number of correct generations divided by the total number of generations.
         """
         Stats._sans([g.passed for g in graded_generations])
-        strict_accs = [
-            int(sum(map(int, g.passed)) == len(g.passed)) for g in graded_generations
-        ]
+        strict_accs = [int(sum(map(int, g.passed)) == len(g.passed)) for g in graded_generations]
         return np.mean(strict_accs).item()
 
     @staticmethod
