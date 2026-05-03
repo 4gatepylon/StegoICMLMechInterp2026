@@ -46,3 +46,10 @@ The components therefore are likely:
 - Competition website
 - The decoder API/website
 - Paper writeup
+
+# TODOs
+- Understand how Agent SDK works: https://code.claude.com/docs/en/agent-sdk/overview
+- Get a really good cipher
+- Understand how to measure model usage under max and understand how many model calls I can make/how much I can programmatically extract here
+- Come up with a plan to avoid making it too easy to reveal (I thought I might RL against claude but not sure tbh)
+- Do small model experiemnts
