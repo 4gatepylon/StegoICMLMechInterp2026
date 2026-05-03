@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: wbdetect
+Version: 0.1.0
+Summary: Whitelist vs. Blacklist detection across granularity levels
+Requires-Python: >=3.10
+Requires-Dist: torch>=2.0
+Requires-Dist: torchvision>=0.15
+Requires-Dist: transformers>=4.40
+Requires-Dist: datasets>=2.18
+Requires-Dist: scikit-learn>=1.4
+Requires-Dist: numpy>=1.24
+Requires-Dist: nltk>=3.8
+Requires-Dist: matplotlib>=3.8
+Requires-Dist: tqdm>=4.65
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ipython; extra == "dev"
