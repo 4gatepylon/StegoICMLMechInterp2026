@@ -19,6 +19,7 @@ Likely contribution is just:
 - Show that you CAN finetune via SFT + RL. How small can the model be?
 - Observe the difficulty of removing obvious traces from the CoT/training logs. Main question we answer: can you get it to do the entire computation in latent-space?
 - Maybe do some mech. interp. to observe how the model does it. Depending on the situation, we might not release some relevant facts and create a website for a competition. I'm thinking I might give away $1024 in the span of 4 days.
+- Possible bonus: seeing if claude can detect what is going on, unsupervised (just text search). for example---does it work with just prompting? with agent mode? what hints does it need?
 
 ## Testing
 
