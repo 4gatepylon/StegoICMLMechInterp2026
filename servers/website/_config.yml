@@ -1,0 +1,20 @@
+title: "Stego Challenge"
+description: "Can you find the hidden messages in AI-generated code?"
+baseurl: ""
+url: ""
+
+# SET THIS before deploying — the public URL of the verification API
+# e.g. http://12.34.56.78:8000
+api_url: "http://REPLACE_WITH_API_IP:8000"
+
+theme: minima
+
+header_pages:
+  - rules.md
+  - submit.md
+
+markdown: kramdown
+
+collections:
+  challenge_programs:
+    output: false

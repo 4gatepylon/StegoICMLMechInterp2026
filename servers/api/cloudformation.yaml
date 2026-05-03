@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Stego Decoder Verifier — single t3.micro EC2 instance
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH access
+
+  RepoUrl:
+    Type: String
+    Default: https://github.com/adrianoh/StegoICMLMechInterp2026.git
+    Description: Git clone URL for the project repo
+
+  CipherName:
+    Type: String
+    Default: cipher2
+    AllowedValues: [cipher1, cipher2]
+    Description: Which cipher JSON to load at startup
+
+  AppPort:
+    Type: Number
+    Default: 8000
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Stego verifier — SSH + app port
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          CidrIp: 0.0.0.0/0
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      SecurityGroupIds:
+        - !GetAtt SecurityGroup.GroupId
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+
+          dnf install -y python3.11 python3.11-pip git
+
+          cd /home/ec2-user
+          git clone ${RepoUrl} repo
+          cd repo/servers/api
+
+          python3.11 -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+
+          chown -R ec2-user:ec2-user /home/ec2-user/repo
+
+          cat > /etc/systemd/system/stego-verifier.service <<'UNIT'
+          [Unit]
+          Description=Stego Decoder Verifier
+          After=network.target
+
+          [Service]
+          User=ec2-user
+          WorkingDirectory=/home/ec2-user/repo/servers/api
+          Environment=STEGO_CIPHER=${CipherName}
+          ExecStart=/home/ec2-user/repo/servers/api/.venv/bin/uvicorn app:app --host 0.0.0.0 --port ${AppPort}
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+
+          systemctl daemon-reload
+          systemctl enable --now stego-verifier
+      Tags:
+        - Key: Name
+          Value: stego-verifier
+
+Outputs:
+  PublicIp:
+    Description: Public IP of the verifier instance
+    Value: !GetAtt Instance.PublicIp
+
+  VerifyUrl:
+    Description: POST endpoint
+    Value: !Sub "http://${Instance.PublicIp}:${AppPort}/verify"

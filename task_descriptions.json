@@ -1,0 +1,130 @@
+[
+  {
+    "name": "csv_column_stats",
+    "description": "Write a click CLI that takes a CSV file path as an argument. Load it with numpy (genfromtxt with names=True), compute mean, standard deviation, median, min, and max for each numerical column, and print a neatly aligned table of results via click.echo."
+  },
+  {
+    "name": "pca_projection",
+    "description": "Write a click CLI that takes a CSV file path and an integer k as arguments. Load the numerical data with numpy, center it, compute the covariance matrix, find the top-k eigenvectors, project the data onto them, and write the result to a new CSV file whose path is printed via click.echo."
+  },
+  {
+    "name": "synthetic_regression_data",
+    "description": "Write a click CLI that takes --n-samples, --n-features, --noise (float), and an output CSV path. Use numpy to generate a random weight vector, produce X ~ N(0,1), compute y = X @ w + noise*eps, and save X and y together as a CSV."
+  },
+  {
+    "name": "correlation_heatmap",
+    "description": "Write a click CLI that takes a CSV file path and a --threshold (float, default 0.7). Load data with numpy, compute the Pearson correlation matrix between all column pairs, and print pairs whose absolute correlation exceeds the threshold, sorted by magnitude descending."
+  },
+  {
+    "name": "zscore_normalizer",
+    "description": "Write a click CLI that takes an input CSV path and an output CSV path. Load with numpy, compute z-score normalization (subtract mean, divide by std) for each column, and save the result. Print per-column original and normalized ranges via click.echo."
+  },
+  {
+    "name": "outlier_detector_iqr",
+    "description": "Write a click CLI that takes a CSV file path and a --multiplier (float, default 1.5). Load with numpy, compute Q1, Q3, and IQR for each numerical column, flag rows where any value falls outside [Q1 - multiplier*IQR, Q3 + multiplier*IQR], and print the row indices and offending values."
+  },
+  {
+    "name": "moving_average_smoother",
+    "description": "Write a click CLI that takes a CSV path, a --column name, and a --window integer. Load the data with numpy, compute a simple moving average of the specified column with the given window size, and write the original plus smoothed column to a new CSV."
+  },
+  {
+    "name": "kmeans_from_scratch",
+    "description": "Write a click CLI that takes a CSV path, --k (number of clusters), --max-iters (default 100), and --seed. Implement k-means clustering from scratch using only numpy: random centroid initialization, assignment step, update step. Print final centroid coordinates and cluster sizes."
+  },
+  {
+    "name": "torch_linear_regression",
+    "description": "Write a click CLI that takes a CSV path, --lr (float), --epochs (int), and --target-column (string). Load data with numpy, convert to torch tensors, train a simple linear regression model using SGD, and print the final loss and learned weights via click.echo."
+  },
+  {
+    "name": "cosine_similarity_matrix",
+    "description": "Write a click CLI that takes a safetensors file path. Load all tensors (assumed 1-D) using safetensors.torch, compute pairwise cosine similarity between all tensor pairs using torch, and print a formatted similarity matrix with key names as row/column labels."
+  },
+  {
+    "name": "checkpoint_l2_distance",
+    "description": "Write a click CLI that takes two safetensors file paths. Load both with safetensors.torch, verify they have the same keys, then compute and print the L2 (Euclidean) distance between corresponding tensors for each key, plus the total L2 distance across all parameters."
+  },
+  {
+    "name": "softmax_temperature",
+    "description": "Write a click CLI that takes a JSON file of logits (a list of floats) and a --temperatures flag accepting multiple floats. For each temperature, apply softmax(logits/T) using torch, compute the entropy of the resulting distribution, and print a table of temperature vs entropy."
+  },
+  {
+    "name": "weight_quantization_stats",
+    "description": "Write a click CLI that takes a safetensors file path. Load all tensors with safetensors.torch, quantize each to int8 by scaling to [-127, 127] range, compute the mean absolute quantization error per tensor, and print a summary table with original dtype, shape, and error."
+  },
+  {
+    "name": "gradient_descent_rosenbrock",
+    "description": "Write a click CLI with --lr, --steps, --x0, --y0 arguments. Implement gradient descent on the Rosenbrock function f(x,y)=(1-x)^2+100(y-x^2)^2 using torch autograd. Print the position and function value every 100 steps, and the final minimum."
+  },
+  {
+    "name": "checkpoint_layer_stats",
+    "description": "Write a click CLI that takes a safetensors file path. Load all tensors with safetensors.torch, and for each key print: shape, dtype, mean, std, min, max, L2 norm, and fraction of near-zero values (abs < 1e-6). Sort output by tensor size descending."
+  },
+  {
+    "name": "feedforward_overfit_demo",
+    "description": "Write a click CLI with --hidden-dim, --epochs, --lr, and --n-points. Generate n_points random 2D points with binary labels using torch, build a two-layer feedforward network (Linear->ReLU->Linear->Sigmoid), train with BCE loss, and print train accuracy every 50 epochs."
+  },
+  {
+    "name": "longest_common_subsequence",
+    "description": "Write a click CLI that takes two strings as arguments. Implement the LCS dynamic programming algorithm using a 2D table. Print the length of the LCS, the actual subsequence string, and the filled DP table dimensions."
+  },
+  {
+    "name": "knapsack_solver",
+    "description": "Write a click CLI that takes a JSON file path. The JSON contains {\"capacity\": int, \"items\": [{\"name\": str, \"weight\": int, \"value\": int}]}. Solve the 0/1 knapsack problem with DP, print the maximum value, total weight used, and the list of selected item names."
+  },
+  {
+    "name": "dijkstra_shortest_path",
+    "description": "Write a click CLI that takes a JSON file path, a --source node name, and a --target node name. The JSON contains {\"edges\": [{\"from\": str, \"to\": str, \"weight\": float}]}. Implement Dijkstra's algorithm, print the shortest distance and the full path from source to target."
+  },
+  {
+    "name": "inversion_counter",
+    "description": "Write a click CLI that takes a text file path containing one integer per line. Count the number of inversions (pairs where i < j but a[i] > a[j]) using a merge-sort-based O(n log n) algorithm. Print the total inversion count and the array size."
+  },
+  {
+    "name": "longest_increasing_subsequence",
+    "description": "Write a click CLI that takes a text file path with one integer per line. Find the longest increasing subsequence using the O(n log n) patience-sorting algorithm with bisect. Print the LIS length, the actual subsequence, and the total array length."
+  },
+  {
+    "name": "edit_distance_alignment",
+    "description": "Write a click CLI that takes two strings as arguments. Compute the Levenshtein edit distance using DP, then backtrace to produce the optimal alignment. Print the distance, and the two aligned strings with '-' for gaps on separate lines."
+  },
+  {
+    "name": "coin_change_combinations",
+    "description": "Write a click CLI that takes a --target amount (int) and --coins (comma-separated ints). Find the minimum number of coins needed using DP, reconstruct which coins are used, and print the count and the specific coin combination. Print -1 if impossible."
+  },
+  {
+    "name": "topo_sort_dag",
+    "description": "Write a click CLI that takes a JSON file path with {\"edges\": [{\"from\": str, \"to\": str}]}. Build a directed graph, detect if it has a cycle (error if so), otherwise compute a topological ordering using Kahn's algorithm and print the sorted node list."
+  },
+  {
+    "name": "duplicate_file_finder",
+    "description": "Write a click CLI that takes a directory path. Recursively walk the directory, compute SHA-256 hashes for each file, group files by hash, and print groups of duplicates (files with identical content) along with their sizes. Print total wasted space."
+  },
+  {
+    "name": "json_merger",
+    "description": "Write a click CLI that takes multiple JSON file paths as arguments and a --strategy flag (choices: 'first', 'last', 'error'). Merge all JSON objects. On key conflicts, use the chosen strategy: keep first value, keep last value, or raise an error. Print the merged JSON."
+  },
+  {
+    "name": "regex_file_search",
+    "description": "Write a click CLI that takes a directory path, a --pattern (regex string), and a --context (int, default 2) for lines of context. Recursively search all text files for the pattern, and print matches with filename, line number, and surrounding context lines."
+  },
+  {
+    "name": "json_diff",
+    "description": "Write a click CLI that takes two JSON file paths. Recursively compare both JSON structures and report additions, deletions, and modifications at each key path. Print a structured diff showing the path, change type, and old/new values for each difference."
+  },
+  {
+    "name": "batch_file_renamer",
+    "description": "Write a click CLI that takes a directory path, a --find regex pattern, a --replace string, and a --dry-run flag. For each file in the directory, apply the regex substitution to the filename. In dry-run mode, print what would be renamed. Otherwise, rename the files and print the results."
+  },
+  {
+    "name": "numpy_linear_regression",
+    "description": "Write a click CLI that takes a CSV path and a --target-column name. Load data with numpy, implement ordinary least squares regression using the normal equation (X^T X)^{-1} X^T y. Print the coefficients, R-squared value, and residual standard error."
+  },
+  {
+    "name": "numpy_fft_frequencies",
+    "description": "Write a click CLI that takes a CSV path and a --column name and --sample-rate (float). Load the column with numpy, compute the FFT, find the top-5 dominant frequencies by magnitude, and print each frequency (in Hz) with its magnitude and phase."
+  },
+  {
+    "name": "bloom_filter",
+    "description": "Write a click CLI that takes a text file of words (one per line) and a --size (int for bit array size) and --hashes (int for number of hash functions). Build a Bloom filter from the words, then take a second file via --query, test each query word for membership, and print results with the false positive rate estimate."
+  }
+]
