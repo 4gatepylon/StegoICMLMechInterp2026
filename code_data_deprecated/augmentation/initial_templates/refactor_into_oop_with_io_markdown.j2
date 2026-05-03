@@ -1,0 +1,61 @@
+# Object-Oriented Refactoring Request
+
+## Problem Description
+{{ question }}
+
+## Current Solution
+I have a working solution that solves the problem correctly:
+```python
+{{ answer }}
+```
+
+## Request
+
+I need help refactoring this code to use classes and object-oriented programming.
+
+Some desireable properties I want you to ensure are here:
+- Seperate of file operations, network operations (like sideffects basically) and pure
+    functions/logic.
+- Manage state in classes
+- Modular to allow for extensibility (factory, visitor, etc... patterns where applicable,
+    please DO NOT FORCE THEM: think aloud for what will be the best set of patterns and
+    software strategy/design principles/patterns to use and then implement them.
+- Write your code in python 3
+- Write your code at the end in triple backticks so my parser can extract it.
+- Write your code in one big code-block so I can parse out the entire thing (do not
+    split it in multiple code-blocks).
+- Call your code from if __name__ == "__main__".
+- Related methods that are general-purpose and do not use state go in static classes
+- Use inheritance and composition as neeed (again reason about it as needed).
+- Type-annotate plz
+- There should either be a main function or a class that encapuslats the "main" logic into
+    under 5 lines that is called from the if __name__ == "__main__" block.
+
+Example for format:
+```
+class MyClass:
+    def __init__(self) -> None:
+        self.state: int = 0
+        # do stuff here
+        pass
+    def my_funtion(self) -> None:
+        self.state += 1
+        # do stuff here
+        pass
+class MyClass2(MyClass):
+    # do stuff here
+    pass
+# do more stuff
+
+class FileReader:
+    # do stuff here
+    pass
+if __name__ == "__main__":
+    reader = FileReader()
+    # do stuff...
+    pass
+```
+
+FOLLOW BEST PRACTICES AND PUT ALL YOUR CODE IN THE BIG TRIPLE-TICMARK CODE BLOCK.
+
+Please provide the refactored solution in triple backticks so my parser can extract it.
