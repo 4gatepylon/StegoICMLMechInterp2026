@@ -1,0 +1,26 @@
+{
+  "black-formatter.args": [
+    "--line-length",
+    "150"
+  ],
+  "ruff.args": [
+    "--line-length",
+    "150"
+  ],
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "[json]": {
+    "editor.rulers": [
+      150
+    ]
+  },
+  "[jsonc]": {
+    "editor.rulers": [
+      150
+    ]
+  },
+  "editor.rulers": [
+    150
+  ]
+}

@@ -1,0 +1,8 @@
+# TODO(hadriano) move over to pip-installable with pyproject toml
+line-length = 150
+
+[format]
+quote-style = "double"
+
+[lint]
+select = ["E", "F", "I", "W"]
