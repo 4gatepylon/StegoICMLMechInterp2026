@@ -1,18 +1,22 @@
 """
 Generate steganographic coding problems using Claude via the Agent SDK.
-
-TODO(hadriano) please review this.
 """
 
 import asyncio
+import itertools
 import json
 import math
-import os
 import random
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 import click
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, Template
+from pydantic import BaseModel, Field
+from tqdm import tqdm
+from pydantic_yaml import parse_yaml_raw_as
+
 
 from claude_agent_sdk import (
     query,
@@ -22,13 +26,46 @@ from claude_agent_sdk import (
 )
 
 
-def load_cipher(path):
+class PromptInfo(BaseModel):
+    task_index: int
+    task_name: str
+    task_description: str
+    bitstring: str
+    variant: int
+    try_num: int
+    cipher: str
+    prompt: str
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class PromptResult(BaseModel):
+    task_index: int
+    task_name: str
+    task_description: str
+    bitstring: str
+    variant: int
+    try_num: int
+    cipher: str
+    prompt_length: int
+    timestamp: str
+    response: str | None = None
+    error: str | None = None
+
+
+class GenerationConfig(BaseModel):
+    # TODO(Claude)
+    pass
+
+
+def load_cipher(path: str | Path) -> list[dict[str, Any]]:
     with open(path) as f:
         data = json.load(f)
-    sets = data["sets"]
-    seen = {}
+    sets: list[dict[str, Any]] = data["sets"]
+    seen: dict[str, int] = {}
     for i, s in enumerate(sets):
-        variables = s["variables"]
+        variables: list[str] = s["variables"]
         n = len(variables)
         if n == 0 or (n & (n - 1)) != 0:
             raise click.ClickException(
@@ -43,8 +80,13 @@ def load_cipher(path):
     return sets
 
 
-def render_prompt(template, cipher_sets, task_description, bitstring):
-    sets_with_bits = []
+def render_prompt(
+    template: Template,
+    cipher_sets: list[dict[str, Any]],
+    task_description: str,
+    bitstring: str,
+) -> str:
+    sets_with_bits: list[dict[str, Any]] = []
     for s in cipher_sets:
         bits = int(math.log2(len(s["variables"])))
         index_table = ", ".join(
@@ -58,8 +100,10 @@ def render_prompt(template, cipher_sets, task_description, bitstring):
     )
 
 
-def generate_bitstrings(rng, n_variants, min_bits, max_bits):
-    results = []
+def generate_bitstrings(
+    rng: random.Random, n_variants: int, min_bits: int, max_bits: int
+) -> list[str]:
+    results: list[str] = []
     for _ in range(n_variants):
         length = rng.randint(min_bits, max_bits)
         bits = "".join(str(rng.randint(0, 1)) for _ in range(length))
@@ -67,12 +111,21 @@ def generate_bitstrings(rng, n_variants, min_bits, max_bits):
     return results
 
 
-async def call_claude(prompt, semaphore):
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a code generator. Respond with ONLY raw Python source code. "
+    "Do not use any tools. Do not read or write files. "
+    "Just output the Python program directly as text."
+)
+
+
+async def call_claude(
+    prompt: str, semaphore: asyncio.Semaphore, system_prompt: str
+) -> str:
     async with semaphore:
-        parts = []
+        parts: list[str] = []
         options = ClaudeAgentOptions(
             max_turns=3,
-            system_prompt="You are a code generator. Respond with ONLY raw Python source code. Do not use any tools. Do not read or write files. Just output the Python program directly as text.",
+            system_prompt=system_prompt,
         )
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
@@ -82,31 +135,49 @@ async def call_claude(prompt, semaphore):
         return "".join(parts)
 
 
-async def run_generation(prompts_info, n_procs, output_path):
+async def process_one(
+    idx: int, info: PromptInfo, semaphore: asyncio.Semaphore, system_prompt: str
+) -> PromptResult:
+    click.echo(
+        f"[{idx + 1}/{total}] task={info.task_name} variant={info.variant} try={info.try_num}"
+    )
+    try:
+        response = await call_claude(info.prompt, semaphore, system_prompt)
+        header = f"# EXPECTED: {info.bitstring}\n"
+        response = header + response
+        return PromptResult(
+            **info.model_dump(exclude={"prompt"}),
+            prompt_length=len(info.prompt),
+            response=response,
+        )
+    except Exception as e:
+        click.echo(f"  ERROR: {e}")
+        return PromptResult(
+            **info.model_dump(exclude={"prompt"}),
+            prompt_length=len(info.prompt),
+            error=str(e),
+        )
+
+
+async def run_generation(
+    prompts_info: list[PromptInfo],
+    n_procs: int,
+    output_path: Path,
+    system_prompt: str,
+) -> list[PromptResult]:
     semaphore = asyncio.Semaphore(n_procs)
     total = len(prompts_info)
 
-    async def process_one(idx, info):
-        click.echo(
-            f"[{idx + 1}/{total}] task={info['task_name']} variant={info['variant']} try={info['try_num']}"
-        )
-        try:
-            response = await call_claude(info["prompt"], semaphore)
-            return {**info, "response": response, "error": None}
-        except Exception as e:
-            click.echo(f"  ERROR: {e}")
-            return {**info, "response": None, "error": str(e)}
-
-    tasks = [process_one(i, p) for i, p in enumerate(prompts_info)]
+    tasks = [
+        process_one(i, p, semaphore, system_prompt) for i, p in enumerate(prompts_info)
+    ]
     results = await asyncio.gather(*tasks)
 
     with open(output_path, "w") as f:
         for r in results:
-            out = {k: v for k, v in r.items() if k != "prompt"}
-            out["prompt_length"] = len(r["prompt"])
-            f.write(json.dumps(out) + "\n")
+            f.write(r.model_dump_json() + "\n")
 
-    succeeded = sum(1 for r in results if r["error"] is None)
+    succeeded = sum(1 for r in results if r.error is None)
     click.echo(f"Done: {succeeded}/{total} succeeded, saved to {output_path}")
     return results
 
@@ -146,19 +217,26 @@ async def run_generation(prompts_info, n_procs, output_path):
     type=click.Path(),
     help="Output directory.",
 )
+@click.option(
+    "--system-prompt",
+    default=_DEFAULT_SYSTEM_PROMPT,
+    type=str,
+    help="System prompt for Claude.",
+)
 def main(
-    cipher,
-    tasks_path,
-    template_path,
-    seed,
-    n_tasks,
-    min_bits,
-    max_bits,
-    n_variants,
-    n_tries,
-    n_procs,
-    output,
-):
+    cipher: str,
+    tasks_path: str,
+    template_path: str,
+    seed: int,
+    n_tasks: int,
+    min_bits: int,
+    max_bits: int,
+    n_variants: int,
+    n_tries: int,
+    n_procs: int,
+    output: str,
+    system_prompt: str,
+) -> None:
     cipher_sets = load_cipher(cipher)
 
     with open(tasks_path) as f:
@@ -167,33 +245,43 @@ def main(
     rng = random.Random(seed)
     selected = rng.sample(all_tasks, min(n_tasks, len(all_tasks)))
 
-    env = Environment(
-        loader=FileSystemLoader(os.path.dirname(os.path.abspath(template_path)) or ".")
+    tpath = Path(template_path).resolve()
+    env = Environment(loader=FileSystemLoader(str(tpath.parent)))
+    tmpl = env.get_template(tpath.name)
+
+    task_bitstrings = [
+        (task_idx, task, generate_bitstrings(rng, n_variants, min_bits, max_bits))
+        for task_idx, task in enumerate(selected)
+    ]
+
+    combos = list(
+        itertools.chain.from_iterable(
+            itertools.product([(task_idx, task)], enumerate(bitstrings), range(n_tries))
+            for task_idx, task, bitstrings in task_bitstrings
+        )
     )
-    tmpl = env.get_template(os.path.basename(template_path))
 
-    prompts_info = []
-    for task_idx, task in enumerate(selected):
-        bitstrings = generate_bitstrings(rng, n_variants, min_bits, max_bits)
-        for var_idx, bitstring in enumerate(bitstrings):
-            prompt = render_prompt(tmpl, cipher_sets, task["description"], bitstring)
-            for try_idx in range(n_tries):
-                prompts_info.append(
-                    {
-                        "task_index": task_idx,
-                        "task_name": task["name"],
-                        "task_description": task["description"],
-                        "bitstring": bitstring,
-                        "variant": var_idx,
-                        "try_num": try_idx,
-                        "cipher": cipher,
-                        "prompt": prompt,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
+    prompts_info: list[PromptInfo] = []
+    for (task_idx, task), (var_idx, bitstring), try_idx in tqdm(
+        combos, desc="Building prompts"
+    ):
+        prompt = render_prompt(tmpl, cipher_sets, task["description"], bitstring)
+        prompts_info.append(
+            PromptInfo(
+                task_index=task_idx,
+                task_name=task["name"],
+                task_description=task["description"],
+                bitstring=bitstring,
+                variant=var_idx,
+                try_num=try_idx,
+                cipher=cipher,
+                prompt=prompt,
+            )
+        )
 
-    os.makedirs(output, exist_ok=True)
-    output_path = os.path.join(output, "results.jsonl")
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "results.jsonl"
 
     click.echo(
         f"Tasks: {len(selected)}  Variants: {n_variants}  Tries: {n_tries}  "
@@ -203,7 +291,7 @@ def main(
     click.echo(f"Output: {output_path}")
     click.echo()
 
-    asyncio.run(run_generation(prompts_info, n_procs, output_path))
+    asyncio.run(run_generation(prompts_info, n_procs, output_path, system_prompt))
 
 
 if __name__ == "__main__":

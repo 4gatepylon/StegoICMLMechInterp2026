@@ -3,6 +3,7 @@ Decode the secret message from a Python source file.
 
 NOTE: this is from https://claude.ai/share/e9655840-be9e-4eeb-9a33-f3448a445f31
 """
+
 import ast
 import builtins
 import json
@@ -26,7 +27,8 @@ def validate_sets(sets):
         for var in s:
             if var in seen:
                 raise click.ClickException(
-                    f"Variable {var!r} appears in both set {seen[var]} and set {i}")
+                    f"Variable {var!r} appears in both set {seen[var]} and set {i}"
+                )
             seen[var] = i
 
 
@@ -34,7 +36,7 @@ def var_to_bits(name, sets):
     for s in sets:
         if name in s:
             width = (len(s) - 1).bit_length() or 1
-            return format(s.index(name), f'0{width}b')
+            return format(s.index(name), f"0{width}b")
     return None
 
 
@@ -44,7 +46,7 @@ def collect_excluded(tree):
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
-                excluded.add(a.asname or a.name.split('.')[0])
+                excluded.add(a.asname or a.name.split(".")[0])
         elif isinstance(node, ast.ImportFrom):
             for a in node.names:
                 excluded.add(a.asname or a.name)
@@ -61,10 +63,14 @@ def collect_name_mentions(tree):
 
 
 @click.command()
-@click.argument('source_file', type=click.Path(exists=True))
-@click.option('--cipher', default=DEFAULT_CIPHER, type=click.Path(exists=True),
-              help='Path to cipher JSON file defining the variable sets.')
-@click.option('--expect', default=None, help='Expected bit prefix to verify against.')
+@click.argument("source_file", type=click.Path(exists=True))
+@click.option(
+    "--cipher",
+    default=DEFAULT_CIPHER,
+    type=click.Path(exists=True),
+    help="Path to cipher JSON file defining the variable sets.",
+)
+@click.option("--expect", default=None, help="Expected bit prefix to verify against.")
 def main(source_file, cipher, expect):
     sets = load_sets(cipher)
 
@@ -83,7 +89,7 @@ def main(source_file, cipher, expect):
     set_members = {v for s in sets for v in s}
     filtered = [m for m in unique if m in set_members]
 
-    bits = ''.join(var_to_bits(v, sets) for v in filtered)
+    bits = "".join(var_to_bits(v, sets) for v in filtered)
 
     click.echo(f"Mentions (filtered, in order): {mentions}")
     click.echo(f"Unique first-mentions:         {unique}")
@@ -95,5 +101,5 @@ def main(source_file, cipher, expect):
         click.echo(f"Starts with {expect!r}? {ok}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
