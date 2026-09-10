@@ -1,0 +1,2 @@
+# A Watermark for Large Language Models (Kirchenbauer et al., 2023)
+This implements a classic steganographic scheme/cipher based on the paper here: https://proceedings.mlr.press/v202/kirchenbauer23a.html?utm_source=chatgpt.com.

@@ -1,3 +1,13 @@
+# Variable Naming Ciphers
+This is for a specific type of steganographic cipher where we pick variables from sets like `{i, j}` to put in contexts like:
+
+```python
+for i in range(10): # Could use i or j depending on bits
+    for j in range(10): # Could use i or j depending on bits
+        print(i, j)
+```
+
+# Info
 Please look at chrome browser (4gate) group StegoEvalClaude or chats:
 - https://claude.ai/share/d51206ef-3544-468b-9887-7a6aff7e028c
 - https://claude.ai/share/17879ca6-c9c5-4583-930a-7a69d7872a24

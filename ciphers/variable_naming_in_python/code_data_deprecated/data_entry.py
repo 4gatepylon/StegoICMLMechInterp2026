@@ -44,6 +44,7 @@ def json_loads_safe(s: str) -> Any:
 
 
 def get_live_code_bench_dataset() -> Dataset:
+    # TODO(hadriano) this should not be hard-coded!
     live_code_bench_location = Path("/Users/4gate/Downloads/live_code_bench")
     if not live_code_bench_location.exists():
         live_code_bench_location = Path("/mnt/align4_drive2/adrianoh/live_code_bench/")

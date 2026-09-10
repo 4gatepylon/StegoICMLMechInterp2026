@@ -14,7 +14,7 @@ import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import click
 from jinja2 import Environment, FileSystemLoader, Template
@@ -35,6 +35,14 @@ _DEFAULT_SYSTEM_PROMPT = (
     "Do not use any tools. Do not read or write files. "
     "Just output the Python program directly as text."
 )
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _resolve(p: str | Path) -> Path:
+    """Resolve *p* relative to the repo root (absolute paths pass through)."""
+    path = Path(p)
+    return path if path.is_absolute() else _REPO_ROOT / path
 
 
 class PromptInfo(BaseModel):
@@ -67,9 +75,9 @@ logger = logging.getLogger(__name__)
 
 
 class GenerationConfig(BaseModel):
-    cipher: str = "ciphers/cipher2.json"
-    tasks: str = "task_descriptions.json"
-    template: str = "cipher_description_prompt.jinja2"
+    cipher: str = "ciphers/variable_naming_in_python/ciphers/cipher2.json"
+    tasks: str = "ciphers/variable_naming_in_python/task_descriptions.json"
+    template: str = "ciphers/variable_naming_in_python/cipher_description_prompt.jinja2"
     seed: int = 42
     n_tasks: int = 8
     min_bits: int = 8
@@ -78,6 +86,7 @@ class GenerationConfig(BaseModel):
     n_tries: int = 1
     n_procs: int = 4
     output: str = "generated_outputs"
+    output_relative_to: Literal["cwd", "repo_root"] = "cwd"
     system_prompt: str = _DEFAULT_SYSTEM_PROMPT
 
 
@@ -209,7 +218,7 @@ async def _run_generation(
 
 
 def _load_config(ctx: click.Context, _param: click.Parameter, value: str) -> GenerationConfig:
-    path = Path(value)
+    path = _resolve(value)
     if not path.exists():
         raise click.BadParameter(f"Config file not found: {path}")
     cfg = parse_yaml_raw_as(GenerationConfig, path.read_text())
@@ -244,8 +253,8 @@ def _apply_overrides(cfg: GenerationConfig, ctx: click.Context) -> GenerationCon
 @click.option(
     "-c",
     "--config",
-    default="cipher2_problem_genrator_config.yaml",
-    type=click.Path(dir_okay=False, exists=True),
+    default="ciphers/variable_naming_in_python/cipher2_problem_genrator_config.yaml",
+    type=click.Path(dir_okay=False),
     callback=_load_config,
     is_eager=True,
     expose_value=False,
@@ -308,15 +317,15 @@ def main(
     _setup_logging(Path(log_file) if log_file else None)
     cfg = _apply_overrides(ctx.obj["cfg"], ctx)
 
-    cipher_sets = _load_cipher(cfg.cipher)
+    cipher_sets = _load_cipher(_resolve(cfg.cipher))
 
-    with open(cfg.tasks) as f:
+    with open(_resolve(cfg.tasks)) as f:
         all_tasks = json.load(f)
 
     rng = random.Random(cfg.seed)
     selected = rng.sample(all_tasks, min(cfg.n_tasks, len(all_tasks)))
 
-    tpath = Path(cfg.template).resolve()
+    tpath = _resolve(cfg.template)
     env = Environment(loader=FileSystemLoader(str(tpath.parent)))
     tmpl = env.get_template(tpath.name)
 
@@ -351,7 +360,10 @@ def main(
             )
         )
 
-    output_dir = Path(cfg.output)
+    if cfg.output_relative_to == "repo_root":
+        output_dir = _resolve(cfg.output)
+    else:
+        output_dir = Path(cfg.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "results.jsonl"
 
