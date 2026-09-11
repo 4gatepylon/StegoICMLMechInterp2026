@@ -1,0 +1,102 @@
+"""Public interface for the experiment's shared implementation package."""
+
+from .artifacts import (
+    append_jsonl,
+    save_experiment_config,
+    validate_upstream_config,
+    write_json,
+)
+from .colors import ColorPartition, build_color_partition, tokenize_prefixes
+from .constants import (
+    DATASET_CONFIG,
+    DATASET_NAME,
+    DATASET_REVISION,
+    DEFAULT_ENCODING_OUTPUT,
+    DEFAULT_PREFIX_OUTPUT,
+    EXPERIMENT_DIR,
+    GREEN_SIGNAL,
+    MODEL_NAME,
+    NULL_SIGNAL,
+    PREFIXES,
+    RED_SIGNAL,
+    SIGNAL_NAMES,
+)
+from .data import (
+    CorpusConfig,
+    CorpusSplits,
+    TextExample,
+    add_corpus_arguments,
+    build_corpus_splits,
+    corpus_config_from_args,
+    split_summary,
+)
+from .metrics import average_records, binary_auroc
+from .models import (
+    adapter_base_model_name,
+    clear_device_cache,
+    load_inference_model,
+    load_reference_model,
+    load_tokenizer,
+    load_trainable_lora_model,
+    reference_logits_with_swap,
+    resolve_device,
+    resolve_dtype,
+    set_seed,
+)
+from .objectives import (
+    DistributionMetrics,
+    distribution_metrics,
+    validate_probability_mass,
+)
+from .training import (
+    add_training_arguments,
+    evaluate_teacher_forced,
+    train_distillation,
+)
+
+__all__ = [
+    "DATASET_CONFIG",
+    "DATASET_NAME",
+    "DATASET_REVISION",
+    "DEFAULT_ENCODING_OUTPUT",
+    "DEFAULT_PREFIX_OUTPUT",
+    "EXPERIMENT_DIR",
+    "GREEN_SIGNAL",
+    "MODEL_NAME",
+    "NULL_SIGNAL",
+    "PREFIXES",
+    "RED_SIGNAL",
+    "SIGNAL_NAMES",
+    "ColorPartition",
+    "CorpusConfig",
+    "CorpusSplits",
+    "DistributionMetrics",
+    "TextExample",
+    "adapter_base_model_name",
+    "add_corpus_arguments",
+    "add_training_arguments",
+    "append_jsonl",
+    "average_records",
+    "binary_auroc",
+    "build_color_partition",
+    "build_corpus_splits",
+    "clear_device_cache",
+    "corpus_config_from_args",
+    "distribution_metrics",
+    "evaluate_teacher_forced",
+    "load_inference_model",
+    "load_reference_model",
+    "load_tokenizer",
+    "load_trainable_lora_model",
+    "reference_logits_with_swap",
+    "resolve_device",
+    "resolve_dtype",
+    "save_experiment_config",
+    "set_seed",
+    "split_summary",
+    "tokenize_prefixes",
+    "train_distillation",
+    "validate_probability_mass",
+    "validate_upstream_config",
+    "write_json",
+]

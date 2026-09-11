@@ -73,6 +73,24 @@ whole and the budget is a lower bound, a split can exceed its requested token
 count by at most one accepted sequence. Keep all corpus-related CLI options the
 same across scripts so that boundaries remain identical.
 
+## Code organization
+
+The three executable scripts use a `shared` package split by responsibility:
+
+| Module | Responsibility |
+| --- | --- |
+| `shared/constants.py` | Checkpoints, dataset revision, signals, prefixes, and default paths |
+| `shared/data.py` | FineWeb streaming, token budgets, de-duplication, and disjoint splits |
+| `shared/colors.py` | Seeded red/green vocabulary partition and prefix tokenization |
+| `shared/models.py` | Devices, dtypes, Hugging Face/PEFT loading, and CPU/GPU swapping |
+| `shared/objectives.py` | Biased teacher distributions, forward KL, and expected color mass |
+| `shared/training.py` | Training loop and teacher-forced validation |
+| `shared/metrics.py` | Metric aggregation and dependency-free binary AUROC |
+| `shared/artifacts.py` | JSON/JSONL outputs and cross-stage configuration validation |
+
+`shared/__init__.py` is the package's public interface. The entry-point scripts
+import from that interface rather than reaching into implementation modules.
+
 ## Run the experiment
 
 Install the repository requirements, authenticate with Hugging Face if needed,
@@ -115,6 +133,22 @@ the original model.
 
 Run `python SCRIPT.py --help` for all options. Useful smoke-test overrides are
 small token budgets, fewer generation prompts, and `--max-steps 2`.
+
+## CPU integration test
+
+Run the network-free integration suite from the repository root:
+
+```bash
+python -m unittest discover \
+  -s ciphers/kirchenbauer_et_al/binary_classification_mvp/tests \
+  -p 'test_*.py' \
+  -v
+```
+
+It mocks the FineWeb stream and checks source-disjoint allocation, color
+partitioning, AUROC (including ties), a full CPU distillation/validation/save
+step, and stage-1-to-stage-2 LoRA handoff using a tiny native Qwen3 model. It
+does not download Qwen weights or require an accelerator.
 
 ## Metrics and artifacts
 
