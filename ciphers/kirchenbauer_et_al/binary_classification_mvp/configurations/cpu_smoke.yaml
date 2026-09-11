@@ -59,8 +59,3 @@ generation:
   sampling_seed: 2026
   temperature: 0.7
   max_new_tokens: 8
-
-outputs:
-  prefix: ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/cpu_smoke/prefix_adapter
-  encoding: ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/cpu_smoke/encoding_adapter
-  evaluation: ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/cpu_smoke/generation_evaluation

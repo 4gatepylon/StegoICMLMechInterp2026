@@ -9,8 +9,7 @@ DATASET_REVISION = "9bb295ddab0e05d785b879661af7260fed5140fc"
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = EXPERIMENT_DIR.parents[2]
-DEFAULT_PREFIX_OUTPUT = EXPERIMENT_DIR / "outputs" / "prefix_adapter"
-DEFAULT_ENCODING_OUTPUT = EXPERIMENT_DIR / "outputs" / "encoding_adapter"
+ARTIFACTS_DIR_ENV = "ARTIFACTS_DIR"
 
 NULL_SIGNAL = -1
 RED_SIGNAL = 0
@@ -21,8 +20,24 @@ SIGNAL_NAMES = {
     GREEN_SIGNAL: "green",
 }
 
+
+def compile_prefix(bits: str | None) -> str:
+    """Compile a non-empty binary string, or the original-policy null signal."""
+
+    if bits is not None:
+        if not isinstance(bits, str):
+            raise TypeError(f"bits must be a binary string or None, got {type(bits).__name__}")
+        if not bits or any(bit not in "01" for bit in bits):
+            raise ValueError(f"bits must be a non-empty binary string, got {bits!r}")
+    do_encoding = "no" if bits is None else "yes"
+    encoding_value = "none" if bits is None else bits
+    return f"<encoding> <do_encoding> {do_encoding} </do_encoding> <encoding_value> {encoding_value} </encoding_value> </encoding>\n"
+
+
+# This experiment is one-bit by default; compile_prefix also supports future
+# multi-bit experiments without changing the text protocol.
 PREFIXES = {
-    NULL_SIGNAL: ("<encoding> <do_encoding> no </do_encoding> <encoding_value> none </encoding_value> </encoding>\n"),
-    RED_SIGNAL: ("<encoding> <do_encoding> yes </do_encoding> <encoding_value> 0 </encoding_value> </encoding>\n"),
-    GREEN_SIGNAL: ("<encoding> <do_encoding> yes </do_encoding> <encoding_value> 1 </encoding_value> </encoding>\n"),
+    NULL_SIGNAL: compile_prefix(None),
+    RED_SIGNAL: compile_prefix("0"),
+    GREEN_SIGNAL: compile_prefix("1"),
 }

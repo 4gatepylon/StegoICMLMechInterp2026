@@ -3,14 +3,49 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, is_dataclass
+import os
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 from pydantic import BaseModel
 
-from .constants import PREFIXES, SIGNAL_NAMES
+from .constants import ARTIFACTS_DIR_ENV, PREFIXES, SIGNAL_NAMES
 from .data import CorpusConfig, CorpusSplits, split_summary
+
+
+@dataclass(frozen=True)
+class ArtifactPaths:
+    """The complete, environment-selected output layout."""
+
+    root: Path
+    prefix_adapter: Path
+    encoding_adapter: Path
+    generation_evaluation: Path
+
+
+def artifact_paths() -> ArtifactPaths:
+    """Resolve the required artifact root and fail before doing any work."""
+
+    raw_value = os.environ.get(ARTIFACTS_DIR_ENV)
+    if raw_value is None or not raw_value.strip():
+        raise RuntimeError(
+            f"{ARTIFACTS_DIR_ENV} is required and must name the directory where "
+            "all experiment outputs will be stored. Relative paths are resolved "
+            "from the current working directory."
+        )
+    root = Path(raw_value).expanduser()
+    if not root.is_absolute():
+        root = Path.cwd() / root
+    root = root.resolve()
+    if root.exists() and not root.is_dir():
+        raise NotADirectoryError(f"{ARTIFACTS_DIR_ENV} is not a directory: {root}")
+    return ArtifactPaths(
+        root=root,
+        prefix_adapter=root / "prefix_adapter",
+        encoding_adapter=root / "encoding_adapter",
+        generation_evaluation=root / "generation_evaluation",
+    )
 
 
 def append_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:

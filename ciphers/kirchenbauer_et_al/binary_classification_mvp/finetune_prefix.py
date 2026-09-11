@@ -7,7 +7,6 @@ import argparse
 from pathlib import Path
 
 from shared import (
-    DEFAULT_PREFIX_OUTPUT,
     NULL_SIGNAL,
     add_corpus_arguments,
     add_training_arguments,
@@ -30,7 +29,6 @@ from shared import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="JSON or YAML experiment configuration.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_PREFIX_OUTPUT))
     add_corpus_arguments(parser)
     add_training_arguments(parser)
     return configured_parser(parser, stage="prefix")

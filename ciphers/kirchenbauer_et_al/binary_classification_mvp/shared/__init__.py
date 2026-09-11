@@ -1,7 +1,9 @@
 """Public interface for the experiment's shared implementation package."""
 
 from .artifacts import (
+    ArtifactPaths,
     append_jsonl,
+    artifact_paths,
     save_experiment_config,
     validate_upstream_config,
     write_json,
@@ -15,11 +17,10 @@ from .configuration import (
     model_spec_from_config,
 )
 from .constants import (
+    ARTIFACTS_DIR_ENV,
     DATASET_CONFIG,
     DATASET_NAME,
     DATASET_REVISION,
-    DEFAULT_ENCODING_OUTPUT,
-    DEFAULT_PREFIX_OUTPUT,
     EXPERIMENT_DIR,
     GREEN_SIGNAL,
     MODEL_NAME,
@@ -28,6 +29,7 @@ from .constants import (
     RED_SIGNAL,
     REPO_ROOT,
     SIGNAL_NAMES,
+    compile_prefix,
 )
 from .data import (
     CorpusConfig,
@@ -62,11 +64,10 @@ from .training import (
 )
 
 __all__ = [
+    "ARTIFACTS_DIR_ENV",
     "DATASET_CONFIG",
     "DATASET_NAME",
     "DATASET_REVISION",
-    "DEFAULT_ENCODING_OUTPUT",
-    "DEFAULT_PREFIX_OUTPUT",
     "EXPERIMENT_DIR",
     "GREEN_SIGNAL",
     "MODEL_NAME",
@@ -75,6 +76,7 @@ __all__ = [
     "RED_SIGNAL",
     "REPO_ROOT",
     "SIGNAL_NAMES",
+    "ArtifactPaths",
     "ColorPartition",
     "CorpusConfig",
     "CorpusSplits",
@@ -85,11 +87,13 @@ __all__ = [
     "add_corpus_arguments",
     "add_training_arguments",
     "append_jsonl",
+    "artifact_paths",
     "average_records",
     "binary_auroc",
     "build_color_partition",
     "build_corpus_splits",
     "clear_device_cache",
+    "compile_prefix",
     "corpus_config_from_args",
     "configured_parser",
     "distribution_metrics",

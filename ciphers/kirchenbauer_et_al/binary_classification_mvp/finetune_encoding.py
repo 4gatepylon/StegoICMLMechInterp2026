@@ -7,8 +7,6 @@ import argparse
 from pathlib import Path
 
 from shared import (
-    DEFAULT_ENCODING_OUTPUT,
-    DEFAULT_PREFIX_OUTPUT,
     GREEN_SIGNAL,
     NULL_SIGNAL,
     RED_SIGNAL,
@@ -34,8 +32,10 @@ from shared import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="JSON or YAML experiment configuration.")
-    parser.add_argument("--input-model", default=str(DEFAULT_PREFIX_OUTPUT))
-    parser.add_argument("--output-dir", default=str(DEFAULT_ENCODING_OUTPUT))
+    parser.add_argument(
+        "--input-model",
+        help="LoRA adapter to continue training (defaults to ARTIFACTS_DIR/prefix_adapter).",
+    )
     add_corpus_arguments(parser)
     add_training_arguments(parser)
     return configured_parser(parser, stage="encoding")

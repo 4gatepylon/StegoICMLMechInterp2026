@@ -11,6 +11,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .artifacts import artifact_paths
 from .constants import MODEL_NAME, REPO_ROOT
 
 
@@ -92,14 +93,6 @@ class GenerationSettings(BaseModel):
     max_new_tokens: int = 200
 
 
-class OutputSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prefix: str = "ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/prefix_adapter"
-    encoding: str = "ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/encoding_adapter"
-    evaluation: str = "ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/generation_evaluation"
-
-
 class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -109,7 +102,6 @@ class ExperimentConfig(BaseModel):
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     training: TrainingSettings = Field(default_factory=TrainingSettings)
     generation: GenerationSettings = Field(default_factory=GenerationSettings)
-    outputs: OutputSettings = Field(default_factory=OutputSettings)
 
 
 @dataclass(frozen=True)
@@ -174,6 +166,7 @@ def model_spec_from_config(config: ExperimentConfig) -> ModelSpec:
 def stage_defaults(config: ExperimentConfig, stage: str) -> dict[str, Any]:
     """Flatten nested configuration into existing CLI argument names."""
 
+    paths = artifact_paths()
     defaults = {
         **config.data.model_dump(),
         **config.runtime.model_dump(),
@@ -181,13 +174,13 @@ def stage_defaults(config: ExperimentConfig, stage: str) -> dict[str, Any]:
         "model_spec": model_spec_from_config(config),
     }
     if stage == "prefix":
-        defaults["output_dir"] = _resolve_path(config.outputs.prefix, config)
+        defaults["output_dir"] = str(paths.prefix_adapter)
     elif stage == "encoding":
-        defaults["input_model"] = _resolve_path(config.outputs.prefix, config)
-        defaults["output_dir"] = _resolve_path(config.outputs.encoding, config)
+        defaults["input_model"] = str(paths.prefix_adapter)
+        defaults["output_dir"] = str(paths.encoding_adapter)
     elif stage == "evaluation":
-        defaults["input_model"] = _resolve_path(config.outputs.encoding, config)
-        defaults["output_dir"] = _resolve_path(config.outputs.evaluation, config)
+        defaults["input_model"] = str(paths.encoding_adapter)
+        defaults["output_dir"] = str(paths.generation_evaluation)
         defaults.update(config.generation.model_dump())
     else:
         raise ValueError(f"Unknown stage: {stage}")

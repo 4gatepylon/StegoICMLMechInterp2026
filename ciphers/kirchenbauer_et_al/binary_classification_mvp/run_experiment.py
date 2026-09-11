@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from shared import EXPERIMENT_DIR, load_experiment_config
+from shared import EXPERIMENT_DIR, artifact_paths, load_experiment_config
 
 STAGE_SCRIPTS = {
     "prefix": EXPERIMENT_DIR / "finetune_prefix.py",
@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    paths = artifact_paths()
+    print(f"Artifact root: {paths.root}", flush=True)
     config_path = Path(args.config).expanduser().resolve()
     # Validate the complete configuration before starting an expensive stage.
     load_experiment_config(str(config_path))

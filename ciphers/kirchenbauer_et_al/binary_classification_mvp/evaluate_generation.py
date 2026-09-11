@@ -11,8 +11,6 @@ from typing import Any
 
 import torch
 from shared import (
-    DEFAULT_ENCODING_OUTPUT,
-    EXPERIMENT_DIR,
     GREEN_SIGNAL,
     RED_SIGNAL,
     SIGNAL_NAMES,
@@ -33,14 +31,14 @@ from shared import (
     write_json,
 )
 
-DEFAULT_EVALUATION_OUTPUT = EXPERIMENT_DIR / "outputs" / "generation_evaluation"
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="JSON or YAML experiment configuration.")
-    parser.add_argument("--input-model", default=str(DEFAULT_ENCODING_OUTPUT))
-    parser.add_argument("--output-dir", default=str(DEFAULT_EVALUATION_OUTPUT))
+    parser.add_argument(
+        "--input-model",
+        help="LoRA adapter to evaluate (defaults to ARTIFACTS_DIR/encoding_adapter).",
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--dtype",
