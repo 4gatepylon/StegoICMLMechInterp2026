@@ -12,11 +12,11 @@ from shared import (
     GREEN_SIGNAL,
     NULL_SIGNAL,
     RED_SIGNAL,
-    adapter_base_model_name,
     add_corpus_arguments,
     add_training_arguments,
     build_color_partition,
     build_corpus_splits,
+    configured_parser,
     corpus_config_from_args,
     load_reference_model,
     load_tokenizer,
@@ -33,11 +33,12 @@ from shared import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", help="JSON or YAML experiment configuration.")
     parser.add_argument("--input-model", default=str(DEFAULT_PREFIX_OUTPUT))
     parser.add_argument("--output-dir", default=str(DEFAULT_ENCODING_OUTPUT))
     add_corpus_arguments(parser)
     add_training_arguments(parser)
-    return parser.parse_args()
+    return configured_parser(parser, stage="encoding")
 
 
 def main() -> None:
@@ -46,9 +47,8 @@ def main() -> None:
     device = resolve_device(args.device)
     dtype = resolve_dtype(args.dtype, device)
     output_dir = Path(args.output_dir).expanduser().resolve()
-    base_model_name = adapter_base_model_name(args.input_model)
 
-    tokenizer = load_tokenizer(args.input_model)
+    tokenizer = load_tokenizer(args.model_spec.tokenizer)
     corpus_config = corpus_config_from_args(args)
     validate_upstream_config(
         args.input_model,
@@ -59,18 +59,17 @@ def main() -> None:
     splits = build_corpus_splits(tokenizer, corpus_config)
     print(f"Split summary: {split_summary(splits)}", flush=True)
 
-    print(f"Loading frozen reference model {base_model_name!r} on CPU...", flush=True)
-    reference_model = load_reference_model(base_model_name, dtype)
+    print("Loading frozen reference model on CPU...", flush=True)
+    reference_model = load_reference_model(args.model_spec, dtype)
     print(f"Loading trainable student {args.input_model!r} on CPU...", flush=True)
     student_model, loaded_base_name = load_trainable_lora_model(
-        args.input_model,
+        args.model_spec,
         dtype,
+        adapter_path=args.input_model,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
     )
-    if loaded_base_name != base_model_name:
-        raise RuntimeError(f"Student base model {loaded_base_name!r} does not match reference model {base_model_name!r}")
     partition = build_color_partition(
         tokenizer,
         reference_model.config.vocab_size,
@@ -82,7 +81,7 @@ def main() -> None:
         args=args,
         corpus_config=corpus_config,
         splits=splits,
-        base_model_name=base_model_name,
+        base_model_name=loaded_base_name,
     )
     train_distillation(
         reference_model=reference_model,

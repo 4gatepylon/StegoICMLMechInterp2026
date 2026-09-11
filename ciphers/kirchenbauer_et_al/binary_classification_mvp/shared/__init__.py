@@ -7,6 +7,13 @@ from .artifacts import (
     write_json,
 )
 from .colors import ColorPartition, build_color_partition, tokenize_prefixes
+from .configuration import (
+    ExperimentConfig,
+    ModelSpec,
+    configured_parser,
+    load_experiment_config,
+    model_spec_from_config,
+)
 from .constants import (
     DATASET_CONFIG,
     DATASET_NAME,
@@ -19,6 +26,7 @@ from .constants import (
     NULL_SIGNAL,
     PREFIXES,
     RED_SIGNAL,
+    REPO_ROOT,
     SIGNAL_NAMES,
 )
 from .data import (
@@ -32,7 +40,6 @@ from .data import (
 )
 from .metrics import average_records, binary_auroc
 from .models import (
-    adapter_base_model_name,
     clear_device_cache,
     load_inference_model,
     load_reference_model,
@@ -66,13 +73,15 @@ __all__ = [
     "NULL_SIGNAL",
     "PREFIXES",
     "RED_SIGNAL",
+    "REPO_ROOT",
     "SIGNAL_NAMES",
     "ColorPartition",
     "CorpusConfig",
     "CorpusSplits",
     "DistributionMetrics",
+    "ExperimentConfig",
+    "ModelSpec",
     "TextExample",
-    "adapter_base_model_name",
     "add_corpus_arguments",
     "add_training_arguments",
     "append_jsonl",
@@ -82,12 +91,15 @@ __all__ = [
     "build_corpus_splits",
     "clear_device_cache",
     "corpus_config_from_args",
+    "configured_parser",
     "distribution_metrics",
     "evaluate_teacher_forced",
     "load_inference_model",
+    "load_experiment_config",
     "load_reference_model",
     "load_tokenizer",
     "load_trainable_lora_model",
+    "model_spec_from_config",
     "reference_logits_with_swap",
     "resolve_device",
     "resolve_dtype",

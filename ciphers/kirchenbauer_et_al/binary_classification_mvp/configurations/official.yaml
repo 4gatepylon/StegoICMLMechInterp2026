@@ -1,0 +1,54 @@
+paths_relative_to: repo_root
+
+model:
+  # Hugging Face model/tokenizer IDs. For local artifacts, set the corresponding
+  # *_path field instead; relative paths use paths_relative_to above.
+  weights: Qwen/Qwen3-4B-Base
+  weights_path: null
+  config: null
+  config_path: null
+  tokenizer: Qwen/Qwen3-4B-Base
+  tokenizer_path: null
+  initialization_seed: 42
+
+runtime:
+  device: cuda
+  dtype: bfloat16
+
+data:
+  prefix_train_tokens: 65536
+  encoding_train_tokens: 65536
+  validation_tokens: 16384
+  generation_prompts: 256
+  sequence_length: 256
+  generation_prompt_length: 128
+  min_sequence_length: 32
+  dataset_seed: 42
+  shuffle_buffer_size: 10000
+
+training:
+  delta: 2.0
+  vocab_seed: 42
+  training_seed: 1234
+  epochs: 1
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  logit_chunk_size: 32
+  log_every_steps: 8
+  eval_every_steps: 32
+  max_eval_sequences: 16
+  max_steps: null
+
+generation:
+  sampling_seed: 2026
+  temperature: 0.7
+  max_new_tokens: 200
+
+outputs:
+  prefix: ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/prefix_adapter
+  encoding: ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/encoding_adapter
+  evaluation: ciphers/kirchenbauer_et_al/binary_classification_mvp/outputs/generation_evaluation

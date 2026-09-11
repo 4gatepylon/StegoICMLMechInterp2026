@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable
+
+from pydantic import BaseModel
 
 from .constants import PREFIXES, SIGNAL_NAMES
 from .data import CorpusConfig, CorpusSplits, split_summary
@@ -20,7 +22,21 @@ def append_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
 
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    path.write_text(json.dumps(_jsonable(value), indent=2, sort_keys=True) + "\n")
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, BaseModel):
+        return _jsonable(value.model_dump())
+    if is_dataclass(value) and not isinstance(value, type):
+        return _jsonable(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
 
 
 def save_experiment_config(

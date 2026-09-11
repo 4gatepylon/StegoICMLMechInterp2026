@@ -80,6 +80,7 @@ The three executable scripts use a `shared` package split by responsibility:
 | Module | Responsibility |
 | --- | --- |
 | `shared/constants.py` | Checkpoints, dataset revision, signals, prefixes, and default paths |
+| `shared/configuration.py` | Strict JSON/YAML schema, path resolution, and CLI precedence |
 | `shared/data.py` | FineWeb streaming, token budgets, de-duplication, and disjoint splits |
 | `shared/colors.py` | Seeded red/green vocabulary partition and prefix tokenization |
 | `shared/models.py` | Devices, dtypes, Hugging Face/PEFT loading, and CPU/GPU swapping |
@@ -94,12 +95,60 @@ import from that interface rather than reaching into implementation modules.
 ## Run the experiment
 
 Install the repository requirements, authenticate with Hugging Face if needed,
-and run the scripts from this directory or the repository root.
+and run commands from the repository root.
+
+The official configuration runs all three stages with Qwen3-4B and the full
+token budgets described above:
+
+```bash
+python ciphers/kirchenbauer_et_al/binary_classification_mvp/run_experiment.py \
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
+```
+
+The human-runnable CPU integration configuration runs the same three scripts
+and codepaths with a deterministic one-layer Qwen3 model and tiny budgets:
+
+```bash
+python ciphers/kirchenbauer_et_al/binary_classification_mvp/run_experiment.py \
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/cpu_smoke.yaml
+```
+
+The CPU run covers the real Qwen tokenizer, FineWeb streaming and disjoint
+splits, two-model swapping, LoRA training, KL objectives, checkpoint handoff,
+generation, color counts, and AUROC. It does not download the 4B weights. It
+does access Hugging Face for the tokenizer and FineWeb unless they are cached.
+
+Both YAML files live in `configurations/`. JSON files with the same schema are
+also accepted. Configuration paths passed to `--config` are interpreted
+relative to the shell's current working directory.
+
+Inside a configuration, `paths_relative_to` must be either `repo_root` or
+`cwd`. It controls all entries under `outputs` plus `model.weights_path`,
+`model.config_path`, and `model.tokenizer_path`. Absolute paths pass through
+unchanged. Hugging Face IDs use the separate `model.weights` and
+`model.tokenizer` fields and are never interpreted as filesystem paths.
+
+`model.config` can contain an inline Hugging Face configuration, while
+`model.config_path` can point to a JSON or YAML Hugging Face configuration.
+Configuration is optional when pretrained weights already supply it. Setting
+both `model.weights` and `model.weights_path`, or both an inline configuration
+and `config_path`, is rejected.
+
+The launcher invokes the production entry points in this order:
+
+1. `finetune_prefix.py`
+2. `finetune_encoding.py`
+3. `evaluate_generation.py`
+
+To run only selected stages, use, for example,
+`--stages prefix encoding`. Each stage can also be invoked directly with the
+same configuration.
 
 Stage 1 adapts the model to the unfamiliar null prefix using KL only:
 
 ```bash
-python ciphers/kirchenbauer_et_al/binary_classification_mvp/finetune_prefix.py
+python ciphers/kirchenbauer_et_al/binary_classification_mvp/finetune_prefix.py \
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
 ```
 
 Its default output is `outputs/prefix_adapter` within this directory.
@@ -108,7 +157,8 @@ Stage 2 starts from that adapter and trains all three policies on a new,
 disjoint 64K-token FineWeb split:
 
 ```bash
-python ciphers/kirchenbauer_et_al/binary_classification_mvp/finetune_encoding.py
+python ciphers/kirchenbauer_et_al/binary_classification_mvp/finetune_encoding.py \
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
 ```
 
 Its default input is stage 1's output and its default output is
@@ -124,31 +174,16 @@ Finally, sample 200 tokens at temperature 0.7 for each label on paired,
 held-out FineWeb prompts:
 
 ```bash
-python ciphers/kirchenbauer_et_al/binary_classification_mvp/evaluate_generation.py
+python ciphers/kirchenbauer_et_al/binary_classification_mvp/evaluate_generation.py \
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
 ```
 
 Generation is performed only for the true binary classes. The `none` condition
 is not sampled; it is a teacher-forced control whose relevant metric is KL to
 the original model.
 
-Run `python SCRIPT.py --help` for all options. Useful smoke-test overrides are
-small token budgets, fewer generation prompts, and `--max-steps 2`.
-
-## CPU integration test
-
-Run the network-free integration suite from the repository root:
-
-```bash
-python -m unittest discover \
-  -s ciphers/kirchenbauer_et_al/binary_classification_mvp/tests \
-  -p 'test_*.py' \
-  -v
-```
-
-It mocks the FineWeb stream and checks source-disjoint allocation, color
-partitioning, AUROC (including ties), a full CPU distillation/validation/save
-step, and stage-1-to-stage-2 LoRA handoff using a tiny native Qwen3 model. It
-does not download Qwen weights or require an accelerator.
+Explicit stage CLI flags override JSON/YAML values, which in turn override the
+built-in defaults. Run `python SCRIPT.py --help` for the available overrides.
 
 ## Metrics and artifacts
 

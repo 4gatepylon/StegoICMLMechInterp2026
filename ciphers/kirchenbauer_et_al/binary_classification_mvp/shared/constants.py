@@ -8,6 +8,7 @@ DATASET_CONFIG = "sample-10BT"
 DATASET_REVISION = "9bb295ddab0e05d785b879661af7260fed5140fc"
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = EXPERIMENT_DIR.parents[2]
 DEFAULT_PREFIX_OUTPUT = EXPERIMENT_DIR / "outputs" / "prefix_adapter"
 DEFAULT_ENCODING_OUTPUT = EXPERIMENT_DIR / "outputs" / "encoding_adapter"
 

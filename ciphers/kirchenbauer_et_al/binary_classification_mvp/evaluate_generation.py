@@ -20,6 +20,7 @@ from shared import (
     binary_auroc,
     build_color_partition,
     build_corpus_splits,
+    configured_parser,
     corpus_config_from_args,
     load_inference_model,
     load_tokenizer,
@@ -37,6 +38,7 @@ DEFAULT_EVALUATION_OUTPUT = EXPERIMENT_DIR / "outputs" / "generation_evaluation"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", help="JSON or YAML experiment configuration.")
     parser.add_argument("--input-model", default=str(DEFAULT_ENCODING_OUTPUT))
     parser.add_argument("--output-dir", default=str(DEFAULT_EVALUATION_OUTPUT))
     parser.add_argument("--device", default="auto")
@@ -50,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max-new-tokens", type=int, default=200)
     add_corpus_arguments(parser)
-    return parser.parse_args()
+    return configured_parser(parser, stage="evaluation")
 
 
 def class_summary(records: list[dict[str, Any]], label: int) -> dict[str, float]:
@@ -80,7 +82,7 @@ def main() -> None:
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    tokenizer = load_tokenizer(args.input_model)
+    tokenizer = load_tokenizer(args.model_spec.tokenizer)
     corpus_config = corpus_config_from_args(args)
     validate_upstream_config(
         args.input_model,
@@ -91,7 +93,7 @@ def main() -> None:
     splits = build_corpus_splits(tokenizer, corpus_config)
     print(f"Split summary: {split_summary(splits)}", flush=True)
 
-    model = load_inference_model(args.input_model, dtype)
+    model = load_inference_model(args.model_spec, args.input_model, dtype)
     model.to(device)
     partition = build_color_partition(
         tokenizer,

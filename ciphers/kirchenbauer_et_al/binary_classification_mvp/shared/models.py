@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import torch
+import yaml
+
+from .configuration import ModelSpec
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -55,14 +58,6 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def adapter_base_model_name(path_or_name: str) -> str:
-    adapter_config = Path(path_or_name) / "adapter_config.json"
-    if not adapter_config.is_file():
-        return path_or_name
-    config = json.loads(adapter_config.read_text())
-    return config["base_model_name_or_path"]
-
-
 def load_tokenizer(path_or_name: str) -> Any:
     from transformers import AutoTokenizer
 
@@ -72,14 +67,51 @@ def load_tokenizer(path_or_name: str) -> Any:
     return tokenizer
 
 
-def load_reference_model(model_name: str, dtype: torch.dtype) -> Any:
+def _load_model_config(source: dict[str, Any] | Path | None) -> Any | None:
+    if source is None:
+        return None
+
+    from transformers import AutoConfig
+
+    if isinstance(source, Path):
+        raw = source.read_text()
+        values = json.loads(raw) if source.suffix.lower() == ".json" else yaml.safe_load(raw)
+    else:
+        values = dict(source)
+    model_type = values.pop("model_type", None)
+    if model_type is None:
+        raise ValueError("A model configuration must define model_type")
+    return AutoConfig.for_model(model_type, **values)
+
+
+def _load_base_model(spec: ModelSpec, dtype: torch.dtype) -> Any:
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        dtype=dtype,
-        low_cpu_mem_usage=True,
-    )
+    model_config = _load_model_config(spec.config)
+    if spec.weights is not None:
+        kwargs: dict[str, Any] = {
+            "dtype": dtype,
+            "low_cpu_mem_usage": True,
+        }
+        if model_config is not None:
+            kwargs["config"] = model_config
+        return AutoModelForCausalLM.from_pretrained(spec.weights, **kwargs)
+    if model_config is None:
+        raise ValueError("Random initialization requires a model configuration")
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(spec.initialization_seed)
+        model = AutoModelForCausalLM.from_config(model_config)
+    return model.to(dtype=dtype)
+
+
+def describe_model_spec(spec: ModelSpec) -> str:
+    if spec.weights is not None:
+        return spec.weights
+    return f"random:{spec.initialization_seed}:{spec.config!s}"
+
+
+def load_reference_model(spec: ModelSpec, dtype: torch.dtype) -> Any:
+    model = _load_base_model(spec, dtype)
     model.requires_grad_(False)
     model.eval()
     model.config.use_cache = False
@@ -87,25 +119,19 @@ def load_reference_model(model_name: str, dtype: torch.dtype) -> Any:
 
 
 def load_trainable_lora_model(
-    path_or_name: str,
+    spec: ModelSpec,
     dtype: torch.dtype,
     *,
+    adapter_path: str | None,
     lora_rank: int,
     lora_alpha: int,
     lora_dropout: float,
 ) -> tuple[Any, str]:
     from peft import LoraConfig, PeftModel, get_peft_model
-    from transformers import AutoModelForCausalLM
 
-    adapter_config = Path(path_or_name) / "adapter_config.json"
-    base_name = adapter_base_model_name(path_or_name)
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_name,
-        dtype=dtype,
-        low_cpu_mem_usage=True,
-    )
-    if adapter_config.is_file():
-        model = PeftModel.from_pretrained(base_model, path_or_name, is_trainable=True)
+    base_model = _load_base_model(spec, dtype)
+    if adapter_path is not None:
+        model = PeftModel.from_pretrained(base_model, adapter_path, is_trainable=True)
     else:
         config = LoraConfig(
             r=lora_rank,
@@ -128,27 +154,21 @@ def load_trainable_lora_model(
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
     model.train()
-    return model, base_name
+    return model, describe_model_spec(spec)
 
 
-def load_inference_model(path_or_name: str, dtype: torch.dtype) -> Any:
+def load_inference_model(
+    spec: ModelSpec,
+    adapter_path: str | None,
+    dtype: torch.dtype,
+) -> Any:
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM
 
-    adapter_config = Path(path_or_name) / "adapter_config.json"
-    if adapter_config.is_file():
-        base_model = AutoModelForCausalLM.from_pretrained(
-            adapter_base_model_name(path_or_name),
-            dtype=dtype,
-            low_cpu_mem_usage=True,
-        )
-        model = PeftModel.from_pretrained(base_model, path_or_name)
+    base_model = _load_base_model(spec, dtype)
+    if adapter_path is not None:
+        model = PeftModel.from_pretrained(base_model, adapter_path)
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            path_or_name,
-            dtype=dtype,
-            low_cpu_mem_usage=True,
-        )
+        model = base_model
     model.eval()
     model.config.use_cache = True
     return model

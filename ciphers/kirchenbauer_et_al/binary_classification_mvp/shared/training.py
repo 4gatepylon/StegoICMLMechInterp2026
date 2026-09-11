@@ -148,6 +148,7 @@ def train_distillation(
     prefix_ids = tokenize_prefixes(tokenizer)
     metrics_path = output_dir / "training_metrics.jsonl"
     output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text("")
     step = 0
     stop = False
 
@@ -243,5 +244,5 @@ def train_distillation(
     append_jsonl(metrics_path, final_validation)
     student_model.to("cpu")
     clear_device_cache(device)
-    student_model.save_pretrained(output_dir)
+    student_model.save_pretrained(output_dir, save_embedding_layers=False)
     tokenizer.save_pretrained(output_dir)

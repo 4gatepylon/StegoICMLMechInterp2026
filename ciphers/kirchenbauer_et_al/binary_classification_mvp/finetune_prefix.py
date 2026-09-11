@@ -8,12 +8,12 @@ from pathlib import Path
 
 from shared import (
     DEFAULT_PREFIX_OUTPUT,
-    MODEL_NAME,
     NULL_SIGNAL,
     add_corpus_arguments,
     add_training_arguments,
     build_color_partition,
     build_corpus_splits,
+    configured_parser,
     corpus_config_from_args,
     load_reference_model,
     load_tokenizer,
@@ -29,11 +29,11 @@ from shared import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=MODEL_NAME)
+    parser.add_argument("--config", help="JSON or YAML experiment configuration.")
     parser.add_argument("--output-dir", default=str(DEFAULT_PREFIX_OUTPUT))
     add_corpus_arguments(parser)
     add_training_arguments(parser)
-    return parser.parse_args()
+    return configured_parser(parser, stage="prefix")
 
 
 def main() -> None:
@@ -43,18 +43,19 @@ def main() -> None:
     dtype = resolve_dtype(args.dtype, device)
     output_dir = Path(args.output_dir).expanduser().resolve()
 
-    tokenizer = load_tokenizer(args.model)
+    tokenizer = load_tokenizer(args.model_spec.tokenizer)
     corpus_config = corpus_config_from_args(args)
     print("Loading deterministic, source-disjoint FineWeb splits...", flush=True)
     splits = build_corpus_splits(tokenizer, corpus_config)
     print(f"Split summary: {split_summary(splits)}", flush=True)
 
-    print(f"Loading frozen reference model {args.model!r} on CPU...", flush=True)
-    reference_model = load_reference_model(args.model, dtype)
+    print("Loading frozen reference model on CPU...", flush=True)
+    reference_model = load_reference_model(args.model_spec, dtype)
     print("Loading trainable LoRA student on CPU...", flush=True)
     student_model, base_model_name = load_trainable_lora_model(
-        args.model,
+        args.model_spec,
         dtype,
+        adapter_path=None,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
