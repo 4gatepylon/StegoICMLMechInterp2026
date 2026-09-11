@@ -130,6 +130,57 @@ def _source_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _next_example(
+    iterator: Any,
+    seen_hashes: set[str],
+    tokenizer: Any,
+    *,
+    max_length: int,
+    min_length: int,
+) -> TextExample:
+    while True:
+        row = next(iterator)
+        text = row.get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        digest = _source_hash(text)
+        if digest in seen_hashes:
+            continue
+        token_ids = tokenizer(
+            text,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=max_length,
+        )["input_ids"]
+        if len(token_ids) < min_length:
+            continue
+        seen_hashes.add(digest)
+        return TextExample(tuple(token_ids), digest)
+
+
+def _collect_training_split(
+    iterator: Any,
+    seen_hashes: set[str],
+    tokenizer: Any,
+    config: CorpusConfig,
+    *,
+    token_budget: int,
+) -> tuple[TextExample, ...]:
+    examples: list[TextExample] = []
+    prediction_tokens = 0
+    while prediction_tokens < token_budget:
+        example = _next_example(
+            iterator,
+            seen_hashes,
+            tokenizer,
+            max_length=config.sequence_length,
+            min_length=config.min_sequence_length,
+        )
+        examples.append(example)
+        prediction_tokens += example.prediction_tokens
+    return tuple(examples)
+
+
 def build_corpus_splits(tokenizer: Any, config: CorpusConfig) -> CorpusSplits:
     """Stream FineWeb once and allocate whole documents to disjoint splits.
 
@@ -159,45 +210,34 @@ def build_corpus_splits(tokenizer: Any, config: CorpusConfig) -> CorpusSplits:
     iterator = iter(stream)
     seen_hashes: set[str] = set()
 
-    def next_example(max_length: int, min_length: int) -> TextExample:
-        while True:
-            row = next(iterator)
-            text = row.get("text", "")
-            if not isinstance(text, str) or not text.strip():
-                continue
-            digest = _source_hash(text)
-            if digest in seen_hashes:
-                continue
-            token_ids = tokenizer(
-                text,
-                add_special_tokens=False,
-                truncation=True,
-                max_length=max_length,
-            )["input_ids"]
-            if len(token_ids) < min_length:
-                continue
-            seen_hashes.add(digest)
-            return TextExample(tuple(token_ids), digest)
-
-    def collect_training_split(token_budget: int) -> tuple[TextExample, ...]:
-        examples: list[TextExample] = []
-        prediction_tokens = 0
-        while prediction_tokens < token_budget:
-            example = next_example(
-                config.sequence_length,
-                config.min_sequence_length,
-            )
-            examples.append(example)
-            prediction_tokens += example.prediction_tokens
-        return tuple(examples)
-
-    prefix_train = collect_training_split(config.prefix_train_tokens)
-    encoding_train = collect_training_split(config.encoding_train_tokens)
-    validation = collect_training_split(config.validation_tokens)
+    prefix_train = _collect_training_split(
+        iterator,
+        seen_hashes,
+        tokenizer,
+        config,
+        token_budget=config.prefix_train_tokens,
+    )
+    encoding_train = _collect_training_split(
+        iterator,
+        seen_hashes,
+        tokenizer,
+        config,
+        token_budget=config.encoding_train_tokens,
+    )
+    validation = _collect_training_split(
+        iterator,
+        seen_hashes,
+        tokenizer,
+        config,
+        token_budget=config.validation_tokens,
+    )
     generation = tuple(
-        next_example(
-            config.generation_prompt_length,
-            min(config.min_sequence_length, config.generation_prompt_length),
+        _next_example(
+            iterator,
+            seen_hashes,
+            tokenizer,
+            max_length=config.generation_prompt_length,
+            min_length=min(config.min_sequence_length, config.generation_prompt_length),
         )
         for _ in range(config.generation_prompts)
     )
