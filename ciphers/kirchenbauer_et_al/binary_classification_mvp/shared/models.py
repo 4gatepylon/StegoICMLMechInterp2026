@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import random
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -52,10 +51,11 @@ def clear_device_cache(device: torch.device) -> None:
 
 
 def set_seed(seed: int) -> None:
-    random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    """Seed Python, NumPy, and PyTorch through the Transformers utility."""
+
+    from transformers import set_seed as set_transformers_seed
+
+    set_transformers_seed(seed)
 
 
 def load_tokenizer(path_or_name: str) -> Any:

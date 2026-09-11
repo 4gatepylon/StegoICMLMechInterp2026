@@ -59,3 +59,9 @@ generation:
   sampling_seed: 2026
   temperature: 0.7
   max_new_tokens: 8
+
+wandb:
+  mode: offline
+  project: stego-kirchenbauer-binary-classification
+  run_name: qwen3-tiny-cpu-smoke
+  entity: null

@@ -94,12 +94,16 @@ def distribution_metrics(
         if boosted is not None:
             target_logits[..., boosted] += delta
         target_log_probs = F.log_softmax(target_logits, dim=-1)
-        target_probs = target_log_probs.exp()
         student_log_probs = F.log_softmax(
             student_logits[:, start:end].float(),
             dim=-1,
         )
-        loss_sum = loss_sum + (target_probs * (target_log_probs - student_log_probs)).sum()
+        loss_sum = loss_sum + F.kl_div(
+            student_log_probs,
+            target_log_probs,
+            reduction="sum",
+            log_target=True,
+        )
 
         with torch.no_grad():
             student_probs = student_log_probs.exp()

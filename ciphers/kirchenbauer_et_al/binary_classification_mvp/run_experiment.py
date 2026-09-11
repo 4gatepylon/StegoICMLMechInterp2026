@@ -9,12 +9,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import artifact_paths
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import load_experiment_config
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
     ARTIFACTS_DIR_ENV,
     EXPERIMENT_DIR,
     REPO_ROOT,
-    artifact_paths,
-    load_experiment_config,
 )
 
 STAGE_MODULES = {
@@ -44,6 +44,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only select and log corpus data; do not load or train models.",
     )
+    parser.add_argument(
+        "--wandb-mode",
+        choices=("disabled", "online", "offline"),
+        help="Override the configuration W&B mode for both training stages.",
+    )
+    parser.add_argument("--wandb-project", help="Override the W&B project for both training stages.")
+    parser.add_argument("--wandb-run-name", help="Override the base W&B run name for both training stages.")
+    parser.add_argument("--wandb-entity", help="Override the W&B entity for both training stages.")
     return parser.parse_args()
 
 
@@ -69,6 +77,15 @@ def main() -> None:
         ]
         if args.dry_run:
             command.append("--dry-run")
+        elif stage in {"prefix", "encoding"}:
+            for flag, value in (
+                ("--wandb-mode", args.wandb_mode),
+                ("--wandb-project", args.wandb_project),
+                ("--wandb-run-name", args.wandb_run_name),
+                ("--wandb-entity", args.wandb_entity),
+            ):
+                if value is not None:
+                    command.extend((flag, value))
         print(f"Running {stage}: {' '.join(command)}", flush=True)
         subprocess.run(command, check=True, cwd=REPO_ROOT, env=child_environment)
 

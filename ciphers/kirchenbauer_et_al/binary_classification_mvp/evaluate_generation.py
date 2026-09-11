@@ -10,26 +10,34 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from sklearn.metrics import roc_auc_score
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import (
+    validate_upstream_config,
+    write_json,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import (
+    build_color_partition,
+    tokenize_prefixes,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import configured_parser
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
     GREEN_SIGNAL,
     RED_SIGNAL,
     SIGNAL_NAMES,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import (
     add_corpus_arguments,
-    binary_auroc,
-    build_color_partition,
     build_corpus_splits,
-    configured_parser,
     corpus_config_from_args,
+    split_summary,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
     load_inference_model,
     load_tokenizer,
     resolve_device,
     resolve_dtype,
     set_seed,
-    split_summary,
-    tokenize_prefixes,
-    validate_upstream_config,
-    write_json,
 )
 
 
@@ -156,7 +164,7 @@ def main() -> None:
     scores = [float(record["green_fraction"]) for record in records]
     summary = {
         "input_model": args.input_model,
-        "auroc": binary_auroc(labels, scores),
+        "auroc": float(roc_auc_score(labels, scores)),
         "classifier_score": "green_count / (red_count + green_count)",
         "positive_class": "green (label 1)",
         "red": class_summary(records, RED_SIGNAL),

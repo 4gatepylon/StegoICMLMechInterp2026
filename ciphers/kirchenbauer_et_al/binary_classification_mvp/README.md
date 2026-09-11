@@ -99,7 +99,7 @@ The three executable scripts use a `shared` package split by responsibility:
 | `shared/models.py` | Devices, dtypes, Hugging Face/PEFT loading, and adapter-disabled teacher passes |
 | `shared/objectives.py` | Biased teacher distributions, forward KL, and expected color mass |
 | `shared/training.py` | Training loop and teacher-forced validation |
-| `shared/metrics.py` | Metric aggregation and dependency-free binary AUROC |
+| `shared/tracking.py` | Optional W&B runs and per-policy metric curves |
 | `shared/artifacts.py` | JSON/JSONL outputs and cross-stage configuration validation |
 
 `shared/__init__.py` is the package's public interface. The entry-point scripts
@@ -107,8 +107,14 @@ import from that interface rather than reaching into implementation modules.
 
 ## Run the experiment
 
-Install the repository requirements, authenticate with Hugging Face if needed,
-and run commands from the repository root.
+Install the repository and experiment requirements, authenticate with Hugging
+Face if needed, log in to W&B, and run commands from the repository root:
+
+```bash
+pip install -r requirements.txt
+pip install -r ciphers/kirchenbauer_et_al/binary_classification_mvp/requirements.txt
+wandb login
+```
 
 The official configuration runs all three stages with Qwen3-4B and the full
 token budgets described above:
@@ -116,7 +122,10 @@ token budgets described above:
 ```bash
 ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/official \
   python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.run_experiment \
-  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml \
+  --wandb-mode online \
+  --wandb-project stego-kirchenbauer-binary-classification \
+  --wandb-run-name qwen3-4b-base-fineweb-64k
 ```
 
 The human-runnable CPU integration configuration runs the same three scripts
@@ -125,7 +134,10 @@ and codepaths with a deterministic one-layer Qwen3 model and tiny budgets:
 ```bash
 ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/cpu_smoke \
   python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.run_experiment \
-  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/cpu_smoke.yaml
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/cpu_smoke.yaml \
+  --wandb-mode offline \
+  --wandb-project stego-kirchenbauer-binary-classification \
+  --wandb-run-name qwen3-tiny-cpu-smoke
 ```
 
 The CPU run covers the real Qwen tokenizer, FineWeb streaming and disjoint
@@ -133,6 +145,22 @@ splits, adapter-disabled teacher passes, LoRA training, KL objectives,
 checkpoint handoff, generation, color counts, and AUROC. It does not download
 the 4B weights. It does access Hugging Face for the tokenizer and FineWeb unless
 they are cached.
+
+The official configuration defaults to online W&B logging. It creates two runs
+in the `stego-kirchenbauer-binary-classification` project, grouped under the
+base run name:
+
+- `qwen3-4b-base-fineweb-64k-stage1-prefix`
+- `qwen3-4b-base-fineweb-64k-stage2-encoding`
+
+Stage 1 logs `loss/train/none` and `loss/validation/none`. Stage 2 logs separate
+`loss/{train,validation}/{red,green,none}` curves. Both runs also log expected
+red, green, and uncolored counts and rates under `policy/...`. The CPU config
+uses the same integration in offline mode under the base name
+`qwen3-tiny-cpu-smoke`; its local W&B files remain inside `ARTIFACTS_DIR`.
+Set `wandb.entity` in YAML or pass `--wandb-entity` when the project belongs to
+a specific team. Use `--wandb-mode disabled` to keep a training run fully
+local. Dry runs never initialize W&B, even when the configuration says online.
 
 `ARTIFACTS_DIR` is mandatory for the launcher and all three stage scripts. An
 unset or empty value fails immediately. It is the only output-location setting:
@@ -261,10 +289,10 @@ green_count / (red_count + green_count)
 ```
 
 as the classifier score, with label `1` as the positive class. `summary.json`
-reports binary AUROC and per-class mean counts. Since this experiment uses a
-single fixed partition rather than context-dependent random lists, the paper's
-analytic null z-test does not apply; paired held-out AUROC is the primary
-detection metric.
+reports `sklearn.metrics.roc_auc_score` and per-class mean counts. Since this
+experiment uses a single fixed partition rather than context-dependent random
+lists, the paper's analytic null z-test does not apply; paired held-out AUROC is
+the primary detection metric.
 
 Each adapter directory also contains `experiment_config.json`, the tokenizer,
 and PEFT adapter files. The example in-repository `artifacts/` directory is

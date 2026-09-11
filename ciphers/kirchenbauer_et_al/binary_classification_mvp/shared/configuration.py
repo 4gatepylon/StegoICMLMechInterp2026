@@ -93,6 +93,21 @@ class GenerationSettings(BaseModel):
     max_new_tokens: int = 200
 
 
+class WandbSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["disabled", "online", "offline"] = "disabled"
+    project: str = "stego-kirchenbauer-binary-classification"
+    run_name: str = "qwen3-4b-base-fineweb-64k"
+    entity: str | None = None
+
+    @model_validator(mode="after")
+    def validate_names(self) -> WandbSettings:
+        if self.mode != "disabled" and (not self.project.strip() or not self.run_name.strip()):
+            raise ValueError("wandb.project and wandb.run_name must be non-empty when W&B is enabled")
+        return self
+
+
 class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,6 +117,7 @@ class ExperimentConfig(BaseModel):
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     training: TrainingSettings = Field(default_factory=TrainingSettings)
     generation: GenerationSettings = Field(default_factory=GenerationSettings)
+    wandb: WandbSettings = Field(default_factory=WandbSettings)
 
 
 @dataclass(frozen=True)
@@ -171,6 +187,7 @@ def stage_defaults(config: ExperimentConfig, stage: str) -> dict[str, Any]:
         **config.data.model_dump(),
         **config.runtime.model_dump(),
         **config.training.model_dump(),
+        **{f"wandb_{key}": value for key, value in config.wandb.model_dump().items()},
         "model_spec": model_spec_from_config(config),
     }
     if stage == "prefix":
