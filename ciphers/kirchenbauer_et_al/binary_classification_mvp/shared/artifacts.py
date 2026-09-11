@@ -10,8 +10,16 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel
 
-from .constants import ARTIFACTS_DIR_ENV, PREFIXES, SIGNAL_NAMES
-from .data import CorpusConfig, CorpusSplits, split_summary
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
+    ARTIFACTS_DIR_ENV,
+    PREFIXES,
+    SIGNAL_NAMES,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import (
+    CorpusConfig,
+    CorpusSplits,
+    split_summary,
+)
 
 
 @dataclass(frozen=True)

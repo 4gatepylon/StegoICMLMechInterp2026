@@ -8,13 +8,22 @@ from typing import Any, Sequence
 
 import torch
 
-from .artifacts import append_jsonl
-from .colors import ColorPartition, tokenize_prefixes
-from .constants import SIGNAL_NAMES
-from .data import TextExample
-from .metrics import average_records
-from .models import clear_device_cache, reference_logits_with_swap
-from .objectives import distribution_metrics, validate_probability_mass
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import append_jsonl
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import (
+    ColorPartition,
+    tokenize_prefixes,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import SIGNAL_NAMES
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import TextExample
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.metrics import average_records
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
+    clear_device_cache,
+    reference_logits_with_swap,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.objectives import (
+    distribution_metrics,
+    validate_probability_mass,
+)
 
 
 def add_training_arguments(parser: Any) -> None:

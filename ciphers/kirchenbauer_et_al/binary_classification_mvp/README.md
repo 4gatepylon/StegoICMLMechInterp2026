@@ -108,7 +108,7 @@ token budgets described above:
 
 ```bash
 ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/official \
-  python ciphers/kirchenbauer_et_al/binary_classification_mvp/run_experiment.py \
+  python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.run_experiment \
   --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
 ```
 
@@ -117,7 +117,7 @@ and codepaths with a deterministic one-layer Qwen3 model and tiny budgets:
 
 ```bash
 ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/cpu_smoke \
-  python ciphers/kirchenbauer_et_al/binary_classification_mvp/run_experiment.py \
+  python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.run_experiment \
   --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/cpu_smoke.yaml
 ```
 
@@ -134,7 +134,8 @@ the code always writes the following layout beneath it:
 $ARTIFACTS_DIR/
 ├── prefix_adapter/
 ├── encoding_adapter/
-└── generation_evaluation/
+├── generation_evaluation/
+└── dry_run.json  # only when --dry-run is used
 ```
 
 An absolute `ARTIFACTS_DIR` is used directly. A relative value is resolved
@@ -168,11 +169,30 @@ To run only selected stages, use, for example,
 `--stages prefix encoding`. Each stage can also be invoked directly with the
 same configuration.
 
+To inspect the exact data selection without loading a model or training, add
+`--dry-run` to the launcher:
+
+```bash
+ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/dry_run \
+  python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.run_experiment \
+  --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml \
+  --dry-run
+```
+
+This runs the production tokenizer and FineWeb split-building path once, then
+writes `$ARTIFACTS_DIR/dry_run.json`. The report contains every selected
+example as token IDs and decoded text, source hashes, per-example lengths,
+per-split minimum/maximum/mean/median lengths, requested corpus settings, and
+overall document/token counts. It also reports tokenized prefix lengths and the
+effective workload after expanding each source example across its policies. No
+reference, student, or inference model is loaded, and no optimizer step or
+generation occurs.
+
 Stage 1 adapts the model to the unfamiliar null prefix using KL only:
 
 ```bash
 ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/official \
-  python ciphers/kirchenbauer_et_al/binary_classification_mvp/finetune_prefix.py \
+  python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.finetune_prefix \
   --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
 ```
 
@@ -183,7 +203,7 @@ disjoint 64K-token FineWeb split:
 
 ```bash
 ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/official \
-  python ciphers/kirchenbauer_et_al/binary_classification_mvp/finetune_encoding.py \
+  python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.finetune_encoding \
   --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
 ```
 
@@ -193,7 +213,7 @@ as the input, but it cannot change the output location:
 
 ```bash
 ARTIFACTS_DIR=/path/to/new/run \
-  python ciphers/kirchenbauer_et_al/binary_classification_mvp/finetune_encoding.py \
+  python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.finetune_encoding \
   --input-model /path/to/existing/prefix_adapter
 ```
 
@@ -202,7 +222,7 @@ held-out FineWeb prompts:
 
 ```bash
 ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/official \
-  python ciphers/kirchenbauer_et_al/binary_classification_mvp/evaluate_generation.py \
+  python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.evaluate_generation \
   --config ciphers/kirchenbauer_et_al/binary_classification_mvp/configurations/official.yaml
 ```
 
@@ -212,8 +232,8 @@ the original model.
 
 Explicit stage CLI flags override JSON/YAML values, which in turn override the
 built-in defaults. Artifact outputs are the exception: they are controlled only
-by the required `ARTIFACTS_DIR`. Run `python SCRIPT.py --help` for the available
-overrides.
+by the required `ARTIFACTS_DIR`. Run `python -m MODULE --help` from the
+repository root for the available overrides.
 
 ## Metrics and artifacts
 

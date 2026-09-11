@@ -9,8 +9,12 @@ from typing import Any, Sequence
 import torch
 import torch.nn.functional as F
 
-from .colors import ColorPartition
-from .constants import GREEN_SIGNAL, RED_SIGNAL, SIGNAL_NAMES
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import ColorPartition
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
+    GREEN_SIGNAL,
+    RED_SIGNAL,
+    SIGNAL_NAMES,
+)
 
 
 @dataclass

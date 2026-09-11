@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from shared import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared import (
     GREEN_SIGNAL,
     NULL_SIGNAL,
     RED_SIGNAL,

@@ -6,7 +6,7 @@ import random
 from dataclasses import dataclass
 from typing import Any
 
-from .constants import PREFIXES
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import PREFIXES
 
 
 @dataclass(frozen=True)

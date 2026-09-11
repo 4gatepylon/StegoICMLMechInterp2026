@@ -4,16 +4,23 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-from shared import EXPERIMENT_DIR, artifact_paths, load_experiment_config
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared import (
+    ARTIFACTS_DIR_ENV,
+    EXPERIMENT_DIR,
+    REPO_ROOT,
+    artifact_paths,
+    load_experiment_config,
+)
 
-STAGE_SCRIPTS = {
-    "prefix": EXPERIMENT_DIR / "finetune_prefix.py",
-    "encoding": EXPERIMENT_DIR / "finetune_encoding.py",
-    "evaluation": EXPERIMENT_DIR / "evaluate_generation.py",
+STAGE_MODULES = {
+    "prefix": "ciphers.kirchenbauer_et_al.binary_classification_mvp.finetune_prefix",
+    "encoding": "ciphers.kirchenbauer_et_al.binary_classification_mvp.finetune_encoding",
+    "evaluation": "ciphers.kirchenbauer_et_al.binary_classification_mvp.evaluate_generation",
 }
 DEFAULT_CONFIG = EXPERIMENT_DIR / "configurations" / "official.yaml"
 
@@ -28,9 +35,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stages",
         nargs="+",
-        choices=tuple(STAGE_SCRIPTS),
-        default=tuple(STAGE_SCRIPTS),
+        choices=tuple(STAGE_MODULES),
+        default=tuple(STAGE_MODULES),
         help="Stages to run in order; defaults to the complete pipeline.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only select and log corpus data; do not load or train models.",
     )
     return parser.parse_args()
 
@@ -42,15 +54,21 @@ def main() -> None:
     config_path = Path(args.config).expanduser().resolve()
     # Validate the complete configuration before starting an expensive stage.
     load_experiment_config(str(config_path))
-    for stage in args.stages:
+    stages = ("prefix",) if args.dry_run else args.stages
+    child_environment = os.environ.copy()
+    child_environment[ARTIFACTS_DIR_ENV] = str(paths.root)
+    for stage in stages:
         command = [
             sys.executable,
-            str(STAGE_SCRIPTS[stage]),
+            "-m",
+            STAGE_MODULES[stage],
             "--config",
             str(config_path),
         ]
+        if args.dry_run:
+            command.append("--dry-run")
         print(f"Running {stage}: {' '.join(command)}", flush=True)
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, cwd=REPO_ROOT, env=child_environment)
 
 
 if __name__ == "__main__":

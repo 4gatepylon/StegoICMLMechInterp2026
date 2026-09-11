@@ -1,6 +1,6 @@
 """Public interface for the experiment's shared implementation package."""
 
-from .artifacts import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import (
     ArtifactPaths,
     append_jsonl,
     artifact_paths,
@@ -8,15 +8,19 @@ from .artifacts import (
     validate_upstream_config,
     write_json,
 )
-from .colors import ColorPartition, build_color_partition, tokenize_prefixes
-from .configuration import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import (
+    ColorPartition,
+    build_color_partition,
+    tokenize_prefixes,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import (
     ExperimentConfig,
     ModelSpec,
     configured_parser,
     load_experiment_config,
     model_spec_from_config,
 )
-from .constants import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
     ARTIFACTS_DIR_ENV,
     DATASET_CONFIG,
     DATASET_NAME,
@@ -31,17 +35,21 @@ from .constants import (
     SIGNAL_NAMES,
     compile_prefix,
 )
-from .data import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import (
     CorpusConfig,
     CorpusSplits,
     TextExample,
     add_corpus_arguments,
     build_corpus_splits,
     corpus_config_from_args,
+    corpus_data_report,
     split_summary,
 )
-from .metrics import average_records, binary_auroc
-from .models import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.metrics import (
+    average_records,
+    binary_auroc,
+)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
     clear_device_cache,
     load_inference_model,
     load_reference_model,
@@ -52,12 +60,12 @@ from .models import (
     resolve_dtype,
     set_seed,
 )
-from .objectives import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.objectives import (
     DistributionMetrics,
     distribution_metrics,
     validate_probability_mass,
 )
-from .training import (
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.training import (
     add_training_arguments,
     evaluate_teacher_forced,
     train_distillation,
@@ -95,6 +103,7 @@ __all__ = [
     "clear_device_cache",
     "compile_prefix",
     "corpus_config_from_args",
+    "corpus_data_report",
     "configured_parser",
     "distribution_metrics",
     "evaluate_teacher_forced",

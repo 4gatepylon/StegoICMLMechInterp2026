@@ -10,7 +10,7 @@ from typing import Any, Sequence
 import torch
 import yaml
 
-from .configuration import ModelSpec
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import ModelSpec
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -59,6 +59,8 @@ def set_seed(seed: int) -> None:
 
 
 def load_tokenizer(path_or_name: str) -> Any:
+    """Load the tokenizer used by every training, dry-run, and evaluation entry point."""
+
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(path_or_name)
@@ -68,6 +70,8 @@ def load_tokenizer(path_or_name: str) -> Any:
 
 
 def _load_model_config(source: dict[str, Any] | Path | None) -> Any | None:
+    """Load optional architecture settings used by every base-model loader."""
+
     if source is None:
         return None
 
@@ -85,6 +89,8 @@ def _load_model_config(source: dict[str, Any] | Path | None) -> Any | None:
 
 
 def _load_base_model(spec: ModelSpec, dtype: torch.dtype) -> Any:
+    """Instantiate the base used to construct teacher, student, and inference models."""
+
     from transformers import AutoModelForCausalLM
 
     model_config = _load_model_config(spec.config)
@@ -111,6 +117,8 @@ def describe_model_spec(spec: ModelSpec) -> str:
 
 
 def load_reference_model(spec: ModelSpec, dtype: torch.dtype) -> Any:
+    """Load the frozen teacher used by both finetuning stages."""
+
     model = _load_base_model(spec, dtype)
     model.requires_grad_(False)
     model.eval()
@@ -127,6 +135,8 @@ def load_trainable_lora_model(
     lora_alpha: int,
     lora_dropout: float,
 ) -> tuple[Any, str]:
+    """Load the LoRA student trained by both finetuning stages."""
+
     from peft import LoraConfig, PeftModel, get_peft_model
 
     base_model = _load_base_model(spec, dtype)
@@ -162,6 +172,8 @@ def load_inference_model(
     adapter_path: str | None,
     dtype: torch.dtype,
 ) -> Any:
+    """Load the stage-2 adapter used by held-out generation evaluation."""
+
     from peft import PeftModel
 
     base_model = _load_base_model(spec, dtype)

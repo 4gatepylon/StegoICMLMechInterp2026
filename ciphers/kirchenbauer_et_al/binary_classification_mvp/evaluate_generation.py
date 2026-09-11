@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from shared import (
+
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared import (
     GREEN_SIGNAL,
     RED_SIGNAL,
     SIGNAL_NAMES,

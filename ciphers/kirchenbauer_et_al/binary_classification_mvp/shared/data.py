@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import statistics
 from dataclasses import dataclass
 from typing import Any
 
 from datasets import load_dataset
 
-from .constants import DATASET_CONFIG, DATASET_NAME, DATASET_REVISION
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
+    DATASET_CONFIG,
+    DATASET_NAME,
+    DATASET_REVISION,
+)
 
 
 @dataclass(frozen=True)
@@ -214,4 +219,71 @@ def split_summary(splits: CorpusSplits) -> dict[str, dict[str, int]]:
             "validation": splits.validation,
             "generation": splits.generation,
         }.items()
+    }
+
+
+def corpus_data_report(tokenizer: Any, splits: CorpusSplits) -> dict[str, Any]:
+    """Return the selected data and detailed size statistics for a dry run."""
+
+    split_reports: dict[str, Any] = {}
+    total_documents = 0
+    total_tokens = 0
+    total_prediction_tokens = 0
+    for name, examples in {
+        "prefix_train": splits.prefix_train,
+        "encoding_train": splits.encoding_train,
+        "validation": splits.validation,
+        "generation": splits.generation,
+    }.items():
+        lengths = [len(example.input_ids) for example in examples]
+        prediction_lengths = [example.prediction_tokens for example in examples]
+        documents = len(examples)
+        tokens = sum(lengths)
+        prediction_tokens = sum(prediction_lengths)
+        total_documents += documents
+        total_tokens += tokens
+        total_prediction_tokens += prediction_tokens
+        split_reports[name] = {
+            "statistics": {
+                "documents": documents,
+                "unique_source_documents": len({example.source_hash for example in examples}),
+                "tokens": tokens,
+                "prediction_tokens": prediction_tokens,
+                "sequence_length": {
+                    "minimum": min(lengths),
+                    "maximum": max(lengths),
+                    "mean": statistics.fmean(lengths),
+                    "median": statistics.median(lengths),
+                },
+            },
+            "examples": [
+                {
+                    "source_hash": example.source_hash,
+                    "token_count": len(example.input_ids),
+                    "prediction_token_count": example.prediction_tokens,
+                    "input_ids": list(example.input_ids),
+                    "decoded_text": tokenizer.decode(example.input_ids),
+                }
+                for example in examples
+            ],
+        }
+    return {
+        "totals": {
+            "documents": total_documents,
+            "unique_source_documents": len(
+                {
+                    example.source_hash
+                    for examples in (
+                        splits.prefix_train,
+                        splits.encoding_train,
+                        splits.validation,
+                        splits.generation,
+                    )
+                    for example in examples
+                }
+            ),
+            "tokens": total_tokens,
+            "prediction_tokens": total_prediction_tokens,
+        },
+        "splits": split_reports,
     }

@@ -11,8 +11,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .artifacts import artifact_paths
-from .constants import MODEL_NAME, REPO_ROOT
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import artifact_paths
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import MODEL_NAME, REPO_ROOT
 
 
 class ModelSettings(BaseModel):
