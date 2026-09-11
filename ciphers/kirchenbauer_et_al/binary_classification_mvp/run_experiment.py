@@ -57,9 +57,11 @@ def main() -> None:
     stages = ("prefix",) if args.dry_run else args.stages
     child_environment = os.environ.copy()
     child_environment[ARTIFACTS_DIR_ENV] = str(paths.root)
+    optimization_flags = ["-" + "O" * sys.flags.optimize] if sys.flags.optimize else []
     for stage in stages:
         command = [
             sys.executable,
+            *optimization_flags,
             "-m",
             STAGE_MODULES[stage],
             "--config",

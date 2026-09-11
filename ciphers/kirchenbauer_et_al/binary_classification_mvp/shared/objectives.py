@@ -109,8 +109,14 @@ def distribution_metrics(
             expected_green += float(green_mass.cpu())
             expected_uncolored += float((student_probs.sum() - red_mass - green_mass).cpu())
 
+    loss = loss_sum / token_count
+    assert torch.isfinite(loss), f"Non-finite KL for signal {SIGNAL_NAMES[signal]}"
+    assert float(loss.detach()) != 0.0, (
+        f"KL is exactly zero for signal {SIGNAL_NAMES[signal]}; check that the teacher pass disables LoRA "
+        "and the student pass enables it with the requested prefix"
+    )
     return DistributionMetrics(
-        loss=loss_sum / token_count,
+        loss=loss,
         expected_red=expected_red,
         expected_green=expected_green,
         expected_uncolored=expected_uncolored,

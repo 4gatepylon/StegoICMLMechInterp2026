@@ -1,4 +1,4 @@
-"""Device handling, Hugging Face model loading, LoRA, and CPU swapping."""
+"""Device handling, Hugging Face model loading, and LoRA teacher passes."""
 
 from __future__ import annotations
 
@@ -116,14 +116,22 @@ def describe_model_spec(spec: ModelSpec) -> str:
     return f"random:{spec.initialization_seed}:{spec.config!s}"
 
 
-def load_reference_model(spec: ModelSpec, dtype: torch.dtype) -> Any:
-    """Load the frozen teacher used by both finetuning stages."""
+def _debug_logits(model: Any) -> torch.Tensor:
+    """Run a tiny deterministic forward used only by debug assertions."""
 
-    model = _load_base_model(spec, dtype)
-    model.requires_grad_(False)
+    was_training = model.training
     model.eval()
-    model.config.use_cache = False
-    return model
+    vocab_size = model.config.vocab_size
+    bos_token_id = model.config.bos_token_id
+    first_token = bos_token_id if bos_token_id is not None else 0
+    input_ids = torch.tensor([[first_token, 0, 1, 2]], dtype=torch.long)
+    if max(input_ids.flatten()) >= vocab_size:
+        input_ids %= vocab_size
+    with torch.inference_mode():
+        logits = model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids)).logits.detach().cpu()
+    if was_training:
+        model.train()
+    return logits
 
 
 def load_trainable_lora_model(
@@ -140,6 +148,8 @@ def load_trainable_lora_model(
     from peft import LoraConfig, PeftModel, get_peft_model
 
     base_model = _load_base_model(spec, dtype)
+    if __debug__:
+        expected_base_logits = _debug_logits(base_model)
     if adapter_path is not None:
         model = PeftModel.from_pretrained(base_model, adapter_path, is_trainable=True)
     else:
@@ -160,6 +170,13 @@ def load_trainable_lora_model(
             ],
         )
         model = get_peft_model(base_model, config)
+    if __debug__:
+        with model.disable_adapter():
+            disabled_adapter_logits = _debug_logits(model)
+        assert torch.equal(expected_base_logits, disabled_adapter_logits), (
+            "Disabling LoRA did not reproduce the pristine base-model logits; "
+            f"maximum difference={float((expected_base_logits - disabled_adapter_logits).abs().max())}"
+        )
     model.config.use_cache = False
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
@@ -186,30 +203,31 @@ def load_inference_model(
     return model
 
 
-def reference_logits_with_swap(
-    reference_model: Any,
-    student_model: Any,
+def reference_logits_with_disabled_adapter(
+    model: Any,
     input_ids: Sequence[int],
     device: torch.device,
 ) -> torch.Tensor:
-    """Compute raw-text teacher logits while only one model occupies the device."""
+    """Compute original-policy teacher logits using the training model with LoRA disabled."""
 
-    student_model.to("cpu")
-    clear_device_cache(device)
-    reference_model.to(device)
+    assert model.get_model_status().enabled is True, "LoRA adapters must be enabled before the teacher pass"
+    was_training = model.training
+    model.eval()
     ids = torch.tensor([input_ids], dtype=torch.long, device=device)
     attention_mask = torch.ones_like(ids)
-    with torch.inference_mode():
-        logits = (
-            reference_model(
-                input_ids=ids,
-                attention_mask=attention_mask,
+    try:
+        with model.disable_adapter(), torch.inference_mode():
+            assert model.get_model_status().enabled is False, "LoRA adapters remained active during the teacher pass"
+            logits = (
+                model(
+                    input_ids=ids,
+                    attention_mask=attention_mask,
+                )
+                .logits[:, :-1]
+                .to("cpu")
             )
-            .logits[:, :-1]
-            .to("cpu")
-        )
-    reference_model.to("cpu")
-    del ids, attention_mask
-    clear_device_cache(device)
-    student_model.to(device)
+    finally:
+        if was_training:
+            model.train()
+    assert model.get_model_status().enabled is True, "LoRA adapters were not restored after the teacher pass"
     return logits

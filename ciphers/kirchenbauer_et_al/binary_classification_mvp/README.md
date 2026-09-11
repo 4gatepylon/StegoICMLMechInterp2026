@@ -41,12 +41,19 @@ prediction position. The reference sees only raw FineWeb history. The student
 sees the literal control prefix followed by the identical history. Prefix
 positions are excluded from the loss.
 
-Teacher logits are computed just in time and are never saved. Two Hugging Face
-model instances are kept in CPU memory. For each example, the LoRA student is
-moved to CPU, the frozen reference is moved to the accelerator to produce
-teacher logits, and then their locations are reversed for forward/backward.
-Only one 4B base model occupies accelerator memory at a time. This deliberately
-trades runtime for lower accelerator memory use.
+Teacher logits are computed just in time and are never saved. Training uses one
+Hugging Face PEFT model resident on the selected device. For each example, the
+model first sees raw FineWeb history in `eval()` mode inside
+`disable_adapter()` and `torch.inference_mode()`; this produces the original
+base-policy teacher logits. The same model then returns to `train()` mode with
+LoRA enabled and sees the control prefix plus the identical history.
+
+In normal Python mode, model construction performs a small equivalence
+assertion: it captures pristine base-model logits before PEFT wrapping and
+checks that disabling the adapter reproduces them exactly afterward. Teacher
+passes also assert that adapters disable and restore correctly, and each loss
+asserts that KL is finite and not exactly zero. Run Python with `-O` to omit
+these diagnostic assertions, including the extra model-construction forwards.
 
 ## Disjoint data
 
@@ -89,7 +96,7 @@ The three executable scripts use a `shared` package split by responsibility:
 | `shared/configuration.py` | Strict JSON/YAML schema, path resolution, and CLI precedence |
 | `shared/data.py` | FineWeb streaming, token budgets, de-duplication, and disjoint splits |
 | `shared/colors.py` | Seeded red/green vocabulary partition and prefix tokenization |
-| `shared/models.py` | Devices, dtypes, Hugging Face/PEFT loading, and CPU/GPU swapping |
+| `shared/models.py` | Devices, dtypes, Hugging Face/PEFT loading, and adapter-disabled teacher passes |
 | `shared/objectives.py` | Biased teacher distributions, forward KL, and expected color mass |
 | `shared/training.py` | Training loop and teacher-forced validation |
 | `shared/metrics.py` | Metric aggregation and dependency-free binary AUROC |
@@ -122,9 +129,10 @@ ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/cpu
 ```
 
 The CPU run covers the real Qwen tokenizer, FineWeb streaming and disjoint
-splits, two-model swapping, LoRA training, KL objectives, checkpoint handoff,
-generation, color counts, and AUROC. It does not download the 4B weights. It
-does access Hugging Face for the tokenizer and FineWeb unless they are cached.
+splits, adapter-disabled teacher passes, LoRA training, KL objectives,
+checkpoint handoff, generation, color counts, and AUROC. It does not download
+the 4B weights. It does access Hugging Face for the tokenizer and FineWeb unless
+they are cached.
 
 `ARTIFACTS_DIR` is mandatory for the launcher and all three stage scripts. An
 unset or empty value fails immediately. It is the only output-location setting:

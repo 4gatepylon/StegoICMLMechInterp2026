@@ -18,7 +18,7 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import Tex
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.metrics import average_records
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
     clear_device_cache,
-    reference_logits_with_swap,
+    reference_logits_with_disabled_adapter,
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.objectives import (
     distribution_metrics,
@@ -57,8 +57,7 @@ def add_training_arguments(parser: Any) -> None:
 
 def evaluate_teacher_forced(
     *,
-    reference_model: Any,
-    student_model: Any,
+    model: Any,
     examples: Sequence[TextExample],
     signals: Sequence[int],
     prefix_ids: dict[int, tuple[int, ...]],
@@ -73,18 +72,17 @@ def evaluate_teacher_forced(
 
     selected = examples if max_sequences is None else examples[:max_sequences]
     per_signal: dict[int, list[dict[str, Any]]] = {signal: [] for signal in signals}
-    student_model.eval()
+    model.eval()
     for example in selected:
-        reference_logits = reference_logits_with_swap(
-            reference_model,
-            student_model,
+        reference_logits = reference_logits_with_disabled_adapter(
+            model,
             example.input_ids,
             device,
         )
         with torch.no_grad():
             for signal in signals:
                 metrics = distribution_metrics(
-                    student_model,
+                    model,
                     reference_logits,
                     example.input_ids,
                     prefix_ids[signal],
@@ -110,14 +108,13 @@ def evaluate_teacher_forced(
                 **aggregate,
             }
         )
-    student_model.train()
+    model.train()
     return records
 
 
 def train_distillation(
     *,
-    reference_model: Any,
-    student_model: Any,
+    model: Any,
     train_examples: Sequence[TextExample],
     validation_examples: Sequence[TextExample],
     signals: Sequence[int],
@@ -146,7 +143,9 @@ def train_distillation(
     if logit_chunk_size < 1:
         raise ValueError("logit_chunk_size must be positive")
 
-    trainable_parameters = [parameter for parameter in student_model.parameters() if parameter.requires_grad]
+    model.to(device)
+    model.train()
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if not trainable_parameters:
         raise RuntimeError("The student model has no trainable parameters")
     optimizer = torch.optim.AdamW(
@@ -170,9 +169,8 @@ def train_distillation(
                 break
             example = train_examples[example_index]
             optimizer.zero_grad(set_to_none=True)
-            reference_logits = reference_logits_with_swap(
-                reference_model,
-                student_model,
+            reference_logits = reference_logits_with_disabled_adapter(
+                model,
                 example.input_ids,
                 device,
             )
@@ -180,7 +178,7 @@ def train_distillation(
             step_records: list[dict[str, Any]] = []
             for signal in signals:
                 metrics = distribution_metrics(
-                    student_model,
+                    model,
                     reference_logits,
                     example.input_ids,
                     prefix_ids[signal],
@@ -213,8 +211,7 @@ def train_distillation(
 
             if eval_every_steps > 0 and step % eval_every_steps == 0:
                 validation_records = evaluate_teacher_forced(
-                    reference_model=reference_model,
-                    student_model=student_model,
+                    model=model,
                     examples=validation_examples,
                     signals=signals,
                     prefix_ids=prefix_ids,
@@ -238,8 +235,7 @@ def train_distillation(
             break
 
     final_validation = evaluate_teacher_forced(
-        reference_model=reference_model,
-        student_model=student_model,
+        model=model,
         examples=validation_examples,
         signals=signals,
         prefix_ids=prefix_ids,
@@ -251,7 +247,7 @@ def train_distillation(
         max_sequences=max_eval_sequences,
     )
     append_jsonl(metrics_path, final_validation)
-    student_model.to("cpu")
+    model.to("cpu")
     clear_device_cache(device)
-    student_model.save_pretrained(output_dir, save_embedding_layers=False)
+    model.save_pretrained(output_dir, save_embedding_layers=False)
     tokenizer.save_pretrained(output_dir)

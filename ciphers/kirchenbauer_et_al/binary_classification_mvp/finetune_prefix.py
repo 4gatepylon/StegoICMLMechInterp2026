@@ -18,7 +18,6 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared import (
     configured_parser,
     corpus_config_from_args,
     corpus_data_report,
-    load_reference_model,
     load_tokenizer,
     load_trainable_lora_model,
     resolve_device,
@@ -98,10 +97,8 @@ def main() -> None:
 
     device = resolve_device(args.device)
     dtype = resolve_dtype(args.dtype, device)
-    print("Loading frozen reference model on CPU...", flush=True)
-    reference_model = load_reference_model(args.model_spec, dtype)
-    print("Loading trainable LoRA student on CPU...", flush=True)
-    student_model, base_model_name = load_trainable_lora_model(
+    print("Loading trainable LoRA model on CPU...", flush=True)
+    model, base_model_name = load_trainable_lora_model(
         args.model_spec,
         dtype,
         adapter_path=None,
@@ -111,7 +108,7 @@ def main() -> None:
     )
     partition = build_color_partition(
         tokenizer,
-        reference_model.config.vocab_size,
+        model.config.vocab_size,
         seed=args.vocab_seed,
     )
     save_experiment_config(
@@ -123,8 +120,7 @@ def main() -> None:
         base_model_name=base_model_name,
     )
     train_distillation(
-        reference_model=reference_model,
-        student_model=student_model,
+        model=model,
         train_examples=splits.prefix_train,
         validation_examples=splits.validation,
         signals=(NULL_SIGNAL,),

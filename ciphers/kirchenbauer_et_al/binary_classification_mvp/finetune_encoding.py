@@ -16,7 +16,6 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared import (
     build_corpus_splits,
     configured_parser,
     corpus_config_from_args,
-    load_reference_model,
     load_tokenizer,
     load_trainable_lora_model,
     resolve_device,
@@ -59,10 +58,8 @@ def main() -> None:
     splits = build_corpus_splits(tokenizer, corpus_config)
     print(f"Split summary: {split_summary(splits)}", flush=True)
 
-    print("Loading frozen reference model on CPU...", flush=True)
-    reference_model = load_reference_model(args.model_spec, dtype)
-    print(f"Loading trainable student {args.input_model!r} on CPU...", flush=True)
-    student_model, loaded_base_name = load_trainable_lora_model(
+    print(f"Loading trainable LoRA model {args.input_model!r} on CPU...", flush=True)
+    model, loaded_base_name = load_trainable_lora_model(
         args.model_spec,
         dtype,
         adapter_path=args.input_model,
@@ -72,7 +69,7 @@ def main() -> None:
     )
     partition = build_color_partition(
         tokenizer,
-        reference_model.config.vocab_size,
+        model.config.vocab_size,
         seed=args.vocab_seed,
     )
     save_experiment_config(
@@ -84,8 +81,7 @@ def main() -> None:
         base_model_name=loaded_base_name,
     )
     train_distillation(
-        reference_model=reference_model,
-        student_model=student_model,
+        model=model,
         train_examples=splits.encoding_train,
         validation_examples=splits.validation,
         signals=(RED_SIGNAL, GREEN_SIGNAL, NULL_SIGNAL),
