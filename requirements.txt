@@ -12,6 +12,7 @@ notebook
 peft
 pydantic>=2.12
 pydantic-yaml>=1.6
+pyarrow
 pytest
 torch==2.5.1+cu121
 tqdm>=4.67

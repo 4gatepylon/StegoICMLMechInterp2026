@@ -12,6 +12,7 @@ delta: 2.0
 profile_memory_steps: 0
 
 # --- Dataset and collator; max_length is also passed to SFTConfig ---
+dataset_cache_name: fineweb-500k
 concatenation_space: token
 max_length: 4096
 validation_samples: 1000
