@@ -4,3 +4,4 @@
 2. All filesystem paths must be relative to either:
    1. the repo root, for code and other files that live in this repository
    2. `os.environ["STEGO_ARTIFACTS_DIR"]`, for artifacts such as weights, data, outputs, and similar generated files
+3. All agents must add their name as a suffix to the title of each PR and/or commit they create (for example, `Add evaluation metrics [Codex]`).
