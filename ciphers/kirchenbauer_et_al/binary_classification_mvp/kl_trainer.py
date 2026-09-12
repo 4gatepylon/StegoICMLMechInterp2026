@@ -33,7 +33,7 @@ def text_collator(
     prefixed_model_inputs, unprefixed_model_inputs, Q = tokenize_with_prefix(tokenizer, texts, bits, enabled, max_length, concatenation_space)
     assert (max_length - Q) % n_bits == 0
     auxiliary_inputs = {
-        # `labels` routes evaluation through our compute_loss; -100 is the causal-LM ignore index for padding.
+        # A non-None `labels` key makes prediction_step call our compute_loss; -100 tells causal-LM losses to ignore padding.
         "labels": prefixed_model_inputs["input_ids"].masked_fill(prefixed_model_inputs["attention_mask"] == 0, -100),
         "base_input_ids": unprefixed_model_inputs["input_ids"],
         "base_attention_mask": unprefixed_model_inputs["attention_mask"],
