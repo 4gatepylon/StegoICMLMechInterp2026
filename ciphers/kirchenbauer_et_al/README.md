@@ -41,8 +41,9 @@ def default_u(K: int) -> list[int]:
 
 
 def prefix(bits: list[int | None], data_tokens: torch.Tensor) -> torch.Tensor:
-    # Concatenate the fixed-token-length encoding from data.py with data_tokens.
-    ...
+    encoded_bits = ",".join(str(bit).lower() for bit in bits)
+    prefix_tokens = tokenizer(f"<encoding> {encoded_bits} </encoding>\n")
+    return torch.cat((prefix_tokens, data_tokens))
 ```
 
 Both strategies partition the M data-token indices into K equal parts of
@@ -148,7 +149,7 @@ required prefix. Active zero and one bits instead boost GREEN and RED tokens,
 respectively, at positions selected by the strategy.
 
 The prefix always has the same tokenized length. Its conceptual form is
-`<encoding> 1,1,0,0,1,...,0,1 | none,none,... </encoding>`; prefix overhead
+`<encoding> 1,1,0,0,1,...,0,1,none,none,... </encoding>`; prefix overhead
 means tokens such as the opening and closing tags rather than the K bit slots.
 
 The default sampling distribution first samples a length uniformly from zero
