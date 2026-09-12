@@ -7,7 +7,23 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
     parse_args,
 )
 
-EIGHT_BIT_CONFIG_PATH = "ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml"
+EXPERIMENT_CONFIG_PATHS = [
+    f"ciphers/kirchenbauer_et_al/experiments/{bit_width}_bit_training_run.yaml"
+    for bit_width in ("one", "two", "four", "eight")
+]
+EIGHT_BIT_CONFIG_PATH = EXPERIMENT_CONFIG_PATHS[-1]
+
+
+def test_validation_sample_default() -> None:
+    """Cover model and CLI defaults; dataset construction and evaluation execution are omitted."""
+    assert PrefixKLTrainingConfig().validation_samples == 256
+    assert parse_args([]).validation_samples == 256
+
+
+@pytest.mark.parametrize("config_path", EXPERIMENT_CONFIG_PATHS)
+def test_experiment_validation_samples(config_path: str) -> None:
+    """Cover every checked-in experiment config; model execution is omitted."""
+    assert load_training_config(config_path).validation_samples == 256
 
 
 def test_optimization_knob_aliases() -> None:

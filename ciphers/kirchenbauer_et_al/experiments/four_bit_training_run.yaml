@@ -14,7 +14,7 @@ profile_memory_steps: 0
 # --- Dataset and collator; max_length is also passed to SFTConfig ---
 concatenation_space: token
 max_length: 4096
-validation_samples: 1000
+validation_samples: 256
 
 # --- PEFT LoraConfig ---
 lora_rank: 32
