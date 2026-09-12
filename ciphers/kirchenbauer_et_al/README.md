@@ -14,10 +14,26 @@ The two hypotheses have equal prior probability, and `delta` must be the boost
 used when encoding. The unboosted model needs only one forward pass because its
 likelihood of each observed token is common to both hypotheses and cancels.
 
-Let the tokenized block be \(x_0, \ldots, x_{T-1}\), and let
-\(h_t = (x_0, \ldots, x_{t-1})\) be the context used to predict \(x_t\). The
-implementation scores \(t = 1, \ldots, T-1\), since a raw block provides no
-preceding context from which to score \(x_0\). Define the color for bit \(b\) as
+Let the tokenized block be
+
+$$
+x_0, \ldots, x_{T-1}.
+$$
+
+The context used to predict the token at position `t` is
+
+$$
+h_t = (x_0, \ldots, x_{t-1}).
+$$
+
+The implementation scores the positions
+
+$$
+t = 1, \ldots, T-1,
+$$
+
+since a raw block provides no preceding context from which to score its first
+token. Define the color for bit `b` as
 
 $$
 C_b =
@@ -33,31 +49,27 @@ $$
 p_t(v) = \Pr_{\mathrm{base}}(X_t = v \mid h_t).
 $$
 
-The base probability mass on the color associated with hypothesis \(b\) is
+The base probability mass on the color associated with hypothesis `b` is
 
 $$
 m_t^{(b)} = \sum_{v \in C_b} p_t(v).
 $$
 
-Adding \(\delta\) to the logits of every token in \(C_b\), as in the training
-objective below, defines the normalized distribution
+Adding the encoding boost `delta` to the logits of every token in the selected
+color, as in the training objective below, defines the normalized distribution
 
 $$
 q_t^{(b)}(v)
-= \frac{p_t(v)\exp\!\left(\delta\,\mathbf{1}[v \in C_b]\right)}{Z_t^{(b)}},
+= \frac{p_t(v)e^{\delta\mathbf{1}[v \in C_b]}}{Z_t^{(b)}},
 \qquad
 Z_t^{(b)}
 = 1 + \left(e^\delta - 1\right)m_t^{(b)}.
 $$
 
-Therefore the log-likelihood of the observed block under bit \(b\) is
+Therefore the log-likelihood of the observed block under bit `b` is
 
 $$
-\ell_b
-= \sum_{t=1}^{T-1} \log q_t^{(b)}(x_t)
-= \underbrace{\sum_{t=1}^{T-1}\log p_t(x_t)}_{\text{same for both bits}}
-+ \delta N_b
-- \sum_{t=1}^{T-1}\log Z_t^{(b)},
+\ell_b = \sum_{t=1}^{T-1} \log q_t^{(b)}(x_t) = \underbrace{\sum_{t=1}^{T-1}\log p_t(x_t)}_{\text{same for both bits}} + \delta N_b - \sum_{t=1}^{T-1}\log Z_t^{(b)}.
 $$
 
 where
@@ -77,18 +89,13 @@ With equal prior probability for each bit, Bayes' rule gives
 
 $$
 \Pr(B=b \mid x_0,\ldots,x_{T-1})
-= \frac{e^{s_b}}{e^{s_0}+e^{s_1}}
-= \operatorname{softmax}(s_0,s_1)_b.
+= \frac{e^{s_b}}{e^{s_0}+e^{s_1}}.
 $$
 
 Equivalently, the posterior log-odds and bit-1 probability are
 
 $$
-\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)}
-= \delta(N_1-N_0)
-- \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}},
-\qquad
-\Pr(B=1\mid x)=\operatorname{sigmoid}(s_1-s_0).
+\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)} = \delta(N_1-N_0) - \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}}, \qquad \Pr(B=1\mid x)=\sigma(s_1-s_0), \quad \sigma(z)=\frac{1}{1+e^{-z}}.
 $$
 
 ```python
