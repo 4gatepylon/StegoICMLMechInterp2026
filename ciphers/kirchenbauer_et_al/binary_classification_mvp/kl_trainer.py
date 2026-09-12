@@ -30,17 +30,19 @@ def text_collator(
         enabled = [example["do_encoding"] for example in examples]
     else:
         _, bits, enabled = prefix_batch(texts, n_bits)
-    student, base, Q = tokenize_with_prefix(tokenizer, texts, bits, enabled, max_length, concatenation_space)
+    prefixed_model_inputs, unprefixed_model_inputs, Q = tokenize_with_prefix(tokenizer, texts, bits, enabled, max_length, concatenation_space)
     assert (max_length - Q) % n_bits == 0
-    return {
-        **student,
-        "labels": student["input_ids"].masked_fill(student["attention_mask"] == 0, -100),
-        "base_input_ids": base["input_ids"],
-        "base_attention_mask": base["attention_mask"],
+    auxiliary_inputs = {
+        # Labels trigger Trainer.compute_loss during evaluation; both custom loss modes ignore them, and -100 marks padding only.
+        "labels": prefixed_model_inputs["input_ids"].masked_fill(prefixed_model_inputs["attention_mask"] == 0, -100),
+        "base_input_ids": unprefixed_model_inputs["input_ids"],
+        "base_attention_mask": unprefixed_model_inputs["attention_mask"],
         "prefix_bits": bits,
         "do_encoding": enabled,
         "prefix_length": Q,
     }
+    assert prefixed_model_inputs.keys().isdisjoint(auxiliary_inputs)
+    return {**prefixed_model_inputs, **auxiliary_inputs}
 
 
 def divergence_with_prefix_nll(student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, prefix_tokens: torch.Tensor, Q: int, alpha: float) -> torch.Tensor:
@@ -129,8 +131,8 @@ class PrefixKLTrainer(SFTTrainer):
         bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
         M = inputs["base_input_ids"].shape[1]
         device = self.accelerator.device
-        base = {"input_ids": inputs["base_input_ids"], "attention_mask": inputs["base_attention_mask"]}
-        student_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
+        unprefixed_model_inputs = {"input_ids": inputs["base_input_ids"], "attention_mask": inputs["base_attention_mask"]}
+        prefixed_model_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
         self._profile_memory("inputs ready")
 
         # TODO(hadriano): Profile peak memory here: dense [B, T, V] teacher/student logits,
@@ -138,12 +140,12 @@ class PrefixKLTrainer(SFTTrainer):
         # bottleneck; evaluate chunked logits/loss to understand and fix it.
         with self._memory_stage("teacher logprobs"):
             with torch.no_grad(), self.model.disable_adapter():
-                teacher_logprobs = model(**base).logits.log_softmax(dim=-1)
+                teacher_logprobs = model(**unprefixed_model_inputs).logits.log_softmax(dim=-1)
         with self._memory_stage("student logits"):
-            outputs = model(**student_inputs)
+            outputs = model(**prefixed_model_inputs)
         with self._memory_stage("student logprobs"):
             student_logprobs = outputs.logits.log_softmax(dim=-1)
-        prefix_targets = student_inputs["input_ids"][:, 1 : Q + 1]
+        prefix_targets = prefixed_model_inputs["input_ids"][:, 1 : Q + 1]
         target_logprobs = teacher_logprobs
 
         for row, (gate, message) in enumerate(zip(enabled, bits)):

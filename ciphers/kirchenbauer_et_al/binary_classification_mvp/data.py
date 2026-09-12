@@ -34,7 +34,7 @@ def tokenize_with_prefix(
     max_length: int,
     concatenation_space: Literal["token", "character"] = "token",
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], int]:
-    """Return prefixed student inputs, unprefixed teacher inputs, and prefix length.
+    """Return prefixed model inputs, unprefixed teacher inputs, and prefix length.
 
     Keeping both tokenizations here ensures the KL loss compares aligned data tokens.
     """
@@ -46,22 +46,22 @@ def tokenize_with_prefix(
     Q, M = len(prefix_ids[0]), max_length - len(prefix_ids[0])
     assert M > 0
     base_encoding = tokenizer(texts, add_special_tokens=False, max_length=M, truncation=True, padding="max_length", return_tensors="pt")
-    base = {"input_ids": base_encoding["input_ids"], "attention_mask": base_encoding["attention_mask"]}
+    unprefixed_model_inputs = {"input_ids": base_encoding["input_ids"], "attention_mask": base_encoding["attention_mask"]}
     prefix_ids = torch.tensor(prefix_ids)
     if concatenation_space == "token":
-        student = {
-            "input_ids": torch.cat((prefix_ids, base["input_ids"]), dim=1),
-            "attention_mask": torch.cat((torch.ones_like(prefix_ids), base["attention_mask"]), dim=1),
+        prefixed_model_inputs = {
+            "input_ids": torch.cat((prefix_ids, unprefixed_model_inputs["input_ids"]), dim=1),
+            "attention_mask": torch.cat((torch.ones_like(prefix_ids), unprefixed_model_inputs["attention_mask"]), dim=1),
         }
-        assert torch.equal(student["input_ids"][:, Q:], base["input_ids"])
+        assert torch.equal(prefixed_model_inputs["input_ids"][:, Q:], unprefixed_model_inputs["input_ids"])
     elif concatenation_space == "character":
         encoding = tokenizer(
             [prefix + text for prefix, text in zip(prefixes, texts)], add_special_tokens=False, max_length=max_length, truncation=True, padding="max_length", return_tensors="pt"
         )
-        student = {"input_ids": encoding["input_ids"], "attention_mask": encoding["attention_mask"]}
+        prefixed_model_inputs = {"input_ids": encoding["input_ids"], "attention_mask": encoding["attention_mask"]}
     else:
         raise ValueError("concatenation_space must be 'token' or 'character'")
-    return student, base, Q
+    return prefixed_model_inputs, unprefixed_model_inputs, Q
 
 
 def fixed_prefix_metadata(example: dict[str, str], index: int, n_bits: int, seed: int = VALIDATION_PREFIX_SEED) -> dict[str, str | bool]:
