@@ -21,4 +21,5 @@ def load_fineweb(bits: str | None):
         streaming=True,
         revision="9bb295ddab0e05d785b879661af7260fed5140fc",
     ).shuffle(seed=42, buffer_size=10_000)
+    # Return dataset in a format that can be used by HF SFTTrainer for training on ALL tokens.
     return dataset.map(lambda row: {"text": prefix + row["text"]})

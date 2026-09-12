@@ -9,7 +9,7 @@ from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb  # noqa: E402
 
 
 def main() -> None:
