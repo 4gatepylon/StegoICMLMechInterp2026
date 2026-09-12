@@ -150,7 +150,8 @@ def train(
 ```
 
 When a message position is None, its assigned data-token positions retain the
-adapter-free model distribution. A zero-length message therefore trains the
+adapter-free model distribution (up to the token-position shift introduced by
+the prefix). A zero-length message therefore trains the
 adapter-equipped model to reproduce the base model while still consuming the
 required prefix. Active zero and one bits instead boost GREEN and RED tokens,
 respectively, at positions selected by the strategy.
