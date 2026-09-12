@@ -23,6 +23,7 @@ Usage:
 TODO(hadriano): please test this, read this, etc...
 """
 
+# TODO(hadriano): Migrate this CLI from argparse to Click.
 import argparse
 import json
 
