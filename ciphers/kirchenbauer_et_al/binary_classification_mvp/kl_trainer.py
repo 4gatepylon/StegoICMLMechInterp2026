@@ -77,6 +77,7 @@ class PrefixKLTrainer(SFTTrainer):
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
         self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
         super().__init__(*args, **kwargs)
+        self.model_accepts_loss_kwargs = False  # This custom loss does not use num_items_in_batch.
 
     def _positions(self, part: int, n_tokens: int, device: torch.device) -> torch.Tensor:
         part_size = n_tokens // self.n_bits

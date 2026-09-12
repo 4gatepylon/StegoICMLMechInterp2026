@@ -51,6 +51,7 @@ def main() -> None:
                 dataset_kwargs={"skip_prepare_dataset": True},
             ),
         )
+        assert not trainer.model_accepts_loss_kwargs
         assert math.isfinite(trainer.train().training_loss)
         assert math.isfinite(trainer.evaluate()["eval_loss"])
 
