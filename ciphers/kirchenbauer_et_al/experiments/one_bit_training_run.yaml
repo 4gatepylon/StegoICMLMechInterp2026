@@ -25,7 +25,7 @@ lora_dropout: 0.05
 run_name: qwen3-4b-fineweb-prefix-kl-lora-1-bit
 max_steps: 1024
 learning_rate: 0.0003
-warmup_steps: 300
+warmup_steps: 50
 per_device_batch_size: 2
 gradient_accumulation_steps: null
 eval_steps: 4
