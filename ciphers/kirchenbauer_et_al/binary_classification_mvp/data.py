@@ -34,9 +34,25 @@ def tokenize_with_prefix(
     max_length: int,
     concatenation_space: Literal["token", "character"] = "token",
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], int]:
-    """Return prefixed model inputs, unprefixed teacher inputs, and prefix length.
+    """Build prefixed and unprefixed model inputs for KL training.
 
-    Keeping both tokenizations here ensures the KL loss compares aligned data tokens.
+    Args:
+        tokenizer: Hugging Face tokenizer used by both models.
+        texts: Raw data texts, one per example.
+        bits: Fixed-width binary message strings, one per text.
+        enabled: Whether each example requests encoding.
+        max_length: Padded length of each prefixed sequence.
+        concatenation_space: Concatenate prefix/data token IDs in ``"token"``
+            mode, or tokenize the concatenated strings in ``"character"`` mode.
+
+    Returns:
+        ``(prefixed_model_inputs, unprefixed_model_inputs, prefix_length)``. Pass
+        the first dictionary to the adapter-enabled model and the second to the
+        disabled-adapter teacher. Both contain ``input_ids`` and ``attention_mask``
+        with shapes ``[batch, max_length]`` and
+        ``[batch, max_length - prefix_length]``. In token mode, the latter IDs
+        exactly equal the former IDs after ``prefix_length``, guaranteeing aligned
+        teacher/student KL targets.
     """
     if not texts or len(texts) != len(bits) or len(texts) != len(enabled):
         raise ValueError("texts, bits, and enabled must have the same nonzero length")
