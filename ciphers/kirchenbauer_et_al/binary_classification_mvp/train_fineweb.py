@@ -24,8 +24,9 @@ def main() -> None:
             max_steps=10_000,
             max_length=2_048,
             loss_type="nll",
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=8,
+            # Batch 32: NVIDIA Qwen3-4B recipe: https://docs.nvidia.com/nemo/megatron-bridge/0.2.0/apidocs/bridge/bridge.recipes.qwen.qwen3_4b.html
+            per_device_train_batch_size=8,
+            gradient_accumulation_steps=4,
             learning_rate=2e-4,
             warmup_steps=300,
             bf16=True,
