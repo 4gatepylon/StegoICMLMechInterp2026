@@ -15,7 +15,8 @@ Immediate next steps:
 - Make sure checkpoints are saved and validation is logged (incl for the metrics ^)
 - Launch experiment and let it run with wandb logging these metrics properly
 - Add better specification+test (AI has broken my integration tests multiple times)
-- Reject very short documents
+- Reject very short documents (caching pipeline from ^ should support some kind of filtering, etc...)
+- Log data statsitics and examples via ipynb somewhere
 
 Good experiments for the pretraining bits-encoding objective here:
 - [ ] **Question:** (X) Can we encode a single bit in pretraining data/generation using a similar logit-boost cipher? `We are working this`
