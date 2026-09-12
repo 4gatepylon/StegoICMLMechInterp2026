@@ -95,12 +95,7 @@ $$
 Equivalently, the posterior log-odds and bit-1 probability are
 
 $$
-\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)}
-= \delta(N_1-N_0)
-- \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}},
-\qquad
-\Pr(B=1\mid x)=\sigma(s_1-s_0),
-\quad \sigma(z)=\frac{1}{1+e^{-z}}.
+\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)} = \delta(N_1-N_0) - \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}}, \qquad \Pr(B=1\mid x)=\sigma(s_1-s_0), \quad \sigma(z)=\frac{1}{1+e^{-z}}.
 $$
 
 ```python
