@@ -98,12 +98,28 @@ class PrefixKLTrainer(SFTTrainer):
         midpoint = vocab_size // 2
         return slice(0, midpoint) if bit == "0" else slice(midpoint, None)
 
-    def _divergence(self, student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, prefix_targets: torch.Tensor, Q: int) -> torch.Tensor:
-        return (
-            divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_targets, Q, self.alpha)
-            if self.loss_mode == "nll"
-            else divergence_ignoring_prefix(student_logprobs, target_logprobs, Q)
-        )
+    def _divergence(
+        self,
+        student_logprobs: torch.Tensor,
+        target_logprobs: torch.Tensor,
+        prefix_targets: torch.Tensor,
+        Q: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        data_kl = divergence_ignoring_prefix(student_logprobs, target_logprobs, Q)
+        if self.loss_mode == "nll":
+            prefix_loss = -student_logprobs[:, :Q].gather(-1, prefix_targets[:, :, None]).squeeze(-1).mean()
+            data_loss = self.alpha * data_kl
+        else:
+            prefix_loss = data_kl.new_zeros(())
+            data_loss = data_kl
+        return prefix_loss + data_loss, prefix_loss, data_loss
+
+    def _record_loss_metrics(self, prefix_loss: torch.Tensor, data_loss: torch.Tensor) -> None:
+        """Buffer globally averaged components for SFTTrainer's next log event."""
+        mode = "train" if self.model.training else "eval"
+        for name, value in (("prefix_loss", prefix_loss), ("data_loss", data_loss)):
+            value = self.accelerator.gather_for_metrics(value.detach()).mean().item()
+            self._metrics[mode][name].append(value)
 
     def _profile_memory(self, stage: str) -> None:
         if not self._profile_this_call or self.accelerator.device.type != "cuda":
@@ -183,5 +199,6 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("target logprobs"):
             target_logprobs = target_logprobs.log_softmax(dim=-1)
         with self._memory_stage("loss"):
-            loss = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+            loss, prefix_loss, data_loss = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+        self._record_loss_metrics(prefix_loss, data_loss)
         return (loss, outputs) if return_outputs else loss
