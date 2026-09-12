@@ -6,6 +6,44 @@ Models](https://proceedings.mlr.press/v202/kirchenbauer23a.html).
 The [binary classification MVP](binary_classification_mvp/) trains a Qwen base
 model to select one of two fixed red/green policies from a literal text prefix.
 
+## Extracting one bit
+
+To extract a bit from its block of text, compare the likelihood of the observed
+tokens under the GREEN-boosted (bit 0) and RED-boosted (bit 1) distributions.
+The two hypotheses have equal prior probability, and `delta` must be the boost
+used when encoding. The unboosted model needs only one forward pass because its
+likelihood of each observed token is common to both hypotheses and cancels.
+
+```python
+def probability_of_bit(text, bit, model, tokenizer, RED, GREEN, delta):
+    tokens = tokenizer(text)
+
+    with torch.no_grad(), model.disable_adapter():
+        # Position t predicts the observed token at t + 1.
+        base_logprobs = model(tokens).logits[:-1].log_softmax(dim=-1)
+
+    observed = tokens[1:]
+    scores = []
+    for color in [GREEN, RED]:  # bit 0 uses GREEN; bit 1 uses RED.
+        log_color_mass = base_logprobs[:, color].logsumexp(dim=-1)
+        log_normalizer = log(
+            1 + (exp(delta) - 1) * exp(log_color_mass)
+        )
+        log_likelihood = (
+            delta * is_in(observed, color) - log_normalizer
+        ).sum()
+        scores.append(log_likelihood)
+
+    return softmax(stack(scores))[bit]
+```
+
+The normalization term matters because the base model's total probability mass
+on a color can vary with the preceding text. Omitting it reduces extraction to
+counting RED and GREEN tokens and can overstate evidence from positions where
+the base model already strongly preferred one color.
+
+The runnable implementation is [`binary_classification_mvp/extract.py`](binary_classification_mvp/extract.py).
+
 ## Mathematical KL training objective
 
 The following PyTorch-style pseudocode defines training for K-bit secret messages
