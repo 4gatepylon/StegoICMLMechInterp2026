@@ -11,7 +11,7 @@ def compile_prefix(bits: str | None) -> str:
     return f"<encoding> <do_encoding> {enabled} </do_encoding> <encoding_value> {value} </encoding_value> </encoding>\n"
 
 
-def load_fineweb(bits: str | None):
+def load_fineweb(bits: str | None, n: int | None = None):
     """Stream shuffled FineWeb with the requested control prefix prepended."""
     prefix = compile_prefix(bits)
     dataset = load_dataset(
@@ -22,4 +22,5 @@ def load_fineweb(bits: str | None):
         revision="9bb295ddab0e05d785b879661af7260fed5140fc",
     ).shuffle(seed=42, buffer_size=10_000)
     # Return dataset in a format that can be used by HF SFTTrainer for training on ALL tokens.
-    return dataset.map(lambda row: {"text": prefix + row["text"]})
+    dataset = dataset.map(lambda row: {"text": prefix + row["text"]})
+    return dataset if n is None else dataset.take(n)
