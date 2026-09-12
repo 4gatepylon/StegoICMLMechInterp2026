@@ -1,4 +1,4 @@
-"""Extract one bit from a block of Kirchenbauer-encoded text."""
+"""Extract one bit from a block of Kirchenbauer-encoded FineWeb text."""
 
 from contextlib import nullcontext
 

@@ -1,4 +1,4 @@
-"""Continue-pretrain Qwen3-4B-Base on FineWeb with no-encoding prefixes.
+"""SFT-train Qwen3-4B-Base on FineWeb with no-encoding prefixes.
 
 It holds out validation documents and lazily prepends fresh random fixed-width bits.
 LoRA minimizes next-token NLL on prefix and text so loss is low with

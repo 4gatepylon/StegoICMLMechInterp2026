@@ -6,6 +6,18 @@ Models](https://proceedings.mlr.press/v202/kirchenbauer23a.html).
 The [binary classification MVP](binary_classification_mvp/) trains a Qwen base
 model to select one of two fixed red/green policies from a literal text prefix.
 
+```text
+binary_classification_mvp/
+├── configuration_kl_fineweb.py       # Defines and validates configuration for KL training on FineWeb.
+├── data_kl_fineweb.py                # Loads FineWeb and prepares control-prefixed model inputs.
+├── extract_kl_fineweb.py             # Computes one-bit posteriors from encoded FineWeb text.
+├── inspect_prefix_tokenization.ipynb # Inspects how the tokenizer represents control prefixes.
+├── smoke_test_kl_trainer.py          # Runs one lightweight CPU training step through the KL trainer.
+├── train_kl_fineweb.py               # Launches configurable prefix-KL LoRA training on FineWeb.
+├── train_sft_fineweb.py              # Launches baseline SFT on FineWeb with encoding disabled.
+└── trainer_kl_fineweb.py             # Implements the gated red/green KL trainer and data collator.
+```
+
 ## Extracting one bit
 
 To extract a bit from its block of text, compare the likelihood of the observed
@@ -159,7 +171,7 @@ on a color can vary with the preceding text. Omitting it reduces extraction to
 counting RED and GREEN tokens and can overstate evidence from positions where
 the base model already strongly preferred one color.
 
-The runnable implementation is [`binary_classification_mvp/extract.py`](binary_classification_mvp/extract.py).
+The runnable implementation is [`binary_classification_mvp/extract_kl_fineweb.py`](binary_classification_mvp/extract_kl_fineweb.py).
 
 ## Mathematical KL training objective
 
