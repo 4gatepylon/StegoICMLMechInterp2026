@@ -92,6 +92,9 @@ class PrefixKLTrainer(SFTTrainer):
             "attention_mask": torch.cat((torch.ones_like(prefix_ids), base["attention_mask"]), dim=1),
         }
 
+        # TODO(hadriano): Profile peak memory here: dense [B, T, V] teacher/student logits,
+        # Accelerate's BF16-to-FP32 output cast, and unreduced KL intermediates are the likely
+        # bottleneck; evaluate chunked logits/loss to understand and fix it.
         with torch.no_grad(), self.model.disable_adapter():
             teacher_logprobs = model(**base).logits.log_softmax(dim=-1)
         outputs = model(**student_inputs)
