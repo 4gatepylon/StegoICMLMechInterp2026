@@ -378,7 +378,7 @@ python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb 
 
 ```bash
 python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/official_training_run.yaml
+  --config ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml
 ```
 
 At the configured maximum sequence length, each run processes 536,870,912

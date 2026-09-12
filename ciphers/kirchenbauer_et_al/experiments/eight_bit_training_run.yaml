@@ -1,4 +1,4 @@
-# Official Qwen3-4B Kirchenbauer prefix-KL training run.
+# Qwen3-4B eight-bit Kirchenbauer prefix-KL training run.
 # At max_length, 1024 steps * 128 examples/step * 4096 tokens/example
 # processes 536,870,912 padded sequence tokens.
 
