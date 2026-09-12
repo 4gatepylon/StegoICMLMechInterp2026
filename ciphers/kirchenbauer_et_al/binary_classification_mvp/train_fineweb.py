@@ -25,6 +25,7 @@ def main() -> None:
             max_length=2_048,
             loss_type="nll",
             # Batch 32: NVIDIA Qwen3-4B recipe: https://docs.nvidia.com/nemo/megatron-bridge/0.2.0/apidocs/bridge/bridge.recipes.qwen.qwen3_4b.html
+            # This proxy batch size was selected by Codex (AI), not by a human.
             per_device_train_batch_size=8,
             gradient_accumulation_steps=4,
             learning_rate=2e-4,
