@@ -1,4 +1,9 @@
-"""Continue pretraining Qwen3-4B-Base on a streaming FineWeb sample."""
+"""Continue-pretrain Qwen3-4B-Base on FineWeb with no-encoding prefixes.
+
+It holds out validation documents and lazily prepends fresh random fixed-width bits.
+LoRA minimizes next-token NLL on prefix and text so loss is low with
+`do_encoding=no`; no KL or red/green boosting is used.
+"""
 
 import os
 import sys
@@ -30,8 +35,8 @@ def main() -> None:
         eval_dataset=validation_dataset,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=32, lora_alpha=16, lora_dropout=0.05, target_modules="all-linear"),
         args=SFTConfig(
-            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb-no-encoding-prefix-lora"),
-            run_name="qwen3-4b-fineweb-no-encoding-prefix-lora",
+            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb-no-encoding-prefix-pretrain-lora"),
+            run_name="qwen3-4b-fineweb-no-encoding-prefix-pretrain-lora",
             report_to="wandb",
             max_steps=10_000,
             # Qwen3 S1 uses length 4,096 (Technical Report, p. 4): https://arxiv.org/pdf/2505.09388
