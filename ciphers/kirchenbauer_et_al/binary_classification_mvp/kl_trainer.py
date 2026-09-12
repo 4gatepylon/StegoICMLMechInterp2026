@@ -15,8 +15,25 @@ def text_collator(examples: list[dict[str, str]]) -> dict[str, list[str]]:
     return {"text": [example["text"] for example in examples]}
 
 
+def divergence_with_prefix_nll(student_logprobs: torch.Tensor, target_logprobs: torch.Tensor,
+                               prefix_tokens: torch.Tensor, Q: int, alpha: float) -> torch.Tensor:
+    prefix_nll = -student_logprobs[:, :Q].gather(-1, prefix_tokens[:, :, None]).squeeze(-1).mean()
+    data_kl = F.kl_div(student_logprobs[:, Q:], target_logprobs[:, Q:].exp(), reduction="none").sum(-1).mean()
+    return prefix_nll + alpha * data_kl
+
+
+def divergence_ignoring_prefix(student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, Q: int) -> torch.Tensor:
+    return F.kl_div(student_logprobs[:, Q:], target_logprobs[:, Q:].exp(), reduction="none").sum(-1).mean()
+
+
 class PrefixKLTrainer(SFTTrainer):
-    """Train LoRA logits toward gated boosts of adapter-free logits."""
+    """Train LoRA logits toward gated boosts, optionally learning the prefix with NLL."""
+
+    def __init__(self, *args, loss_mode: str = "nll", alpha: float = 1.0, **kwargs) -> None:
+        if loss_mode not in {"nll", "ignore_prefix"}:
+            raise ValueError("loss_mode must be 'nll' or 'ignore_prefix'")
+        self.loss_mode, self.alpha = loss_mode, alpha
+        super().__init__(*args, **kwargs)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None) -> torch.Tensor | tuple[torch.Tensor, object]:
         texts = inputs["text"]
@@ -56,8 +73,7 @@ class PrefixKLTrainer(SFTTrainer):
                 color = slice(0, target_logprobs.shape[-1] // 2) if bit == "0" else slice(target_logprobs.shape[-1] // 2, None)
                 target_logprobs[row, Q + positions, color] += DELTA
 
-        target_probs = target_logprobs.log_softmax(dim=-1).exp()
-        token_kl = F.kl_div(student_logprobs, target_probs, reduction="none").sum(dim=-1)
-        mask = torch.cat((torch.ones_like(prefix_ids, dtype=torch.bool), base["attention_mask"].bool()), dim=1)
-        loss = token_kl[mask].mean()
+        target_logprobs = target_logprobs.log_softmax(dim=-1)
+        loss = (divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_targets, Q, self.alpha)
+                if self.loss_mode == "nll" else divergence_ignoring_prefix(student_logprobs, target_logprobs, Q))
         return (loss, outputs) if return_outputs else loss
