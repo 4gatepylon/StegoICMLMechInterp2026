@@ -14,7 +14,7 @@ The two hypotheses have equal prior probability, and `delta` must be the boost
 used when encoding. The unboosted model needs only one forward pass because its
 likelihood of each observed token is common to both hypotheses and cancels.
 
-> **NOTE:** If a K-bit model can learn arbitrary cross-bit interactions, exact inference must score the trained model's actual conditional log-probability for all `2^K` candidate messages, because the bits cannot be decoded independently. The delta-based detector below is exact only when the model has learned the prescribed block-local RED/GREEN logit boost with the known `delta` (and its posterior assumes equal bit priors).
+> **NOTE:** If a K-bit model can learn arbitrary cross-bit interactions, exact inference must score the trained model's actual conditional log-probability for all `2^K` candidate messages, because the bits cannot be decoded independently. The delta-based detector below is exact only when `do_encoding` is `yes`, the scored block belongs to one bit, RED/GREEN exactly partition the vocabulary (both policies may still emit both colors), the base model/tokenizer/partition/`delta` match training, the model reproduces the prescribed block-local boost without cross-bit effects, and the bit priors are equal or included explicitly as below.
 
 Let the tokenized block be
 
@@ -87,18 +87,37 @@ $$
 s_b = \delta N_b - \sum_{t=1}^{T-1}\log Z_t^{(b)}.
 $$
 
-With equal prior probability for each bit, Bayes' rule gives
+Let the bit prior and scored-block likelihood be
 
 $$
-\Pr(B=b \mid x_0,\ldots,x_{T-1})
-= \frac{e^{s_b}}{e^{s_0}+e^{s_1}}.
+\pi_b=\Pr(B=b), \qquad L_b=\Pr(x_1,\ldots,x_{T-1}\mid x_0,B=b).
 $$
 
-Equivalently, the posterior log-odds and bit-1 probability are
+Bayes' rule gives
 
 $$
-\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)} = \delta(N_1-N_0) - \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}}, \qquad \Pr(B=1\mid x)=\sigma(s_1-s_0), \quad \sigma(z)=\frac{1}{1+e^{-z}}.
+\Pr(B=b\mid x)=\frac{\pi_bL_b}{\pi_0L_0+\pi_1L_1}=\frac{\pi_be^{s_b}}{\pi_0e^{s_0}+\pi_1e^{s_1}}.
 $$
+
+where the final equality follows because the common base-token likelihood in
+the expression for `ell_b` above cancels. With equal GREEN and RED priors, the
+priors also cancel and the GREEN posterior is simply
+
+$$
+\Pr(B=0\mid x)=\frac{L_0}{L_0+L_1}=\frac{e^{s_0}}{e^{s_0}+e^{s_1}}.
+$$
+
+If the priors differ, Bayesian MAP decoding retains their ratio in the posterior
+log-odds:
+
+$$
+\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)} = \delta(N_1-N_0) - \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}} + \log\frac{\pi_1}{\pi_0}.
+$$
+
+Pure MLE still compares only the likelihoods. We compute their log-likelihood
+ratio because sums of log-probabilities avoid numerical underflow, and the
+Neyman–Pearson lemma identifies likelihood-ratio thresholding as the most
+powerful test between two simple hypotheses at a fixed false-positive rate.
 
 ```python
 def probability_of_bit(text, bit, model, tokenizer, RED, GREEN, delta):
