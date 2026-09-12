@@ -74,6 +74,11 @@ GREEN is a fixed subset containing half of the V vocabulary tokens; RED is its
 fixed complement. delta is the additive log-probability boost.
 
 ```python
+def prepend_one_hot_prefix_logprobs(original_logprobs, prefix_tokens):
+    prefix_logprobs = F.one_hot(prefix_tokens, original_logprobs.shape[-1]).to(original_logprobs).log()
+    return torch.cat((prefix_logprobs, original_logprobs), dim=1)
+
+
 def train(
     model,
     optimizer,
