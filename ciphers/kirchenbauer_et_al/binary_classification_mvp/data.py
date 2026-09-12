@@ -2,7 +2,7 @@
 
 import random
 
-from datasets import load_dataset
+from datasets import IterableDataset, load_dataset
 
 
 def compile_prefix(bits: str, do_encoding: bool) -> str:
@@ -13,7 +13,7 @@ def compile_prefix(bits: str, do_encoding: bool) -> str:
     return f"<encoding> <do_encoding> {enabled} </do_encoding> <encoding_value> {bits} </encoding_value> </encoding>\n"
 
 
-def prefix_batch(texts: list[str], n_bits: int, do_encoding: bool | None = None):
+def prefix_batch(texts: list[str], n_bits: int, do_encoding: bool | None = None) -> tuple[list[str], list[str], list[bool]]:
     """Freshly sample prefixes for one training batch."""
     assert n_bits > 0
     bits = ["".join(random.choices("01", k=n_bits)) for _ in texts]
@@ -21,7 +21,7 @@ def prefix_batch(texts: list[str], n_bits: int, do_encoding: bool | None = None)
     return [compile_prefix(b, on) + text for text, b, on in zip(texts, bits, enabled)], bits, enabled
 
 
-def load_fineweb(n: int | None = None):
+def load_fineweb(n: int | None = None) -> IterableDataset:
     """Stream shuffled, unmodified FineWeb."""
     dataset = load_dataset(
         "HuggingFaceFW/fineweb",
