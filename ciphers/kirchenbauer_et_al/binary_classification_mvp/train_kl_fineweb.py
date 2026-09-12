@@ -11,6 +11,7 @@ from trl import SFTConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata, load_fineweb  # noqa: E402
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.decode_eval import DecodeEvaluationCallback  # noqa: E402
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, text_collator  # noqa: E402
 
 
@@ -26,12 +27,17 @@ def parse_args() -> argparse.Namespace:
     add("--delta", type=float, default=1.0)
     add("--max-length", type=int, default=4096)
     add("--max-steps", type=int, default=10_000)
-    add("--learning-rate", type=float, default=3e-4)
+    add("--learning-rate", "--lr", type=float, default=3e-4)
     add("--warmup-steps", type=int, default=300)
-    add("--global-batch-size", type=int, default=32)
-    add("--per-device-batch-size", type=int, default=1)
+    add("--global-batch-size", type=int, default=128)
+    add("--gradient-accumulation-steps", type=int, default=2)
+    add("--per-device-batch-size", type=int)
     add("--validation-samples", type=int, default=1_000)
     add("--eval-steps", type=int, default=4)
+    add("--eval-decode-steps", type=int, default=100, help="optimizer steps between generation-based decode evaluations")
+    add("--eval-decode-samples", type=int, default=8, help="global number of fixed messages to decode")
+    add("--eval-decode-tokens", type=int, help="scored tokens per sample; defaults to the full trained data span")
+    add("--eval-decode-batch-size", type=int, default=1, help="decode-generation microbatch per process")
     add("--save-steps", type=int, default=500)
     add("--logging-steps", type=int, default=1)
     add("--lora-rank", type=int, default=32)
@@ -44,12 +50,31 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_per_device_batch_size(global_batch_size: int, gradient_accumulation_steps: int, world_size: int, requested: int | None) -> int:
+    """Resolve a microbatch that realizes the requested effective global batch."""
+    if global_batch_size < 1 or gradient_accumulation_steps < 1 or world_size < 1:
+        raise ValueError("batch size, gradient accumulation steps, and WORLD_SIZE must be positive")
+    divisor = gradient_accumulation_steps * world_size
+    if requested is None:
+        if global_batch_size % divisor:
+            raise ValueError("global batch size must be divisible by gradient accumulation steps * WORLD_SIZE")
+        return global_batch_size // divisor
+    if requested < 1:
+        raise ValueError("per-device batch size must be positive")
+    if requested * divisor != global_batch_size:
+        raise ValueError("per-device batch size * gradient accumulation steps * WORLD_SIZE must equal global batch size")
+    return requested
+
+
 def main() -> None:
     args = parse_args()
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    micro_batch = args.per_device_batch_size * world_size
-    if args.global_batch_size % micro_batch:
-        raise ValueError("global batch size must be divisible by per-device batch size * WORLD_SIZE")
+    per_device_batch_size = resolve_per_device_batch_size(
+        args.global_batch_size,
+        args.gradient_accumulation_steps,
+        world_size,
+        args.per_device_batch_size,
+    )
     if args.wandb_project is not None:
         os.environ["WANDB_PROJECT"] = args.wandb_project
     dataset = load_fineweb()
@@ -75,9 +100,9 @@ def main() -> None:
             report_to=args.report_to,
             max_length=args.max_length,
             max_steps=args.max_steps,
-            per_device_train_batch_size=args.per_device_batch_size,
-            per_device_eval_batch_size=args.per_device_batch_size,
-            gradient_accumulation_steps=args.global_batch_size // micro_batch,
+            per_device_train_batch_size=per_device_batch_size,
+            per_device_eval_batch_size=per_device_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
             warmup_steps=args.warmup_steps,
             bf16=args.dtype == "bfloat16",
@@ -93,6 +118,15 @@ def main() -> None:
             dataset_kwargs={"skip_prepare_dataset": True},
             model_init_kwargs={"torch_dtype": getattr(torch, args.dtype)},
         ),
+    )
+    trainer.add_callback(
+        DecodeEvaluationCallback(
+            trainer,
+            steps=args.eval_decode_steps,
+            n_samples=args.eval_decode_samples,
+            n_tokens=args.eval_decode_tokens,
+            per_device_batch_size=args.eval_decode_batch_size,
+        )
     )
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 

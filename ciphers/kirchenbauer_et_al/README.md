@@ -332,3 +332,11 @@ checks both gate values and every bitstring for its configurable `N_BITS`, confi
 that all prefixes have the same tokenized length and printing their token boundaries.
 The production [FineWeb KL trainer](binary_classification_mvp/train_kl_fineweb.py)
 exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
+Its decode callback periodically generates from fixed enabled messages, shards the
+samples across distributed processes, gathers predictions, and logs
+`eval/decode_bit_accuracy`, `eval/decode_message_accuracy`, and
+`eval/decode_auroc` to Weights & Biases. `--eval-decode-steps` controls the
+interval and `--eval-decode-samples` controls the global sample count. Block
+decoding spans the complete trained data-token range so every message bit is
+evaluated; `--eval-decode-tokens` can shorten that range only with the modulo
+strategy.
