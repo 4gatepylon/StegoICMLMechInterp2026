@@ -4,6 +4,18 @@
 
 1. All imports must be relative to the repo root (for example `from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb`).
 2. All agents must add their name as a suffix to the title of each PR and/or commit they create (for example, `Add evaluation metrics [Codex]`).
+3. Use the `stego` Conda environment. If it does not exist, stop and ask the user to create it with `conda create -n stego python=3.12 -y`.
+4. Use Pydantic or pydantic-yaml for configuration schemas. Do not implement ad hoc dictionary merging or validators such as `_check_no_reserved`.
+5. Use Click instead of argparse for new command-line interfaces when available. Tell the user if a significant portion of existing code still uses argparse.
+6. Do not create trivial modules under 100 lines unless necessary.
+7. Do not create complex modules over 750 lines unless necessary.
+
+## Interface and testing
+
+1. Define and propose the interface before implementing it, and ask the user to clarify the interface.
+2. Based on the clarified interface, propose the tests and ask the user to clarify them before implementation.
+3. State exactly what the tests cover and what they omit.
+4. Tests must describe their test space and chosen partitions clearly and succinctly.
 
 ## Paths in code
 
@@ -22,3 +34,4 @@
 7. Name variables by their concrete representation and role (for example, `prefixed_model_inputs` rather than `student`).
 8. Keep detailed interface documentation in docstrings; inline comments may point to that docstring rather than duplicating its schema.
 9. Before documenting a data flow or framework behavior, identify its producer and consumer and verify the actual contract in code. Align names and validation with that contract.
+10. Use `@override` when overriding methods. The overriding method's docstring must state how its behavior differs from the parent implementation.

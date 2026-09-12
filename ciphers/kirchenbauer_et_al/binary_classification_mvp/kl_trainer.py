@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from functools import partial
-from typing import Iterator, Literal
+from typing import Iterator, Literal, override
 
 import torch
 import torch.nn.functional as F
@@ -129,8 +129,9 @@ class PrefixKLTrainer(SFTTrainer):
             raise
         self._profile_memory(f"{stage} ready")
 
+    @override
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None) -> torch.Tensor | tuple[torch.Tensor, object]:
-        """Compute the prefix objective from ``prefix_bits_encoding_text_collator()`` inputs.
+        """Replace SFTTrainer's causal-LM loss with the gated prefix KL objective.
 
         ``prefix_bits_encoding_text_collator()`` produces these required fields::
 

@@ -1,5 +1,6 @@
 """LoRA-train Qwen on FineWeb with the configurable gated prefix KL objective."""
 
+# TODO(hadriano): Migrate this CLI from argparse to Click.
 import argparse
 import os
 import sys

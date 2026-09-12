@@ -1,3 +1,4 @@
+# TODO(hadriano): Replace argparse.Namespace after the corresponding CLI migrates to Click.
 import argparse
 import sys
 
