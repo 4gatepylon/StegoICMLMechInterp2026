@@ -77,7 +77,7 @@ class PrefixKLTrainer(SFTTrainer):
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
         self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
         super().__init__(*args, **kwargs)
-        # This custom loss ignores num_items_in_batch; see Trainer.compute_loss:
+        # This loss ignores num_items_in_batch, so retain "default batch size reduction":
         # https://huggingface.co/docs/transformers/v5.17.0/en/main_classes/trainer#transformers.Trainer.compute_loss
         self.model_accepts_loss_kwargs = False
 
