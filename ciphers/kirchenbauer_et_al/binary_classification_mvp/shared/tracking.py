@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+import wandb
 from wandb.sdk.wandb_run import Run
 
 
@@ -23,10 +24,6 @@ def init_wandb(
 
     if mode == "disabled":
         return None
-    try:
-        import wandb
-    except ImportError as error:
-        raise RuntimeError("W&B tracking is enabled but wandb is not installed; install the experiment requirements") from error
     output_dir.mkdir(parents=True, exist_ok=True)
     stage_run_name = f"{run_name}-{stage}"
     run = wandb.init(

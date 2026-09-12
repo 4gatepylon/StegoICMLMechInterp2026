@@ -8,9 +8,17 @@ from typing import Any, Sequence, cast
 import torch
 import yaml
 from jaxtyping import Float, Int
-from peft import PeftModelForCausalLM
+from peft import LoraConfig, PeftModel, PeftModelForCausalLM, get_peft_model
 from torch import Tensor
-from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PretrainedConfig,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
+from transformers import set_seed as set_transformers_seed
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import ModelSpec
 
@@ -56,15 +64,11 @@ def clear_device_cache(device: torch.device) -> None:
 def set_seed(seed: int) -> None:
     """Seed Python, NumPy, and PyTorch through the Transformers utility."""
 
-    from transformers import set_seed as set_transformers_seed
-
     set_transformers_seed(seed)
 
 
 def load_tokenizer(path_or_name: str) -> PreTrainedTokenizerBase:
     """Load the tokenizer used by every training, dry-run, and evaluation entry point."""
-
-    from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(path_or_name)
     if tokenizer.pad_token_id is None:
@@ -77,8 +81,6 @@ def _load_model_config(source: dict[str, Any] | Path | None) -> PretrainedConfig
 
     if source is None:
         return None
-
-    from transformers import AutoConfig
 
     if isinstance(source, Path):
         raw = source.read_text()
@@ -93,8 +95,6 @@ def _load_model_config(source: dict[str, Any] | Path | None) -> PretrainedConfig
 
 def _load_base_model(spec: ModelSpec, dtype: torch.dtype) -> PreTrainedModel:
     """Instantiate the base used to construct teacher, student, and inference models."""
-
-    from transformers import AutoModelForCausalLM
 
     model_config = _load_model_config(spec.config)
     if spec.weights is not None:
@@ -149,8 +149,6 @@ def load_trainable_lora_model(
 ) -> tuple[PeftModelForCausalLM, str]:
     """Load the LoRA student trained by both finetuning stages."""
 
-    from peft import LoraConfig, PeftModel, get_peft_model
-
     base_model = _load_base_model(spec, dtype)
     if __debug__:
         expected_base_logits: Float[Tensor, "1 sequence vocab"] = _debug_logits(base_model)
@@ -197,8 +195,6 @@ def load_inference_model(
     dtype: torch.dtype,
 ) -> PreTrainedModel | PeftModelForCausalLM:
     """Load the stage-2 adapter used by held-out generation evaluation."""
-
-    from peft import PeftModel
 
     base_model = _load_base_model(spec, dtype)
     model: PreTrainedModel | PeftModelForCausalLM
