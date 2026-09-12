@@ -124,13 +124,27 @@ class PrefixKLTrainer(SFTTrainer):
         self._profile_memory(f"{stage} ready")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None) -> torch.Tensor | tuple[torch.Tensor, object]:
+        """Compute the prefix objective from inputs matching ``text_collator()``.
+
+        Another collator may be used, but it must produce these required fields::
+
+            {
+                "input_ids": Tensor[B, Q + M],         # Prefixed model token IDs.
+                "attention_mask": Tensor[B, Q + M],    # Mask for the prefixed model input.
+                "labels": Tensor[B, Q + M],            # Trainer routing labels; unused by this loss.
+                "base_input_ids": Tensor[B, M],        # Unprefixed teacher token IDs.
+                "base_attention_mask": Tensor[B, M],   # Mask for the teacher input.
+                "prefix_bits": list[str],              # B messages that select token-color boosts.
+                "do_encoding": list[bool],             # Whether to apply boosts to each example.
+                "prefix_length": int,                  # Q, used to align prefixed and teacher logits.
+            }
+        """
         self._profile_this_call = self._profile_calls < self.profile_memory_steps
         self._profile_calls += 1
         if self._profile_this_call and self.accelerator.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.accelerator.device)
         self._profile_memory("start")
-        # text_collator adds our prefix_bits, do_encoding, prefix_length, base_input_ids,
-        # and base_attention_mask; input_ids, attention_mask, and labels are standard.
+        # These fields are documented in the input schema above.
         bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
         M = inputs["base_input_ids"].shape[1]
         device = self.accelerator.device
