@@ -1,11 +1,15 @@
 """Continue pretraining Qwen3-4B-Base on a streaming FineWeb sample."""
 
 import os
+import sys
+from pathlib import Path
 
 import torch
-from data import load_fineweb
 from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb
 
 
 def main() -> None:
