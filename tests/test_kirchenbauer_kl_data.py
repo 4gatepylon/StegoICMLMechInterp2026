@@ -1,9 +1,10 @@
 import random
 
+import pytest
 import torch
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata, prefix_batch
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import text_collator
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
 def test_fixed_validation_prefix_metadata_is_reproducible() -> None:
@@ -25,7 +26,7 @@ def test_collator_preserves_validation_prefix_metadata() -> None:
         ids = [list(range(max_length or 4)) for _ in texts]
         return {"input_ids": torch.tensor(ids), "attention_mask": torch.ones_like(torch.tensor(ids))} if return_tensors else {"input_ids": ids}
 
-    batch = text_collator(examples, tokenizer, n_bits=4, max_length=12)
+    batch = prefix_bits_encoding_text_collator(examples, tokenizer, n_bits=4, max_length=12)
     assert batch["prefix_bits"] == ["0011", "1100"]
     assert batch["do_encoding"] == [False, True]
     assert batch["input_ids"].shape == batch["labels"].shape == (2, 12)
@@ -38,3 +39,9 @@ def test_training_prefixes_are_resampled() -> None:
     _, second_bits, second_gates = prefix_batch(["first", "second"], n_bits=8)
 
     assert (first_bits, first_gates) != (second_bits, second_gates)
+
+
+@pytest.mark.parametrize("collator", [None, lambda examples: examples])
+def test_trainer_requires_prefix_collator(collator) -> None:
+    with pytest.raises(ValueError, match="requires prefix_bits_encoding_text_collator"):
+        PrefixKLTrainer(data_collator=collator)

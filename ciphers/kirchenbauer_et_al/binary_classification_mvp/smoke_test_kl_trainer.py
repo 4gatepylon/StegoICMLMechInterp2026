@@ -10,7 +10,7 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, Qwen3Config, Qwen3ForCausalLM
 from trl import SFTConfig
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, text_collator
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
 def main() -> None:
@@ -36,7 +36,7 @@ def main() -> None:
             processing_class=tokenizer,
             train_dataset=dataset,
             eval_dataset=dataset,
-            data_collator=partial(text_collator, tokenizer=tokenizer, n_bits=8, max_length=48),
+            data_collator=partial(prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=8, max_length=48),
             peft_config=LoraConfig(task_type="CAUSAL_LM", r=2, target_modules=["q_proj", "v_proj"]),
             args=SFTConfig(
                 output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], f"prefix-kl-smoke-test-{loss_mode}"),

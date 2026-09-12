@@ -1,6 +1,7 @@
 """Minimal gated red/green KL trainer."""
 
 from contextlib import contextmanager
+from functools import partial
 from typing import Iterator, Literal
 
 import torch
@@ -14,13 +15,14 @@ DELTA = 1.0
 STRATEGY = "block"
 
 
-def text_collator(
+def prefix_bits_encoding_text_collator(
     examples: list[dict[str, object]],
     tokenizer,
     n_bits: int,
     max_length: int,
     concatenation_space: Literal["token", "character"] = "token",
 ) -> dict[str, object]:
+    """Build text batches for PrefixKLTrainer; this collator should be used with it."""
     texts = [example["text"] for example in examples]
     has_fixed_prefix = ["prefix_bits" in example or "do_encoding" in example for example in examples]
     if any(has_fixed_prefix):
@@ -68,6 +70,7 @@ class PrefixKLTrainer(SFTTrainer):
         delta: float = DELTA,
         strategy: Literal["block", "modulo"] = STRATEGY,
         profile_memory_steps: int = 0,
+        data_collator=None,
         **kwargs,
     ) -> None:
         if loss_mode not in {"nll", "ignore_prefix"}:
@@ -76,9 +79,12 @@ class PrefixKLTrainer(SFTTrainer):
             raise ValueError("n_bits must be positive and strategy must be 'block' or 'modulo'")
         if profile_memory_steps < 0:
             raise ValueError("profile_memory_steps must be nonnegative")
+        collator_function = data_collator.func if isinstance(data_collator, partial) else data_collator
+        if collator_function is not prefix_bits_encoding_text_collator:
+            raise ValueError("PrefixKLTrainer requires prefix_bits_encoding_text_collator")
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
         self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, data_collator=data_collator, **kwargs)
         # This loss ignores num_items_in_batch, so retain "default batch size reduction":
         # https://huggingface.co/docs/transformers/v5.17.0/en/main_classes/trainer#transformers.Trainer.compute_loss
         self.model_accepts_loss_kwargs = False
@@ -124,9 +130,9 @@ class PrefixKLTrainer(SFTTrainer):
         self._profile_memory(f"{stage} ready")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None) -> torch.Tensor | tuple[torch.Tensor, object]:
-        """Compute the prefix objective from inputs matching ``text_collator()``.
+        """Compute the prefix objective from ``prefix_bits_encoding_text_collator()`` inputs.
 
-        Another collator may be used, but it must produce these required fields::
+        ``prefix_bits_encoding_text_collator()`` produces these required fields::
 
             {
                 "input_ids": Tensor[B, Q + M],         # Prefixed model token IDs.
@@ -144,7 +150,7 @@ class PrefixKLTrainer(SFTTrainer):
         if self._profile_this_call and self.accelerator.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.accelerator.device)
         self._profile_memory("start")
-        # These fields are documented in the input schema above.
+        # These fields are documented in this function's docstring.
         bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
         M = inputs["base_input_ids"].shape[1]
         device = self.accelerator.device
