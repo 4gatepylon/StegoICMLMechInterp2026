@@ -344,3 +344,12 @@ python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb 
 `--learning-rate`, `--per-device-batch-size`, and `--gradient-accumulation-steps`
 spellings are also accepted. If gradient accumulation is omitted, it is derived
 from `--global-batch-size`, which defaults to 32 for backward compatibility.
+
+Its decode callback periodically generates from fixed enabled messages, shards the
+samples across distributed processes, gathers predictions, and logs
+`eval/decode_bit_accuracy`, `eval/decode_message_accuracy`, and
+`eval/decode_auroc` to Weights & Biases. `--eval-decode-steps` controls the
+interval and `--eval-decode-samples` controls the global sample count. Block
+decoding spans the complete trained data-token range so every message bit is
+evaluated; `--eval-decode-tokens` can shorten that range only with the modulo
+strategy.
