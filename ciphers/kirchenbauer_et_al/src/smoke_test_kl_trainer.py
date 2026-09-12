@@ -10,7 +10,7 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, Qwen3Config, Qwen3ForCausalLM
 from trl import SFTConfig
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
+from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
 def main() -> None:

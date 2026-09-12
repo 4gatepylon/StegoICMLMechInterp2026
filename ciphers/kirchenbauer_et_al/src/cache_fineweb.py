@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveInt, StringConstraint
 
 FINEWEB_REVISION = "9bb295ddab0e05d785b879661af7260fed5140fc"
 CACHE_FORMAT_VERSION = 1
-CACHE_BUILD_MODULE = "ciphers.kirchenbauer_et_al.binary_classification_mvp.cache_fineweb"
+CACHE_BUILD_MODULE = "ciphers.kirchenbauer_et_al.src.cache_fineweb"
 CacheName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.cache_fineweb import (
+from ciphers.kirchenbauer_et_al.src.cache_fineweb import (
     FineWebCacheConfig,
     FineWebCacheManifest,
     build_fineweb_cache,
@@ -86,7 +86,7 @@ def test_unavailable_cache_reports_build_command(
     with pytest.raises(FileNotFoundError) as error:
         load_fineweb_cache("unavailable")
 
-    assert "python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.cache_fineweb" in str(error.value)
+    assert "python -m ciphers.kirchenbauer_et_al.src.cache_fineweb" in str(error.value)
     assert "--cache-name unavailable --documents 100000" in str(error.value)
 
 
