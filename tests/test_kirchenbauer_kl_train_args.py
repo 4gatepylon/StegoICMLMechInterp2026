@@ -14,7 +14,17 @@ def test_optimization_knob_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["train_kl_fineweb.py", "--lr", "0.001", "--batch-size", "4", "--grad-accum-steps", "8"],
+        [
+            "train_kl_fineweb.py",
+            "--dataset-cache-name",
+            "test-cache",
+            "--lr",
+            "0.001",
+            "--batch-size",
+            "4",
+            "--grad-accum-steps",
+            "8",
+        ],
     )
 
     args = parse_args()
@@ -22,6 +32,13 @@ def test_optimization_knob_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.learning_rate == 0.001
     assert args.per_device_batch_size == 4
     assert gradient_accumulation_steps(args, world_size=2) == 8
+
+
+def test_dataset_cache_name_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train_kl_fineweb.py"])
+
+    with pytest.raises(SystemExit):
+        parse_args()
 
 
 def test_gradient_accumulation_defaults_to_global_batch_size() -> None:

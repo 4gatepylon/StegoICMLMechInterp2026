@@ -325,6 +325,36 @@ and an independent uniform gate. Prefix-only warmup fixes the gate to no while
 continuing to sample random bits. Validation uses a fixed, disjoint dataset and
 reports prefix loss, data loss, decode accuracy, and AUROC.
 
+## Usage
+
+The KL trainer reads FineWeb documents from a bounded local cache so distributed
+workers do not independently stream remote Parquet shards. Build the cache once
+in a single process, without `torchrun`; this example stores 321,000 raw
+documents under `$STEGO_ARTIFACTS_DIR/datasets/fineweb/qwen-kl-321k`:
+
+```bash
+python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.cache_fineweb \
+  --cache-name qwen-kl-321k \
+  --documents 321000
+```
+
+Then launch training with the completed cache:
+
+```bash
+torchrun --standalone --nproc-per-node=4 \
+  ciphers/kirchenbauer_et_al/binary_classification_mvp/train_kl_fineweb.py \
+  --dataset-cache-name qwen-kl-321k
+```
+
+The trainer requires one cached document for every example it will consume:
+`validation samples + max steps * effective global batch size`. Thus the
+defaults require 321,000 documents. Cache construction stores only the raw
+`text` field in incremental Parquet parts, reads source documents sequentially
+to avoid opening many remote shards, and writes `_SUCCESS` last. The trainer
+refuses to use an absent, incomplete, undersized, or malformed cache and prints
+a build command with the required document count. Cache loading streams and
+shuffles the local Parquet files; it does not contact Hugging Face.
+
 ## Validations
 
 - The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
@@ -338,6 +368,7 @@ For example, its main optimization knobs can be set directly:
 
 ```bash
 python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+  --dataset-cache-name qwen-kl-321k \
   --lr 1e-4 --batch-size 2 --grad-accum-steps 16
 ```
 

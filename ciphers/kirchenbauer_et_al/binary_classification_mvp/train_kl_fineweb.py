@@ -13,7 +13,8 @@ from transformers import AutoTokenizer
 from trl import SFTConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata, load_fineweb  # noqa: E402
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.cache_fineweb import load_fineweb_cache  # noqa: E402
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata  # noqa: E402
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, prefix_bits_encoding_text_collator  # noqa: E402
 
 
@@ -22,6 +23,11 @@ def parse_args() -> argparse.Namespace:
     add = parser.add_argument
     add("--model", default="Qwen/Qwen3-4B-Base")
     add("--run-name", default="qwen3-4b-fineweb-prefix-kl-lora")
+    add(
+        "--dataset-cache-name",
+        required=True,
+        help="completed cache below $STEGO_ARTIFACTS_DIR/datasets/fineweb",
+    )
     add("--loss-mode", choices=("nll", "ignore_prefix"), default="nll")
     add("--strategy", choices=("block", "modulo"), default="block")
     add("--concatenation-space", choices=("token", "character"), default="token")
@@ -79,9 +85,10 @@ def main() -> None:
     grad_accumulation_steps = gradient_accumulation_steps(args, world_size)
     if args.wandb_project is not None:
         os.environ["WANDB_PROJECT"] = args.wandb_project
+    required_documents = args.validation_samples + args.max_steps * args.per_device_batch_size * world_size * grad_accumulation_steps
+    dataset = load_fineweb_cache(args.dataset_cache_name, minimum_documents=required_documents)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
-    dataset = load_fineweb()
     validation_dataset = dataset.take(args.validation_samples).map(
         fixed_prefix_metadata,
         with_indices=True,
