@@ -4,6 +4,7 @@ import os
 
 import torch
 from datasets import load_dataset
+from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
 
 
@@ -18,17 +19,18 @@ def main() -> None:
     trainer = SFTTrainer(
         model="Qwen/Qwen3-4B-Base",
         train_dataset=dataset,
+        peft_config=LoraConfig(task_type="CAUSAL_LM", r=32, lora_alpha=16, lora_dropout=0.05, target_modules="all-linear"),
         args=SFTConfig(
-            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb"),
-            run_name="qwen3-4b-fineweb",
+            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb-lora"),
+            run_name="qwen3-4b-fineweb-lora",
             report_to="wandb",
             max_steps=10_000,
             max_length=2_048,
             packing=True,
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,
-            learning_rate=2e-5,
-            warmup_ratio=0.03,
+            learning_rate=2e-4,
+            warmup_steps=300,
             bf16=True,
             gradient_checkpointing=True,
             logging_steps=10,
