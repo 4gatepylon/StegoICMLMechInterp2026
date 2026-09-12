@@ -104,7 +104,7 @@ def train(
         for batch in shuffled_batches(data, batch_size=B):
             # Each example independently samples a message, then pads it to K bits.
             bits = [expand(u(K), K) for _ in range(B)]                 # [B, K]
-            prefixed = torch.stack([prefix(z, d) for z, d in zip(bits, batch)])
+            prefixed = torch.stack([prefix(z, d) for z, d in zip(bits, batch)])  # Every prefix has the same token length.
             Q = prefixed.shape[1] - M
 
             # causal_logprobs aligns each distribution with the token it predicts.
