@@ -377,3 +377,16 @@ python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb 
 `--learning-rate`, `--per-device-batch-size`, and `--gradient-accumulation-steps`
 spellings are also accepted. If gradient accumulation is omitted, it is derived
 from `--global-batch-size`, which defaults to 32 for backward compatibility.
+
+The official run keeps the existing objective and model defaults while training
+for 1,024 steps at global batch size 128 and per-device batch size 2. It writes
+four retained checkpoints at steps 256, 512, 768, and 1,024:
+
+```bash
+python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+  --config ciphers/kirchenbauer_et_al/experiments/official_training_run.yaml \
+  --dataset-cache-name qwen-kl-321k
+```
+
+At the configured maximum sequence length, the run processes 536,870,912 padded
+sequence tokens. The actual number of non-padding FineWeb tokens may be lower.

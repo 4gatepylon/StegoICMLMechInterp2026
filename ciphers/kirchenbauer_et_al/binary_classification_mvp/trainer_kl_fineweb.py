@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from trl import SFTTrainer
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import prefix_batch, tokenize_with_prefix
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.data_kl_fineweb import prefix_batch, tokenize_with_prefix
 
 N_BITS = 8
 DELTA = 1.0

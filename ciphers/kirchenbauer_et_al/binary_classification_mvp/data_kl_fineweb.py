@@ -1,4 +1,4 @@
-"""FineWeb loading and control-prefix preprocessing."""
+"""FineWeb loading and control-prefix preprocessing for prefix-KL training."""
 
 import random
 from typing import Literal
