@@ -191,11 +191,6 @@ GREEN is a fixed subset containing half of the V vocabulary tokens; RED is its
 fixed complement. delta is the additive log-probability boost.
 
 ```python
-def prepend_one_hot_prefix_logprobs(original_logprobs, prefix_tokens):
-    prefix_logprobs = F.one_hot(prefix_tokens, original_logprobs.shape[-1]).to(original_logprobs).log()
-    return torch.cat((prefix_logprobs, original_logprobs), dim=1)
-
-
 def divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_tokens, Q, alpha):
     prefix_nll = -student_logprobs[:, :Q].gather(
         dim=-1,
@@ -203,7 +198,7 @@ def divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_tokens,
     ).squeeze(-1).mean()
     data_kl = F.kl_div(
         student_logprobs[:, Q:],
-        target_logprobs[:, Q:].exp(),
+        target_logprobs.exp(),
         reduction="none",
     ).sum(dim=-1).mean()
     return prefix_nll + alpha * data_kl
@@ -212,7 +207,7 @@ def divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_tokens,
 def divergence_ignoring_prefix(student_logprobs, target_logprobs, Q):
     return F.kl_div(
         student_logprobs[:, Q:],
-        target_logprobs[:, Q:].exp(),
+        target_logprobs.exp(),
         reduction="none",
     ).sum(dim=-1).mean()
 
@@ -232,6 +227,8 @@ def train(
     B,
     E,
     delta,
+    alpha,
+    loss_mode,
     GREEN,
     RED,
 ):
@@ -252,37 +249,30 @@ def train(
 
             student_logprobs = causal_logprobs(model(prefixed))       # [B, Q + M, V]
 
-            # Prefix positions use one-hot targets for their actual tokens. Data
-            # positions initially use the adapter-free model's distributions.
-            target_logprobs = prepend_one_hot_prefix_logprobs(
-                original_logprobs,
-                prefixed[:, :Q],
-            )                                                         # [B, Q + M, V]
+            target_logprobs = original_logprobs.clone()               # [B, M, V]
 
             for row, (enabled, message) in enumerate(zip(do_encoding, bits)):
                 if not enabled:
                     continue
                 for j, bit in enumerate(message):
-                    positions = Q + parts[j]  # Shift data-token indices past the Q prefix tokens.
+                    positions = parts[j]
                     color = GREEN if bit == 0 else RED
                     target_logprobs[row, positions[:, None], color] += delta
 
             target_logprobs = target_logprobs.log_softmax(dim=-1)
-            token_kl = F.kl_div(
-                student_logprobs,
-                target_logprobs.exp(),
-                reduction="none",
-            ).sum(dim=-1)                                             # [B, Q + M]
-
-            loss = token_kl.mean()
+            loss = (
+                divergence_with_prefix_nll(student_logprobs, target_logprobs, prefixed[:, :Q], Q, alpha)
+                if loss_mode == "nll"
+                else divergence_ignoring_prefix(student_logprobs, target_logprobs, Q)
+            )
             loss.backward()  # Apply the configured gradient accumulation here.
             optimizer.step()
             optimizer.zero_grad()
 
             log_metrics(
                 loss=loss,
-                prefix_loss=token_kl[:, :Q].mean(),
-                data_loss=token_kl[:, Q:].mean(),
+                prefix_loss=...,
+                data_loss=...,
                 decode_accuracy=decode_accuracy(...),
                 decode_auroc=decode_auroc(...),
             )
@@ -307,3 +297,5 @@ reports prefix loss, data loss, decode accuracy, and AUROC.
 The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
 checks both gate values and every bitstring for its configurable `N_BITS`, confirming
 that all prefixes have the same tokenized length and printing their token boundaries.
+The production [FineWeb KL trainer](binary_classification_mvp/train_kl_fineweb.py)
+exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
