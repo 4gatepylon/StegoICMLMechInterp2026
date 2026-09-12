@@ -11,6 +11,8 @@ from trl import SFTConfig, SFTTrainer
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb, prefix_batch  # noqa: E402
 
+N_BITS = 10
+
 
 def main() -> None:
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -19,7 +21,7 @@ def main() -> None:
     per_device_batch_size = min(8, 32 // world_size)
     trainer = SFTTrainer(
         model="Qwen/Qwen3-4B-Base",
-        train_dataset=load_fineweb().map(lambda batch: {"text": prefix_batch(batch["text"], 10, False)[0]}, batched=True),
+        train_dataset=load_fineweb().map(lambda batch: {"text": prefix_batch(batch["text"], N_BITS, False)[0]}, batched=True),
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=32, lora_alpha=16, lora_dropout=0.05, target_modules="all-linear"),
         args=SFTConfig(
             output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb-no-encoding-prefix-lora"),
