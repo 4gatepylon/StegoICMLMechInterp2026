@@ -1,6 +1,5 @@
+# ruff: noqa: F722, F821  # jaxtyping shape strings are not Python expressions.
 """The small TRL trainer used by both LoRA distillation stages."""
-
-from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -9,6 +8,8 @@ from typing import Any, Sequence
 import torch
 import torch.nn.functional as F
 from datasets import Dataset
+from jaxtyping import Float
+from torch import Tensor
 from trl import SFTConfig, SFTTrainer
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import save_experiment_config
@@ -45,9 +46,9 @@ class ShiftDistillationTrainer(SFTTrainer):
 
         self.signals = tuple(signals)
         self.prefix_ids = {signal: torch.tensor(prefix_ids[signal], dtype=torch.long) for signal in self.signals}
-        self.delta_vectors: dict[int, torch.Tensor] = {}
+        self.delta_vectors: dict[int, Float[Tensor, "vocab"]] = {}
         for signal in self.signals:
-            shift = torch.zeros(self.model.config.vocab_size, dtype=torch.float32)
+            shift: Float[Tensor, "vocab"] = torch.zeros(self.model.config.vocab_size, dtype=torch.float32)
             if signal == RED_SIGNAL:
                 shift[list(partition.red_ids)] = delta
             elif signal == GREEN_SIGNAL:
@@ -60,10 +61,10 @@ class ShiftDistillationTrainer(SFTTrainer):
     def compute_loss(
         self,
         model: Any,
-        inputs: dict[str, torch.Tensor],
+        inputs: dict[str, Tensor],
         return_outputs: bool = False,
-        num_items_in_batch: torch.Tensor | None = None,
-    ) -> torch.Tensor | tuple[torch.Tensor, Any]:
+        num_items_in_batch: Tensor | None = None,
+    ) -> Float[Tensor, ""] | tuple[Float[Tensor, ""], Any]:
         raw = {key: inputs[key] for key in ("input_ids", "attention_mask") if key in inputs}
         raw["use_cache"] = False
 
@@ -72,7 +73,7 @@ class ShiftDistillationTrainer(SFTTrainer):
         try:
             model.eval()
             with torch.no_grad(), peft_model.disable_adapter():
-                teacher_logits = model(**raw).logits[:, :-1, :].float()
+                teacher_logits: Float[Tensor, "batch token vocab"] = model(**raw).logits[:, :-1, :].float()
         finally:
             model.train(was_training)
 
@@ -92,16 +93,16 @@ class ShiftDistillationTrainer(SFTTrainer):
 
             outputs = model(**student_inputs)
             prefix_length = prefix.shape[1]
-            student_logits = outputs.logits[:, prefix_length : prefix_length + teacher_logits.shape[1], :].float()
-            log_q = F.log_softmax(
+            student_logits: Float[Tensor, "batch token vocab"] = outputs.logits[:, prefix_length : prefix_length + teacher_logits.shape[1], :].float()
+            log_q: Float[Tensor, "batch token vocab"] = F.log_softmax(
                 teacher_logits + self.delta_vectors[signal].to(teacher_logits.device),
                 dim=-1,
             )
-            log_p = F.log_softmax(student_logits, dim=-1)
-            token_kl = F.kl_div(log_p, log_q, log_target=True, reduction="none").sum(dim=-1)
+            log_p: Float[Tensor, "batch token vocab"] = F.log_softmax(student_logits, dim=-1)
+            token_kl: Float[Tensor, "batch token"] = F.kl_div(log_p, log_q, log_target=True, reduction="none").sum(dim=-1)
             losses.append((token_kl * valid).sum() / valid.sum().clamp_min(1))
 
-        loss = torch.stack(losses).mean()
+        loss: Float[Tensor, ""] = torch.stack(losses).mean()
         return (loss, outputs) if return_outputs else loss
 
 

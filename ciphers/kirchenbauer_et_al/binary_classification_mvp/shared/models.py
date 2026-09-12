@@ -1,6 +1,5 @@
-"""Device handling, Hugging Face model loading, and LoRA teacher passes."""
-
-from __future__ import annotations
+# ruff: noqa: F722  # jaxtyping shape strings are not Python expressions.
+"""Device handling and Hugging Face/PEFT model loading."""
 
 import json
 from pathlib import Path
@@ -8,6 +7,8 @@ from typing import Any
 
 import torch
 import yaml
+from jaxtyping import Float, Int
+from torch import Tensor
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import ModelSpec
 
@@ -116,7 +117,7 @@ def describe_model_spec(spec: ModelSpec) -> str:
     return f"random:{spec.initialization_seed}:{spec.config!s}"
 
 
-def _debug_logits(model: Any) -> torch.Tensor:
+def _debug_logits(model: Any) -> Float[Tensor, "1 sequence vocab"]:
     """Run a tiny deterministic forward used only by debug assertions."""
 
     was_training = model.training
@@ -124,11 +125,12 @@ def _debug_logits(model: Any) -> torch.Tensor:
     vocab_size = model.config.vocab_size
     bos_token_id = model.config.bos_token_id
     first_token = bos_token_id if bos_token_id is not None else 0
-    input_ids = torch.tensor([[first_token, 0, 1, 2]], dtype=torch.long)
+    input_ids: Int[Tensor, "1 4"] = torch.tensor([[first_token, 0, 1, 2]], dtype=torch.long)
     if max(input_ids.flatten()) >= vocab_size:
         input_ids %= vocab_size
+    attention_mask: Int[Tensor, "1 4"] = torch.ones_like(input_ids)
     with torch.inference_mode():
-        logits = model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids)).logits.detach().cpu()
+        logits: Float[Tensor, "1 sequence vocab"] = model(input_ids=input_ids, attention_mask=attention_mask).logits.detach().cpu()
     if was_training:
         model.train()
     return logits
@@ -147,14 +149,14 @@ def load_trainable_lora_model(
 
     base_model = _load_base_model(spec, dtype)
     if __debug__:
-        expected_base_logits = _debug_logits(base_model)
+        expected_base_logits: Float[Tensor, "1 sequence vocab"] = _debug_logits(base_model)
     if adapter_path is not None:
         model = PeftModel.from_pretrained(base_model, adapter_path, is_trainable=True)
     else:
         model = get_peft_model(base_model, lora_config)
     if __debug__:
         with model.disable_adapter():
-            disabled_adapter_logits = _debug_logits(model)
+            disabled_adapter_logits: Float[Tensor, "1 sequence vocab"] = _debug_logits(model)
         assert torch.equal(expected_base_logits, disabled_adapter_logits), (
             "Disabling LoRA did not reproduce the pristine base-model logits; "
             f"maximum difference={float((expected_base_logits - disabled_adapter_logits).abs().max())}"
