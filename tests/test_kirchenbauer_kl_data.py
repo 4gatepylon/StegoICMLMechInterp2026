@@ -3,8 +3,8 @@ import random
 import pytest
 import torch
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata, prefix_batch
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, prefix_bits_encoding_text_collator
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata, prefix_batch
+from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
 def test_fixed_validation_prefix_metadata_is_reproducible() -> None:

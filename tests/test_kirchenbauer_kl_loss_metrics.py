@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import (
+from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import (
     PrefixKLTrainer,
     divergence_ignoring_prefix,
     divergence_with_prefix_nll,

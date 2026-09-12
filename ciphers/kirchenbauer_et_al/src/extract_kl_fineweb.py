@@ -1,4 +1,4 @@
-"""Extract one bit from a block of Kirchenbauer-encoded text."""
+"""Extract one bit from a block of Kirchenbauer-encoded FineWeb text."""
 
 from contextlib import nullcontext
 
@@ -37,9 +37,7 @@ def probability_of_bit(
     red = red.to(device=device, dtype=torch.long)
     green = green.to(device=device, dtype=torch.long)
     vocab_ids = torch.cat((red, green))
-    assert torch.equal(vocab_ids.sort().values, torch.arange(logprobs.shape[-1], device=device)), (
-        "red and green must cover every vocabulary token exactly once"
-    )
+    assert torch.equal(vocab_ids.sort().values, torch.arange(logprobs.shape[-1], device=device)), "red and green must cover every vocabulary token exactly once"
 
     observed = input_ids[0, 1:].to(device)
     scores = []

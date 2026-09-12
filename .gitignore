@@ -10,3 +10,6 @@ deleteme*
 # Make sure to ignore private/secret variables
 .env
 .env**
+
+# Artifacts/weights/outputs/data folders
+ciphers/kirchenbauer_et_al/src/artifacts/

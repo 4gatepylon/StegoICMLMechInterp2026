@@ -2,7 +2,7 @@
 
 ## General best practices
 
-1. All imports must be relative to the repo root (for example `from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb`).
+1. All imports must be relative to the repo root (for example `from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import load_fineweb`).
 2. All agents must add their name as a suffix to the title of each PR and/or commit they create (for example, `Add evaluation metrics [Codex]`).
 3. Use the `stego` Conda environment. If it does not exist, stop and ask the user to create it with `conda create -n stego python=3.12 -y`.
 4. Use Pydantic or pydantic-yaml for configuration schemas. Do not implement ad hoc dictionary merging or validators such as `_check_no_reserved`.
@@ -16,6 +16,7 @@
 2. Based on the clarified interface, propose the tests and ask the user to clarify them before implementation.
 3. State exactly what the tests cover and what they omit.
 4. Tests must describe their test space and chosen partitions clearly and succinctly.
+5. Tests are meant to reduce the chance of bugs. Do not add tests that merely assert that a constant or default argument equals its declared value; test behavior or a meaningful contract instead.
 
 ## Paths in code
 

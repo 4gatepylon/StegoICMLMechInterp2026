@@ -1,4 +1,4 @@
-"""Continue-pretrain Qwen3-4B-Base on FineWeb with no-encoding prefixes.
+"""SFT-train Qwen3-4B-Base on FineWeb with no-encoding prefixes.
 
 It holds out validation documents and lazily prepends fresh random fixed-width bits.
 LoRA minimizes next-token NLL on prefix and text so loss is low with
@@ -14,10 +14,10 @@ from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb, prefix_batch  # noqa: E402
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import load_fineweb, prefix_batch  # noqa: E402
 
 N_BITS = 8
-N_VALIDATION_SAMPLES = 1_000
+N_VALIDATION_SAMPLES = 256
 
 
 def main() -> None:
@@ -27,7 +27,9 @@ def main() -> None:
     per_device_batch_size = min(8, 32 // world_size)
     dataset = load_fineweb()
 
-    add_prefix = lambda batch: {"text": prefix_batch(batch["text"], N_BITS, False)[0]}
+    def add_prefix(batch):
+        return {"text": prefix_batch(batch["text"], N_BITS, False)[0]}
+
     train_dataset = dataset.skip(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
     validation_dataset = dataset.take(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
     trainer = SFTTrainer(
