@@ -362,9 +362,8 @@ torchrun --standalone --nproc-per-node=4 \
 ```
 
 The trainer requires one cached document for every example it will consume:
-`validation samples + max steps * effective global batch size`. The generic
-defaults require 320,256 documents, while each supplied bit-width experiment
-requires 131,328, so the default 500,000-document cache covers both. Cache
+`validation samples + max steps * effective global batch size`. The default
+500,000-document cache covers most of our use cases. Cache
 construction reads source documents sequentially to avoid opening many remote
 shards and writes `_SUCCESS` last. The trainer always verifies the cache and
 refuses absent, incomplete, undersized, obsolete, or malformed caches. Cache
