@@ -3,26 +3,19 @@
 import os
 
 import torch
-from datasets import load_dataset
+from data import load_fineweb
 from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
 
 
 def main() -> None:
-    dataset = load_dataset(
-        "HuggingFaceFW/fineweb",
-        name="sample-10BT",
-        split="train",
-        streaming=True,
-    ).shuffle(seed=42, buffer_size=10_000)
-
     trainer = SFTTrainer(
         model="Qwen/Qwen3-4B-Base",
-        train_dataset=dataset,
+        train_dataset=load_fineweb(None),
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=32, lora_alpha=16, lora_dropout=0.05, target_modules="all-linear"),
         args=SFTConfig(
-            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb-lora"),
-            run_name="qwen3-4b-fineweb-lora",
+            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb-none-prefix-lora"),
+            run_name="qwen3-4b-fineweb-none-prefix-lora",
             report_to="wandb",
             max_steps=10_000,
             max_length=2_048,
