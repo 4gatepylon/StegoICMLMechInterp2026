@@ -11,9 +11,9 @@ from transformers import AutoTokenizer
 from trl import SFTConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.configuration_kl_fineweb import gradient_accumulation_steps, parse_args  # noqa: E402
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data_kl_fineweb import fixed_prefix_metadata, load_fineweb  # noqa: E402
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator  # noqa: E402
+from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import gradient_accumulation_steps, parse_args  # noqa: E402
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata, load_fineweb  # noqa: E402
+from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator  # noqa: E402
 
 
 def main() -> None:

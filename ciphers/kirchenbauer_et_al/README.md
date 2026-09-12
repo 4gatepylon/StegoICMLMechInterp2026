@@ -3,8 +3,20 @@
 Experiments based on [A Watermark for Large Language
 Models](https://proceedings.mlr.press/v202/kirchenbauer23a.html).
 
-The [binary classification MVP](binary_classification_mvp/) trains a Qwen base
-model to select one of two fixed red/green policies from a literal text prefix.
+The [Bitstring Encode/Decode MVP](src/) trains a Qwen base model to follow a
+bitstring control prefix using per-bit red/green token policies.
+
+```text
+src/
+├── configuration_kl_fineweb.py       # Defines and validates configuration for KL training on FineWeb.
+├── data_kl_fineweb.py                # Loads FineWeb and prepares control-prefixed model inputs.
+├── extract_kl_fineweb.py             # Computes one-bit posteriors from encoded FineWeb text.
+├── inspect_prefix_tokenization.ipynb # Inspects how the tokenizer represents control prefixes.
+├── smoke_test_kl_trainer.py          # Runs one lightweight CPU training step through the KL trainer.
+├── train_kl_fineweb.py               # Launches configurable prefix-KL LoRA training on FineWeb.
+├── train_sft_fineweb.py              # Launches baseline SFT on FineWeb with encoding disabled.
+└── trainer_kl_fineweb.py             # Implements the gated red/green KL trainer and data collator.
+```
 
 ## Extracting one bit
 
@@ -159,7 +171,7 @@ on a color can vary with the preceding text. Omitting it reduces extraction to
 counting RED and GREEN tokens and can overstate evidence from positions where
 the base model already strongly preferred one color.
 
-The runnable implementation is [`binary_classification_mvp/extract.py`](binary_classification_mvp/extract.py).
+The runnable implementation is [`src/extract_kl_fineweb.py`](src/extract_kl_fineweb.py).
 
 ## Mathematical KL training objective
 
@@ -327,17 +339,17 @@ reports prefix loss, data loss, decode accuracy, and AUROC.
 
 ## Validations
 
-- The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
+- The [prefix-tokenization notebook](src/inspect_prefix_tokenization.ipynb)
   checks both gate values and every bitstring for its configurable `N_BITS`, confirming
   that all prefixes have the same tokenized length and printing their token boundaries.
 - It also checks 100 FineWeb examples and every bitstring up to `N_BITS`, asserting
   that token- and character-space concatenation produce identical model inputs.
-- The production [FineWeb KL trainer](binary_classification_mvp/train_kl_fineweb.py)
+- The production [FineWeb KL trainer](src/train_kl_fineweb.py)
   exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
 For example, its main optimization knobs can be set directly:
 
 ```bash
-python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
   --lr 1e-4 --batch-size 2 --grad-accum-steps 16
 ```
 
@@ -356,28 +368,28 @@ writes four retained checkpoints at steps 256, 512, 768, and 1,024.
 ### 1 bit
 
 ```bash
-python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
   --config ciphers/kirchenbauer_et_al/experiments/one_bit_training_run.yaml
 ```
 
 ### 2 bits
 
 ```bash
-python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
   --config ciphers/kirchenbauer_et_al/experiments/two_bit_training_run.yaml
 ```
 
 ### 4 bits
 
 ```bash
-python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
   --config ciphers/kirchenbauer_et_al/experiments/four_bit_training_run.yaml
 ```
 
 ### 8 bits
 
 ```bash
-python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
   --config ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml
 ```
 

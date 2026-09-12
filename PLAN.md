@@ -18,7 +18,7 @@ Immediate next steps:
 - Reject very short documents (caching pipeline from ^ should support some kind of filtering, etc...)
 - Log data statsitics and examples via ipynb somewhere
 - Add hyper-parameter sweep support for `{lrs} x {batch size} x {nll enabled, nll disabled} x {modulus, chunk/block}`
-- Add other useful metric logging to trainer such as expected red/green, 
+- Add other useful metric logging to trainer such as expected red/green,
 - Add support for sampler-based experiment with encoder/decoder accuracy and red/green distributions
 - Add plotting scripts for ^ and to generate the outputs for our first 2 (X, Y) experiments.
 
