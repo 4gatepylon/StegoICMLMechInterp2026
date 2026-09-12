@@ -38,22 +38,48 @@ data:
   dataset_seed: 42
   shuffle_buffer_size: 100
 
-training:
+distillation:
   delta: 2.0
   vocab_seed: 42
-  training_seed: 1234
-  epochs: 1
+  max_eval_sequences: 1
+
+lora:
+  task_type: CAUSAL_LM
+  target_modules: all-linear
+  r: 2
+  lora_alpha: 4
+  lora_dropout: 0.0
+  bias: none
+
+# Validated directly as trl.SFTConfig. The stage-specific artifact directory
+# replaces output_dir at runtime.
+training:
+  output_dir: trainer_output
+  use_cpu: true
+  bf16: false
+  fp16: false
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 1
+  num_train_epochs: 1
   learning_rate: 0.001
   weight_decay: 0.0
   max_grad_norm: 1.0
-  lora_rank: 2
-  lora_alpha: 4
-  lora_dropout: 0.0
-  logit_chunk_size: 4
-  log_every_steps: 1
-  eval_every_steps: 0
-  max_eval_sequences: 1
+  lr_scheduler_type: constant
+  logging_first_step: true
+  logging_steps: 1
+  eval_strategy: "no"
+  save_strategy: "no"
+  seed: 1234
   max_steps: 1
+  gradient_checkpointing: false
+  max_length: null
+  packing: false
+  padding_free: false
+  completion_only_loss: false
+  loss_type: nll
+  use_liger_kernel: false
+  report_to: none
 
 generation:
   sampling_seed: 2026

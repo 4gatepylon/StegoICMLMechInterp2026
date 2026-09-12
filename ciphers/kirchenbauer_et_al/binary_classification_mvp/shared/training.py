@@ -1,291 +1,136 @@
-"""Teacher-forced evaluation and the shared LoRA distillation loop."""
+"""The small TRL trainer used by both LoRA distillation stages."""
 
 from __future__ import annotations
 
-import random
-import statistics
+import os
 from pathlib import Path
 from typing import Any, Sequence
 
 import torch
+import torch.nn.functional as F
+from datasets import Dataset
+from trl import SFTConfig, SFTTrainer
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import (
-    append_jsonl,
-    save_experiment_config,
-)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import save_experiment_config
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import (
     ColorPartition,
     build_color_partition,
     tokenize_prefixes,
 )
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import SIGNAL_NAMES
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import (
-    CorpusConfig,
-    CorpusSplits,
-    TextExample,
-)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import GREEN_SIGNAL, RED_SIGNAL
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import CorpusConfig, CorpusSplits, TextExample
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
     clear_device_cache,
     load_trainable_lora_model,
-    reference_logits_with_disabled_adapter,
-    resolve_device,
-    resolve_dtype,
-)
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.objectives import (
-    distribution_metrics,
-    validate_probability_mass,
-)
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.tracking import (
-    finish_wandb,
-    init_wandb_from_args,
-    log_metric_records,
 )
 
 
-def _average_records(records: Sequence[dict[str, Any]]) -> dict[str, float]:
-    if not records:
-        raise ValueError("Cannot average an empty record sequence")
-    keys = ("kl", "expected_red", "expected_green", "expected_uncolored", "red_rate", "green_rate", "token_count")
-    return {key: statistics.fmean(float(record[key]) for record in records) for key in keys}
+class ShiftDistillationTrainer(SFTTrainer):
+    """Distill fixed vocabulary shifts into prefix-conditioned LoRA weights."""
 
+    def __init__(
+        self,
+        *args: Any,
+        signals: Sequence[int],
+        prefix_ids: dict[int, tuple[int, ...]],
+        partition: ColorPartition,
+        delta: float,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        if not signals:
+            raise ValueError("At least one signal is required")
+        if delta <= 0:
+            raise ValueError("delta must be positive")
 
-def add_training_arguments(parser: Any) -> None:
-    parser.add_argument("--device", default="auto")
-    parser.add_argument(
-        "--dtype",
-        choices=("auto", "bfloat16", "float16", "float32"),
-        default="auto",
-    )
-    parser.add_argument("--delta", type=float, default=2.0)
-    parser.add_argument("--vocab-seed", type=int, default=42)
-    parser.add_argument("--training-seed", type=int, default=1234)
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--weight-decay", type=float, default=0.0)
-    parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--lora-rank", type=int, default=16)
-    parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--lora-dropout", type=float, default=0.05)
-    parser.add_argument("--logit-chunk-size", type=int, default=32)
-    parser.add_argument("--log-every-steps", type=int, default=8)
-    parser.add_argument("--eval-every-steps", type=int, default=32)
-    parser.add_argument("--max-eval-sequences", type=int, default=16)
-    parser.add_argument(
-        "--wandb-mode",
-        choices=("disabled", "online", "offline"),
-        default="disabled",
-    )
-    parser.add_argument("--wandb-project", default="stego-kirchenbauer-binary-classification")
-    parser.add_argument("--wandb-run-name", default="qwen3-4b-base-fineweb-64k")
-    parser.add_argument("--wandb-entity")
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=None,
-        help="Optional smoke-test cap; by default all configured epochs are run.",
-    )
+        self.signals = tuple(signals)
+        self.prefix_ids = {signal: torch.tensor(prefix_ids[signal], dtype=torch.long) for signal in self.signals}
+        self.delta_vectors: dict[int, torch.Tensor] = {}
+        for signal in self.signals:
+            shift = torch.zeros(self.model.config.vocab_size, dtype=torch.float32)
+            if signal == RED_SIGNAL:
+                shift[list(partition.red_ids)] = delta
+            elif signal == GREEN_SIGNAL:
+                shift[list(partition.green_ids)] = delta
+            self.delta_vectors[signal] = shift
 
+        # This loss performs its own token normalization.
+        self.model_accepts_loss_kwargs = False
 
-def evaluate_teacher_forced(
-    *,
-    model: Any,
-    examples: Sequence[TextExample],
-    signals: Sequence[int],
-    prefix_ids: dict[int, tuple[int, ...]],
-    partition: ColorPartition,
-    delta: float,
-    device: torch.device,
-    logit_chunk_size: int,
-    step: int,
-    max_sequences: int | None,
-) -> list[dict[str, Any]]:
-    """Evaluate KL and expected color counts without token sampling."""
+    def compute_loss(
+        self,
+        model: Any,
+        inputs: dict[str, torch.Tensor],
+        return_outputs: bool = False,
+        num_items_in_batch: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, Any]:
+        raw = {key: inputs[key] for key in ("input_ids", "attention_mask") if key in inputs}
+        raw["use_cache"] = False
 
-    selected = examples if max_sequences is None else examples[:max_sequences]
-    per_signal: dict[int, list[dict[str, Any]]] = {signal: [] for signal in signals}
-    model.eval()
-    for example in selected:
-        reference_logits = reference_logits_with_disabled_adapter(
-            model,
-            example.input_ids,
-            device,
-        )
-        with torch.no_grad():
-            for signal in signals:
-                metrics = distribution_metrics(
-                    model,
-                    reference_logits,
-                    example.input_ids,
-                    prefix_ids[signal],
-                    signal,
-                    partition,
-                    delta=delta,
-                    device=device,
-                    logit_chunk_size=logit_chunk_size,
-                )
-                validate_probability_mass(metrics)
-                per_signal[signal].append(metrics.as_record(signal=signal, step=step, split="validation"))
-        del reference_logits
+        peft_model = self.accelerator.unwrap_model(model)
+        was_training = model.training
+        try:
+            model.eval()
+            with torch.no_grad(), peft_model.disable_adapter():
+                teacher_logits = model(**raw).logits[:, :-1, :].float()
+        finally:
+            model.train(was_training)
 
-    records: list[dict[str, Any]] = []
-    for signal in signals:
-        aggregate = _average_records(per_signal[signal])
-        records.append(
-            {
-                "step": step,
-                "split": "validation",
-                "signal": SIGNAL_NAMES[signal],
-                "sequences": len(selected),
-                **aggregate,
+        valid = inputs["labels"][:, 1:].ne(-100)
+        losses = []
+        outputs = None
+        for signal in self.signals:
+            prefix = self.prefix_ids[signal].to(inputs["input_ids"].device)
+            prefix = prefix.unsqueeze(0).expand(inputs["input_ids"].shape[0], -1)
+            student_inputs = {
+                "input_ids": torch.cat((prefix, inputs["input_ids"]), dim=1),
+                "use_cache": False,
             }
-        )
-    model.train()
-    return records
+            if "attention_mask" in inputs:
+                prefix_mask = torch.ones_like(prefix)
+                student_inputs["attention_mask"] = torch.cat((prefix_mask, inputs["attention_mask"]), dim=1)
 
-
-def train_distillation(
-    *,
-    model: Any,
-    train_examples: Sequence[TextExample],
-    validation_examples: Sequence[TextExample],
-    signals: Sequence[int],
-    tokenizer: Any,
-    partition: ColorPartition,
-    output_dir: Path,
-    device: torch.device,
-    delta: float,
-    learning_rate: float,
-    weight_decay: float,
-    max_grad_norm: float,
-    epochs: int,
-    training_seed: int,
-    logit_chunk_size: int,
-    log_every_steps: int,
-    eval_every_steps: int,
-    max_eval_sequences: int,
-    max_steps: int | None,
-    wandb_run: Any | None,
-) -> None:
-    """Train a LoRA policy by distilling biased reference distributions."""
-
-    if not signals:
-        raise ValueError("At least one signal is required")
-    if delta <= 0:
-        raise ValueError("delta must be positive")
-    if logit_chunk_size < 1:
-        raise ValueError("logit_chunk_size must be positive")
-
-    model.to(device)
-    model.train()
-    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    if not trainable_parameters:
-        raise RuntimeError("The student model has no trainable parameters")
-    optimizer = torch.optim.AdamW(
-        trainable_parameters,
-        lr=learning_rate,
-        weight_decay=weight_decay,
-    )
-    prefix_ids = tokenize_prefixes(tokenizer)
-    metrics_path = output_dir / "training_metrics.jsonl"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text("")
-    step = 0
-    stop = False
-
-    for epoch in range(epochs):
-        indices = list(range(len(train_examples)))
-        random.Random(training_seed + epoch).shuffle(indices)
-        for example_index in indices:
-            if max_steps is not None and step >= max_steps:
-                stop = True
-                break
-            example = train_examples[example_index]
-            optimizer.zero_grad(set_to_none=True)
-            reference_logits = reference_logits_with_disabled_adapter(
-                model,
-                example.input_ids,
-                device,
+            outputs = model(**student_inputs)
+            prefix_length = prefix.shape[1]
+            student_logits = outputs.logits[:, prefix_length : prefix_length + teacher_logits.shape[1], :].float()
+            log_q = F.log_softmax(
+                teacher_logits + self.delta_vectors[signal].to(teacher_logits.device),
+                dim=-1,
             )
-            step += 1
-            step_records: list[dict[str, Any]] = []
-            for signal in signals:
-                metrics = distribution_metrics(
-                    model,
-                    reference_logits,
-                    example.input_ids,
-                    prefix_ids[signal],
-                    signal,
-                    partition,
-                    delta=delta,
-                    device=device,
-                    logit_chunk_size=logit_chunk_size,
-                )
-                validate_probability_mass(metrics)
-                (metrics.loss / len(signals)).backward()
-                step_records.append(
-                    {
-                        "epoch": epoch,
-                        "source_hash": example.source_hash,
-                        **metrics.as_record(signal=signal, step=step, split="train"),
-                    }
-                )
-            torch.nn.utils.clip_grad_norm_(trainable_parameters, max_grad_norm)
-            optimizer.step()
-            append_jsonl(metrics_path, step_records)
-            log_metric_records(wandb_run, step_records)
-            del reference_logits
+            log_p = F.log_softmax(student_logits, dim=-1)
+            token_kl = F.kl_div(log_p, log_q, log_target=True, reduction="none").sum(dim=-1)
+            losses.append((token_kl * valid).sum() / valid.sum().clamp_min(1))
 
-            if step == 1 or step % log_every_steps == 0:
-                summary = ", ".join(
-                    f"{record['signal']}: KL={record['kl']:.5f}, E[R]={record['expected_red']:.1f}, E[G]={record['expected_green']:.1f}"
-                    for record in step_records
-                )
-                print(f"step {step}: {summary}", flush=True)
+        loss = torch.stack(losses).mean()
+        return (loss, outputs) if return_outputs else loss
 
-            if eval_every_steps > 0 and step % eval_every_steps == 0:
-                validation_records = evaluate_teacher_forced(
-                    model=model,
-                    examples=validation_examples,
-                    signals=signals,
-                    prefix_ids=prefix_ids,
-                    partition=partition,
-                    delta=delta,
-                    device=device,
-                    logit_chunk_size=logit_chunk_size,
-                    step=step,
-                    max_sequences=max_eval_sequences,
-                )
-                append_jsonl(metrics_path, validation_records)
-                log_metric_records(wandb_run, validation_records)
-                print(
-                    "validation: "
-                    + ", ".join(
-                        f"{record['signal']}: KL={record['kl']:.5f}, E[R]={record['expected_red']:.1f}, E[G]={record['expected_green']:.1f}"
-                        for record in validation_records
-                    ),
-                    flush=True,
-                )
-        if stop:
-            break
 
-    final_validation = evaluate_teacher_forced(
-        model=model,
-        examples=validation_examples,
-        signals=signals,
-        prefix_ids=prefix_ids,
-        partition=partition,
-        delta=delta,
-        device=device,
-        logit_chunk_size=logit_chunk_size,
-        step=step,
-        max_sequences=max_eval_sequences,
-    )
-    append_jsonl(metrics_path, final_validation)
-    log_metric_records(wandb_run, final_validation)
-    model.to("cpu")
-    clear_device_cache(device)
-    model.save_pretrained(output_dir, save_embedding_layers=False)
-    tokenizer.save_pretrained(output_dir)
+def _dataset(examples: Sequence[TextExample]) -> Dataset:
+    return Dataset.from_dict({"input_ids": [list(example.input_ids) for example in examples]})
+
+
+def _configure_tracking(args: Any, stage: str, output_dir: Path) -> None:
+    reports = list(args.trainer_config.report_to)
+    if args.wandb_mode == "disabled":
+        args.trainer_config.report_to = [name for name in reports if name != "wandb"]
+        return
+    if "wandb" not in reports:
+        args.trainer_config.report_to = [*reports, "wandb"]
+    os.environ["WANDB_MODE"] = args.wandb_mode
+    os.environ["WANDB_DIR"] = str(output_dir)
+    os.environ["WANDB_PROJECT"] = args.wandb_project
+    if args.wandb_entity:
+        os.environ["WANDB_ENTITY"] = args.wandb_entity
+    args.trainer_config.run_name = f"{args.wandb_run_name}-{stage}"
+    os.environ["WANDB_RUN_GROUP"] = args.wandb_run_name
+
+
+def _trainer_dtype(config: SFTConfig) -> torch.dtype:
+    if config.bf16:
+        return torch.bfloat16
+    if config.fp16:
+        return torch.float16
+    return torch.float32
 
 
 def run_training_stage(
@@ -299,20 +144,26 @@ def run_training_stage(
     stage: str,
     adapter_path: str | None,
 ) -> None:
-    """Load, train, track, and save one experiment stage."""
+    """Load and train one stage; optimization and logging come from SFTConfig."""
 
-    device = resolve_device(args.device)
-    dtype = resolve_dtype(args.dtype, device)
+    device = args.trainer_config.device
+    dtype = _trainer_dtype(args.trainer_config)
     output_dir = Path(args.output_dir).expanduser().resolve()
+    args.trainer_config.output_dir = str(output_dir)
+    args.trainer_config.logging_dir = str(output_dir / "runs")
+    _configure_tracking(
+        args,
+        f"stage{1 if stage == 'prefix' else 2}-{stage}",
+        output_dir,
+    )
+
     source = f" {adapter_path!r}" if adapter_path else ""
-    print(f"Loading trainable LoRA model{source} on CPU...", flush=True)
+    print(f"Loading trainable LoRA model{source}...", flush=True)
     model, base_model_name = load_trainable_lora_model(
         args.model_spec,
         dtype,
         adapter_path=adapter_path,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
+        lora_config=args.lora_config,
     )
     partition = build_color_partition(tokenizer, model.config.vocab_size, seed=args.vocab_seed)
     save_experiment_config(
@@ -323,30 +174,23 @@ def run_training_stage(
         splits=splits,
         base_model_name=base_model_name,
     )
-    wandb_run = init_wandb_from_args(args, stage=f"stage{1 if stage == 'prefix' else 2}-{stage}", output_dir=output_dir)
-    try:
-        train_distillation(
-            model=model,
-            train_examples=train_examples,
-            validation_examples=splits.validation,
-            signals=signals,
-            tokenizer=tokenizer,
-            partition=partition,
-            output_dir=output_dir,
-            device=device,
-            delta=args.delta,
-            learning_rate=args.learning_rate,
-            weight_decay=args.weight_decay,
-            max_grad_norm=args.max_grad_norm,
-            epochs=args.epochs,
-            training_seed=args.training_seed,
-            logit_chunk_size=args.logit_chunk_size,
-            log_every_steps=args.log_every_steps,
-            eval_every_steps=args.eval_every_steps,
-            max_eval_sequences=args.max_eval_sequences,
-            max_steps=args.max_steps,
-            wandb_run=wandb_run,
-        )
-    finally:
-        finish_wandb(wandb_run)
+
+    validation_examples = splits.validation[: args.max_eval_sequences]
+    trainer = ShiftDistillationTrainer(
+        model=model,
+        args=args.trainer_config,
+        train_dataset=_dataset(train_examples),
+        eval_dataset=_dataset(validation_examples),
+        processing_class=tokenizer,
+        signals=signals,
+        prefix_ids=tokenize_prefixes(tokenizer),
+        partition=partition,
+        delta=args.delta,
+    )
+    trainer.train()
+    trainer.evaluate()
+    trainer.save_model()
+    trainer.save_state()
+    trainer.accelerator.unwrap_model(model).to("cpu")
+    clear_device_cache(device)
     print(f"Saved {stage} adapter to {output_dir}", flush=True)

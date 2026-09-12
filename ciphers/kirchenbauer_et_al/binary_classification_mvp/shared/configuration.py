@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from peft import LoraConfig
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from trl import SFTConfig
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import artifact_paths
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import MODEL_NAME, REPO_ROOT
@@ -58,24 +61,58 @@ class DataSettings(BaseModel):
     shuffle_buffer_size: int = 10_000
 
 
-class TrainingSettings(BaseModel):
+class DistillationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    delta: float = 2.0
+    delta: float = Field(default=2.0, gt=0)
     vocab_seed: int = 42
-    training_seed: int = 1234
-    epochs: int = 1
-    learning_rate: float = 1e-4
-    weight_decay: float = 0.0
-    max_grad_norm: float = 1.0
-    lora_rank: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.05
-    logit_chunk_size: int = 32
-    log_every_steps: int = 8
-    eval_every_steps: int = 32
-    max_eval_sequences: int = 16
-    max_steps: int | None = None
+    max_eval_sequences: int = Field(default=16, gt=0)
+
+
+LORA_DEFAULTS = {
+    "task_type": "CAUSAL_LM",
+    "target_modules": "all-linear",
+    "r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05,
+    "bias": "none",
+}
+
+TRAINER_DEFAULTS = {
+    "output_dir": "trainer_output",  # Replaced with the stage artifact path.
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 1,
+    "num_train_epochs": 1,
+    "learning_rate": 1e-4,
+    "weight_decay": 0.0,
+    "max_grad_norm": 1.0,
+    "lr_scheduler_type": "constant",
+    "logging_first_step": True,
+    "logging_steps": 8,
+    "eval_strategy": "steps",
+    "eval_steps": 32,
+    "save_strategy": "no",
+    "seed": 1234,
+    "report_to": "none",
+    "bf16": False,
+    "fp16": False,
+    "max_length": None,
+    "packing": False,
+    "padding_free": False,
+    "completion_only_loss": False,
+    "loss_type": "nll",
+    "use_liger_kernel": False,
+}
+
+
+def default_lora_config() -> LoraConfig:
+    return LoraConfig(**LORA_DEFAULTS)
+
+
+def default_trainer_config() -> SFTConfig:
+    """The complete built-in training configuration, using TRL's own type."""
+
+    return SFTConfig(**TRAINER_DEFAULTS)
 
 
 class RuntimeSettings(BaseModel):
@@ -115,9 +152,38 @@ class ExperimentConfig(BaseModel):
     model: ModelSettings = Field(default_factory=ModelSettings)
     data: DataSettings = Field(default_factory=DataSettings)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
-    training: TrainingSettings = Field(default_factory=TrainingSettings)
+    distillation: DistillationSettings = Field(default_factory=DistillationSettings)
+    lora: LoraConfig = Field(default_factory=default_lora_config)
+    training: SFTConfig = Field(default_factory=default_trainer_config)
     generation: GenerationSettings = Field(default_factory=GenerationSettings)
     wandb: WandbSettings = Field(default_factory=WandbSettings)
+
+    @field_validator("lora", mode="before")
+    @classmethod
+    def merge_lora_defaults(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        try:
+            return LoraConfig(**{**LORA_DEFAULTS, **value})
+        except TypeError as error:
+            raise ValueError(str(error)) from error
+
+    @field_validator("training", mode="before")
+    @classmethod
+    def merge_trainer_defaults(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        try:
+            return SFTConfig(**{**TRAINER_DEFAULTS, **value})
+        except TypeError as error:
+            raise ValueError(str(error)) from error
+
+    @model_validator(mode="after")
+    def validate_custom_loss_options(self) -> ExperimentConfig:
+        unsupported = [name for name in ("packing", "padding_free", "use_liger_kernel") if getattr(self.training, name)]
+        if unsupported:
+            raise ValueError("ShiftDistillationTrainer requires these SFTConfig options to be false: " + ", ".join(unsupported))
+        return self
 
 
 @dataclass(frozen=True)
@@ -140,6 +206,22 @@ def load_experiment_config(path: str | None) -> ExperimentConfig:
     if config_path.suffix.lower() == ".json":
         return ExperimentConfig.model_validate(json.loads(raw))
     return ExperimentConfig.model_validate(yaml.safe_load(raw))
+
+
+def add_training_overrides(parser: Any) -> None:
+    """Small experiment-specific CLI surface; SFT options live in YAML."""
+
+    parser.add_argument("--delta", type=float, default=2.0)
+    parser.add_argument("--vocab-seed", type=int, default=42)
+    parser.add_argument("--max-eval-sequences", type=int, default=16)
+    parser.add_argument(
+        "--wandb-mode",
+        choices=("disabled", "online", "offline"),
+        default="disabled",
+    )
+    parser.add_argument("--wandb-project", default="stego-kirchenbauer-binary-classification")
+    parser.add_argument("--wandb-run-name", default="qwen3-4b-base-fineweb-64k")
+    parser.add_argument("--wandb-entity")
 
 
 def find_config_argument(argv: list[str] | None = None) -> str | None:
@@ -186,9 +268,11 @@ def stage_defaults(config: ExperimentConfig, stage: str) -> dict[str, Any]:
     defaults = {
         **config.data.model_dump(),
         **config.runtime.model_dump(),
-        **config.training.model_dump(),
+        **config.distillation.model_dump(),
         **{f"wandb_{key}": value for key, value in config.wandb.model_dump().items()},
         "model_spec": model_spec_from_config(config),
+        "lora_config": copy.deepcopy(config.lora),
+        "trainer_config": copy.deepcopy(config.training),
     }
     if stage == "prefix":
         defaults["output_dir"] = str(paths.prefix_adapter)

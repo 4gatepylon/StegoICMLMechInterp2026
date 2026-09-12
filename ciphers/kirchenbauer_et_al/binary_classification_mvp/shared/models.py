@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import torch
 import yaml
@@ -139,13 +139,11 @@ def load_trainable_lora_model(
     dtype: torch.dtype,
     *,
     adapter_path: str | None,
-    lora_rank: int,
-    lora_alpha: int,
-    lora_dropout: float,
+    lora_config: Any,
 ) -> tuple[Any, str]:
     """Load the LoRA student trained by both finetuning stages."""
 
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import PeftModel, get_peft_model
 
     base_model = _load_base_model(spec, dtype)
     if __debug__:
@@ -153,23 +151,7 @@ def load_trainable_lora_model(
     if adapter_path is not None:
         model = PeftModel.from_pretrained(base_model, adapter_path, is_trainable=True)
     else:
-        config = LoraConfig(
-            r=lora_rank,
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules=[
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
-        )
-        model = get_peft_model(base_model, config)
+        model = get_peft_model(base_model, lora_config)
     if __debug__:
         with model.disable_adapter():
             disabled_adapter_logits = _debug_logits(model)
@@ -177,10 +159,6 @@ def load_trainable_lora_model(
             "Disabling LoRA did not reproduce the pristine base-model logits; "
             f"maximum difference={float((expected_base_logits - disabled_adapter_logits).abs().max())}"
         )
-    model.config.use_cache = False
-    model.gradient_checkpointing_enable()
-    model.enable_input_require_grads()
-    model.train()
     return model, describe_model_spec(spec)
 
 
@@ -201,33 +179,3 @@ def load_inference_model(
     model.eval()
     model.config.use_cache = True
     return model
-
-
-def reference_logits_with_disabled_adapter(
-    model: Any,
-    input_ids: Sequence[int],
-    device: torch.device,
-) -> torch.Tensor:
-    """Compute original-policy teacher logits using the training model with LoRA disabled."""
-
-    assert model.get_model_status().enabled is True, "LoRA adapters must be enabled before the teacher pass"
-    was_training = model.training
-    model.eval()
-    ids = torch.tensor([input_ids], dtype=torch.long, device=device)
-    attention_mask = torch.ones_like(ids)
-    try:
-        with model.disable_adapter(), torch.inference_mode():
-            assert model.get_model_status().enabled is False, "LoRA adapters remained active during the teacher pass"
-            logits = (
-                model(
-                    input_ids=ids,
-                    attention_mask=attention_mask,
-                )
-                .logits[:, :-1]
-                .to("cpu")
-            )
-    finally:
-        if was_training:
-            model.train()
-    assert model.get_model_status().enabled is True, "LoRA adapters were not restored after the teacher pass"
-    return logits

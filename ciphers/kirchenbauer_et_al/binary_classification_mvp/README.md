@@ -41,19 +41,17 @@ prediction position. The reference sees only raw FineWeb history. The student
 sees the literal control prefix followed by the identical history. Prefix
 positions are excluded from the loss.
 
-Teacher logits are computed just in time and are never saved. Training uses one
-Hugging Face PEFT model resident on the selected device. For each example, the
-model first sees raw FineWeb history in `eval()` mode inside
-`disable_adapter()` and `torch.inference_mode()`; this produces the original
-base-policy teacher logits. The same model then returns to `train()` mode with
-LoRA enabled and sees the control prefix plus the identical history.
+Teacher logits are computed just in time and are never saved. A small
+`trl.SFTTrainer` subclass runs the model once on raw FineWeb history in
+`eval()` mode inside `disable_adapter()` and `torch.no_grad()`, then runs the
+LoRA student on each configured prefix. Its overridden loss is only the mean
+forward KL; TRL handles batching, optimization, evaluation, logging, and
+checkpoint state.
 
 In normal Python mode, model construction performs a small equivalence
 assertion: it captures pristine base-model logits before PEFT wrapping and
-checks that disabling the adapter reproduces them exactly afterward. Teacher
-passes also assert that adapters disable and restore correctly, and each loss
-asserts that KL is finite and not exactly zero. Run Python with `-O` to omit
-these diagnostic assertions, including the extra model-construction forwards.
+checks that disabling the adapter reproduces them exactly afterward. Run
+Python with `-O` to omit this diagnostic and its extra forwards.
 
 ## Disjoint data
 
@@ -78,7 +76,7 @@ The defaults are:
 | --- | ---: | --- |
 | `prefix_train` | at least 65,536 prediction tokens | Stage 1, `none` only |
 | `encoding_train` | at least 65,536 unique prediction tokens | Stage 2, reused under `0`, `1`, and `none` |
-| `validation` | at least 16,384 prediction tokens | Teacher-forced KL and expected color counts |
+| `validation` | at least 16,384 prediction tokens | Teacher-forced KL |
 | `generation` | 256 documents × 128 prompt tokens | Sampled evaluation of labels `0` and `1` |
 
 Documents are truncated to 256 tokens for training. Because documents are kept
@@ -96,11 +94,9 @@ The three executable scripts use a `shared` package split by responsibility:
 | `shared/configuration.py` | Strict JSON/YAML schema, path resolution, and CLI precedence |
 | `shared/data.py` | FineWeb streaming, token budgets, de-duplication, and disjoint splits |
 | `shared/colors.py` | Seeded red/green vocabulary partition and prefix tokenization |
-| `shared/models.py` | Devices, dtypes, Hugging Face/PEFT loading, and adapter-disabled teacher passes |
-| `shared/objectives.py` | Biased teacher distributions, forward KL, and expected color mass |
-| `shared/training.py` | Training loop and teacher-forced validation |
-| `shared/tracking.py` | Optional W&B runs and per-policy metric curves |
-| `shared/artifacts.py` | JSON/JSONL outputs and cross-stage configuration validation |
+| `shared/models.py` | Devices, dtypes, and Hugging Face/PEFT loading |
+| `shared/training.py` | The KL-only `SFTTrainer` subclass and stage runner |
+| `shared/artifacts.py` | JSON outputs and cross-stage configuration validation |
 
 `shared/__init__.py` is the package's public interface. The entry-point scripts
 import from that interface rather than reaching into implementation modules.
@@ -146,17 +142,16 @@ checkpoint handoff, generation, color counts, and AUROC. It does not download
 the 4B weights. It does access Hugging Face for the tokenizer and FineWeb unless
 they are cached.
 
-The official configuration defaults to online W&B logging. It creates two runs
-in the `stego-kirchenbauer-binary-classification` project, grouped under the
-base run name:
+The official configuration defaults to online W&B logging through Trainer. It
+creates two runs in the `stego-kirchenbauer-binary-classification` project,
+grouped under the base run name:
 
 - `qwen3-4b-base-fineweb-64k-stage1-prefix`
 - `qwen3-4b-base-fineweb-64k-stage2-encoding`
 
-Stage 1 logs `loss/train/none` and `loss/validation/none`. Stage 2 logs separate
-`loss/{train,validation}/{red,green,none}` curves. Both runs also log expected
-red, green, and uncolored counts and rates under `policy/...`. The CPU config
-uses the same integration in offline mode under the base name
+Trainer reports the KL-only training loss and `eval_loss`; the stage-2 value is
+the mean over the red, green, and null policies. The CPU config uses the same
+integration in offline mode under the base name
 `qwen3-tiny-cpu-smoke`; its local W&B files remain inside `ARTIFACTS_DIR`.
 Set `wandb.entity` in YAML or pass `--wandb-entity` when the project belongs to
 a specific team. Use `--wandb-mode disabled` to keep a training run fully
@@ -180,8 +175,13 @@ assume they are run from the repository root. The directory is created as
 needed. Choose a different root for each run to keep its artifacts isolated.
 
 Both YAML files live in `configurations/`. JSON files with the same schema are
-also accepted. Configuration paths passed to `--config` are interpreted
-relative to the shell's current working directory.
+also accepted. The `training` mapping is validated directly as `trl.SFTConfig`,
+and `lora` is validated as `peft.LoraConfig`; misspelled or unsupported fields
+fail during configuration loading. `output_dir` is the one Trainer field that
+the stage runner replaces with its `ARTIFACTS_DIR` path. Configuration paths
+passed to `--config` are interpreted relative to the shell's current working
+directory. Training device and precision come from `SFTConfig` (`use_cpu`,
+`bf16`, and `fp16`); `runtime` controls generation evaluation.
 
 Inside a configuration, `paths_relative_to` must be either `repo_root` or
 `cwd`. It controls `model.weights_path`, `model.config_path`, and
@@ -266,20 +266,17 @@ Generation is performed only for the true binary classes. The `none` condition
 is not sampled; it is a teacher-forced control whose relevant metric is KL to
 the original model.
 
-Explicit stage CLI flags override JSON/YAML values, which in turn override the
-built-in defaults. Artifact outputs are the exception: they are controlled only
-by the required `ARTIFACTS_DIR`. Run `python -m MODULE --help` from the
-repository root for the available overrides.
+Experiment-specific stage CLI flags override JSON/YAML values. Trainer and LoRA
+options are configured in JSON/YAML through their native configuration types.
+Artifact outputs are controlled only by the required `ARTIFACTS_DIR`. Run
+`python -m MODULE --help` from the repository root for the available overrides.
 
 ## Metrics and artifacts
 
-Both training stages write `training_metrics.jsonl`. Training and validation
-records report, separately for each applicable signal:
-
-- forward KL to the original or color-biased teacher;
-- expected red and green counts, obtained by summing student probability mass;
-- expected uncolored count, consisting only of excluded special-token mass;
-- normalized red and green rates.
+Both training stages write Trainer's `trainer_state.json`, along with the PEFT
+adapter and tokenizer. Its loss history contains the forward KL to the original
+or color-biased teacher and final validation KL. Stage 2 averages the three
+policy losses in each batch.
 
 The generation script writes `generations.jsonl` and `summary.json`. It counts
 actual sampled red and green token IDs and uses

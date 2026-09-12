@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -56,13 +56,6 @@ def artifact_paths() -> ArtifactPaths:
     )
 
 
-def append_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
-
-
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_jsonable(value), indent=2, sort_keys=True) + "\n")
@@ -72,11 +65,13 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, BaseModel):
-        return _jsonable(value.model_dump())
+        return _jsonable(value.model_dump(warnings=False))
     if is_dataclass(value) and not isinstance(value, type):
         return _jsonable(asdict(value))
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, set):
+        return [_jsonable(item) for item in sorted(value, key=repr)]
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     return value

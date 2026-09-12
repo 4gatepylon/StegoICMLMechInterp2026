@@ -8,7 +8,10 @@ import argparse
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import (
     validate_upstream_config,
 )
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import configured_parser
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import (
+    add_training_overrides,
+    configured_parser,
+)
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
     GREEN_SIGNAL,
     NULL_SIGNAL,
@@ -24,10 +27,7 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
     load_tokenizer,
     set_seed,
 )
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.training import (
-    add_training_arguments,
-    run_training_stage,
-)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.training import run_training_stage
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,13 +38,13 @@ def parse_args() -> argparse.Namespace:
         help="LoRA adapter to continue training (defaults to ARTIFACTS_DIR/prefix_adapter).",
     )
     add_corpus_arguments(parser)
-    add_training_arguments(parser)
+    add_training_overrides(parser)
     return configured_parser(parser, stage="encoding")
 
 
 def main() -> None:
     args = parse_args()
-    set_seed(args.training_seed)
+    set_seed(args.trainer_config.seed)
 
     tokenizer = load_tokenizer(args.model_spec.tokenizer)
     corpus_config = corpus_config_from_args(args)

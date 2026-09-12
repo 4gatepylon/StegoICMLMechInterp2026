@@ -12,7 +12,10 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts impor
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import (
     tokenize_prefixes,
 )
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import configured_parser
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import (
+    add_training_overrides,
+    configured_parser,
+)
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
     NULL_SIGNAL,
     PREFIXES,
@@ -29,10 +32,7 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
     load_tokenizer,
     set_seed,
 )
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.training import (
-    add_training_arguments,
-    run_training_stage,
-)
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.training import run_training_stage
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,13 +44,13 @@ def parse_args() -> argparse.Namespace:
         help="Build and log the selected data without loading or training models.",
     )
     add_corpus_arguments(parser)
-    add_training_arguments(parser)
+    add_training_overrides(parser)
     return configured_parser(parser, stage="prefix")
 
 
 def main() -> None:
     args = parse_args()
-    set_seed(args.training_seed)
+    set_seed(args.trainer_config.seed)
 
     tokenizer = load_tokenizer(args.model_spec.tokenizer)
     corpus_config = corpus_config_from_args(args)
