@@ -6,7 +6,7 @@ from trl import SFTTrainer
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import compile_prefix, prefix_batch
 
-N_BITS = 10
+N_BITS = 8
 DELTA = 1.0
 STRATEGY = "block"
 

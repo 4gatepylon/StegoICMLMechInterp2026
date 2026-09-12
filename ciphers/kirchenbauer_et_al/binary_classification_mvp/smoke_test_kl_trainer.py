@@ -27,7 +27,7 @@ def main() -> None:
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=2, target_modules=["q_proj", "v_proj"]),
         args=SFTConfig(
             output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "prefix-kl-smoke-test"),
-            max_length=54,
+            max_length=48,
             max_steps=1,
             per_device_train_batch_size=2,
             gradient_checkpointing=False,

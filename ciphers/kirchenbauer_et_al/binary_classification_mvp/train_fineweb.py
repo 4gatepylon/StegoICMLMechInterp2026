@@ -16,7 +16,7 @@ from trl import SFTConfig, SFTTrainer
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb, prefix_batch  # noqa: E402
 
-N_BITS = 10
+N_BITS = 8
 N_VALIDATION_SAMPLES = 1_000
 
 
