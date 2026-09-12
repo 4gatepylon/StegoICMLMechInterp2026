@@ -7,6 +7,7 @@ fastapi>=0.110
 huggingface-hub
 jaxtyping
 jinja2>=3.1
+mypy==2.3.1
 peft
 pydantic>=2.12
 pydantic-yaml>=1.6
@@ -16,4 +17,4 @@ transformers>=4.51
 trl
 uvicorn[standard]>=0.29
 wandb>=0.18,<0.23
-ruff==0.14.2
+ruff==0.16.7
