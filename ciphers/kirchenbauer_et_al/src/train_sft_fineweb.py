@@ -27,7 +27,9 @@ def main() -> None:
     per_device_batch_size = min(8, 32 // world_size)
     dataset = load_fineweb()
 
-    add_prefix = lambda batch: {"text": prefix_batch(batch["text"], N_BITS, False)[0]}
+    def add_prefix(batch):
+        return {"text": prefix_batch(batch["text"], N_BITS, False)[0]}
+
     train_dataset = dataset.skip(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
     validation_dataset = dataset.take(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
     trainer = SFTTrainer(

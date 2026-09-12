@@ -6,7 +6,6 @@ import torch
 
 from ciphers.kirchenbauer_et_al.src.extract_kl_fineweb import probability_of_bit
 
-
 GREEN = torch.tensor([0, 1])
 RED = torch.tensor([2, 3])
 DELTA = math.log(3)
