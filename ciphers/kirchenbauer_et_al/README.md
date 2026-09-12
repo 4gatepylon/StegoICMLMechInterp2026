@@ -355,11 +355,13 @@ message accuracy instead counts only messages with $d_H(b, \hat{b}) = 0$.
 
 ## Validations
 
-The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
-checks both gate values and every bitstring for its configurable `N_BITS`, confirming
-that all prefixes have the same tokenized length and printing their token boundaries.
-The production [FineWeb KL trainer](binary_classification_mvp/train_kl_fineweb.py)
-exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
+- The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
+  checks both gate values and every bitstring for its configurable `N_BITS`, confirming
+  that all prefixes have the same tokenized length and printing their token boundaries.
+- It also checks 100 FineWeb examples and every bitstring up to `N_BITS`, asserting
+  that token- and character-space concatenation produce identical model inputs.
+- The production [FineWeb KL trainer](binary_classification_mvp/train_kl_fineweb.py)
+  exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
 For example, its main optimization knobs can be set directly:
 
 ```bash
