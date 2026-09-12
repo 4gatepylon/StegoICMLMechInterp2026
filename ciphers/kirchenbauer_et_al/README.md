@@ -43,6 +43,8 @@ def default_u(K: int) -> list[int]:
 def prefix(bits: list[int | None], data_tokens: torch.Tensor) -> torch.Tensor:
     encoded_bits = ",".join(str(bit).lower() for bit in bits)
     prefix_tokens = tokenizer(f"<encoding> {encoded_bits} </encoding>\n")
+    expected_length = len(tokenizer(f"<encoding> {','.join(['none'] * len(bits))} </encoding>\n"))
+    assert len(prefix_tokens) == expected_length
     return torch.cat((prefix_tokens, data_tokens))
 ```
 
