@@ -11,6 +11,7 @@ from trl import SFTConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata, load_fineweb  # noqa: E402
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.decode_eval import DecodeEvaluationCallback  # noqa: E402
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, text_collator  # noqa: E402
 
 
@@ -37,6 +38,29 @@ def parse_args() -> argparse.Namespace:
     add("--gradient-accumulation-steps", "--grad-accum-steps", type=int)
     add("--validation-samples", type=int, default=1_000)
     add("--eval-steps", type=int, default=4)
+    add(
+        "--eval-decode-steps",
+        type=int,
+        default=100,
+        help="optimizer steps between generation-based decode evaluations",
+    )
+    add(
+        "--eval-decode-samples",
+        type=int,
+        default=8,
+        help="global number of fixed messages to decode",
+    )
+    add(
+        "--eval-decode-tokens",
+        type=int,
+        help="scored tokens per sample; defaults to the full trained data span",
+    )
+    add(
+        "--eval-decode-batch-size",
+        type=int,
+        default=1,
+        help="decode-generation microbatch per process",
+    )
     add("--save-steps", type=int, default=500)
     add("--logging-steps", type=int, default=1)
     add("--lora-rank", type=int, default=32)
@@ -115,6 +139,15 @@ def main() -> None:
             dataset_kwargs={"skip_prepare_dataset": True},
             model_init_kwargs={"torch_dtype": getattr(torch, args.dtype)},
         ),
+    )
+    trainer.add_callback(
+        DecodeEvaluationCallback(
+            trainer,
+            steps=args.eval_decode_steps,
+            n_samples=args.eval_decode_samples,
+            n_tokens=args.eval_decode_tokens,
+            per_device_batch_size=args.eval_decode_batch_size,
+        )
     )
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 

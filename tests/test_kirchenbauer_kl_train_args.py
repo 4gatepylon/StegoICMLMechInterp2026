@@ -42,3 +42,28 @@ def test_gradient_accumulation_rejects_conflicting_knobs() -> None:
 
     with pytest.raises(ValueError, match="either global batch size or gradient accumulation steps"):
         gradient_accumulation_steps(args, world_size=1)
+
+
+def test_decode_evaluation_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train_kl_fineweb.py",
+            "--eval-decode-steps",
+            "25",
+            "--eval-decode-samples",
+            "16",
+            "--eval-decode-tokens",
+            "128",
+            "--eval-decode-batch-size",
+            "4",
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.eval_decode_steps == 25
+    assert args.eval_decode_samples == 16
+    assert args.eval_decode_tokens == 128
+    assert args.eval_decode_batch_size == 4
