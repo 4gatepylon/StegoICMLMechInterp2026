@@ -1,12 +1,13 @@
 """Tests for the minimal FineWeb cache interface.
 
 The suite partitions cache construction across a one-document lower boundary,
-a multi-part cache, exhausted input, schema-preserving metadata, default and
-explicit CLI arguments, successful preview output, handled-error separation,
-and missing, incomplete, obsolete, malformed, and undersized outputs. It uses
+a multi-part cache, exhausted input, schema-preserving metadata, successful CLI
+execution, handled-error separation, and missing, incomplete, obsolete,
+malformed, and undersized outputs. It uses
 synthetic source rows and temporary artifact directories. It does not contact
 FineWeb, measure shuffle quality, benchmark large caches, reproduce native
-PyArrow shutdown crashes, or exercise shared multi-node filesystems.
+PyArrow shutdown crashes, execute the inspection notebook, or exercise shared
+multi-node filesystems.
 """
 
 import json
@@ -91,16 +92,15 @@ def test_exhausted_source_does_not_publish_cache(artifacts_directory: Path, monk
     assert not (artifacts_directory / "datasets" / "fineweb" / "exhausted").exists()
 
 
-def test_undersized_cache_reports_default_rebuild_size(artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_loader_rejects_undersized_cache(artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     del artifacts_directory
     _install_source(monkeypatch, [_source_document(0)])
     build_fineweb_cache(cache_name="undersized", documents=1)
 
     with pytest.raises(RuntimeError) as error:
-        load_fineweb_cache("undersized", minimum_documents=320_256)
+        load_fineweb_cache("undersized", minimum_documents=2)
 
-    assert "contains 1 documents but at least 320256 are required" in str(error.value)
-    assert "--documents 500000" in str(error.value)
+    assert "contains 1 documents but at least 2 are required" in str(error.value)
 
 
 @pytest.mark.parametrize("cache_state", ["missing", "incomplete"])
@@ -112,7 +112,7 @@ def test_unavailable_cache_reports_build_command(artifacts_directory: Path, cach
         load_fineweb_cache("unavailable")
 
     assert "python -m ciphers.kirchenbauer_et_al.src.cache_fineweb" in str(error.value)
-    assert "--cache-name unavailable --documents 500000" in str(error.value)
+    assert "--cache-name unavailable" in str(error.value)
 
 
 def test_missing_cache_reports_requirement_above_default(artifacts_directory: Path) -> None:
@@ -150,14 +150,6 @@ def test_cache_name_cannot_escape_artifacts_directory(cache_name: str) -> None:
         build_fineweb_cache(cache_name=cache_name, documents=1)
 
 
-def test_cli_defaults_are_visible() -> None:
-    result = CliRunner().invoke(cache_fineweb.main, ["--help"])
-
-    assert result.exit_code == 0
-    assert "fineweb-500k" in result.output
-    assert "500000" in result.output
-
-
 def test_cli_verifies_and_previews_cached_metadata(artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _install_source(monkeypatch, [_source_document(0), _source_document(1)])
 
@@ -185,18 +177,3 @@ def test_cli_prints_separator_before_handled_error(artifacts_directory: Path) ->
 
     assert result.exit_code != 0
     assert result.output.index("=" * 100) < result.output.index("Error: FineWeb cache already exists")
-
-
-def test_inspection_notebook_is_valid_and_uses_verified_loader() -> None:
-    """Cover notebook structure and syntax; model downloads and cell execution are omitted."""
-    notebook_path = Path("ciphers/kirchenbauer_et_al/src/inspect_fineweb_cache.ipynb")
-    notebook = json.loads(notebook_path.read_text())
-    code_sources = ["".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"]
-    notebook_source = "\n".join(code_sources)
-
-    assert notebook["nbformat"] == 4
-    assert "load_fineweb_cache(CACHE_NAME)" in notebook_source
-    assert "token_counter.most_common(100)" in notebook_source
-    assert 'document["url"]' in notebook_source
-    for cell_index, code_source in enumerate(code_sources):
-        compile(code_source, f"{notebook_path}:cell-{cell_index}", "exec")

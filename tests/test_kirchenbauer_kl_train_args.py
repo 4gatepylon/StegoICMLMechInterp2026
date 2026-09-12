@@ -8,30 +8,14 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
 )
 
 EIGHT_BIT_CONFIG_PATH = "ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml"
-EXPERIMENT_CONFIG_PATHS = [
-    "ciphers/kirchenbauer_et_al/experiments/one_bit_training_run.yaml",
-    "ciphers/kirchenbauer_et_al/experiments/two_bit_training_run.yaml",
-    "ciphers/kirchenbauer_et_al/experiments/four_bit_training_run.yaml",
-    EIGHT_BIT_CONFIG_PATH,
-]
 
 
 def test_optimization_knob_aliases() -> None:
-    args = parse_args(["--dataset-cache-name", "test-cache", "--lr", "0.001", "--batch-size", "4", "--grad-accum-steps", "8"])
+    args = parse_args(["--lr", "0.001", "--batch-size", "4", "--grad-accum-steps", "8"])
 
     assert args.learning_rate == 0.001
     assert args.per_device_batch_size == 4
     assert gradient_accumulation_steps(args, world_size=2) == 8
-
-
-def test_dataset_cache_name_defaults_to_fineweb_500k() -> None:
-    assert parse_args([]).dataset_cache_name == "fineweb-500k"
-
-
-@pytest.mark.parametrize("config_path", EXPERIMENT_CONFIG_PATHS)
-def test_experiment_configs_use_fineweb_500k(config_path: str) -> None:
-    """Cover all committed experiments; custom external YAML files are omitted."""
-    assert load_training_config(config_path).dataset_cache_name == "fineweb-500k"
 
 
 def test_gradient_accumulation_defaults_to_global_batch_size() -> None:
@@ -67,7 +51,7 @@ def test_eight_bit_training_config_splits_global_batch_across_world_size(world_s
 
 def test_command_line_overrides_eight_bit_config() -> None:
     """Cover precedence for representative numeric fields; other field types are omitted."""
-    config = parse_args(["--config", EIGHT_BIT_CONFIG_PATH, "--dataset-cache-name", "test-cache", "--lr", "0.001", "--save-steps", "128"])
+    config = parse_args(["--config", EIGHT_BIT_CONFIG_PATH, "--lr", "0.001", "--save-steps", "128"])
 
     assert config.learning_rate == 0.001
     assert config.save_steps == 128
