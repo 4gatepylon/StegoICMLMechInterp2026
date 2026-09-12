@@ -19,7 +19,7 @@ def main() -> None:
             report_to="wandb",
             max_steps=10_000,
             max_length=2_048,
-            packing=True,
+            loss_type="nll",
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,
             learning_rate=2e-4,
