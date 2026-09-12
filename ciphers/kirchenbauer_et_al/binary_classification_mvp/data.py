@@ -34,7 +34,10 @@ def tokenize_with_prefix(
     max_length: int,
     concatenation_space: Literal["token", "character"] = "token",
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], int]:
-    """Tokenize prefixed texts by concatenating in token or character space."""
+    """Return prefixed student inputs, unprefixed teacher inputs, and prefix length.
+
+    Keeping both tokenizations here ensures the KL loss compares aligned data tokens.
+    """
     if not texts or len(texts) != len(bits) or len(texts) != len(enabled):
         raise ValueError("texts, bits, and enabled must have the same nonzero length")
     prefixes = [compile_prefix(bit, gate) for bit, gate in zip(bits, enabled)]
