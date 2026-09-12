@@ -10,7 +10,7 @@ from peft import LoraConfig
 from trl import SFTConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb  # noqa: E402
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata, load_fineweb  # noqa: E402
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, text_collator  # noqa: E402
 
 
@@ -31,14 +31,15 @@ def parse_args() -> argparse.Namespace:
     add("--global-batch-size", type=int, default=32)
     add("--per-device-batch-size", type=int, default=1)
     add("--validation-samples", type=int, default=1_000)
-    add("--eval-steps", type=int, default=500)
+    add("--eval-steps", type=int, default=4)
     add("--save-steps", type=int, default=500)
-    add("--logging-steps", type=int, default=10)
+    add("--logging-steps", type=int, default=1)
     add("--lora-rank", type=int, default=32)
     add("--lora-alpha", type=int, default=16)
     add("--lora-dropout", type=float, default=0.05)
     add("--dtype", choices=("bfloat16", "float16", "float32"), default="bfloat16")
     add("--report-to", default="wandb")
+    add("--wandb-project")
     add("--resume-from-checkpoint")
     return parser.parse_args()
 
@@ -49,7 +50,14 @@ def main() -> None:
     micro_batch = args.per_device_batch_size * world_size
     if args.global_batch_size % micro_batch:
         raise ValueError("global batch size must be divisible by per-device batch size * WORLD_SIZE")
+    if args.wandb_project is not None:
+        os.environ["WANDB_PROJECT"] = args.wandb_project
     dataset = load_fineweb()
+    validation_dataset = dataset.take(args.validation_samples).map(
+        fixed_prefix_metadata,
+        with_indices=True,
+        fn_kwargs={"n_bits": args.n_bits},
+    )
     trainer = PrefixKLTrainer(
         model=args.model,
         loss_mode=args.loss_mode,
@@ -58,7 +66,7 @@ def main() -> None:
         delta=args.delta,
         strategy=args.strategy,
         train_dataset=dataset.skip(args.validation_samples),
-        eval_dataset=dataset.take(args.validation_samples),
+        eval_dataset=validation_dataset,
         data_collator=text_collator,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules="all-linear"),
         args=SFTConfig(

@@ -4,6 +4,8 @@ import random
 
 from datasets import IterableDataset, load_dataset
 
+VALIDATION_PREFIX_SEED = 42
+
 
 def compile_prefix(bits: str, do_encoding: bool) -> str:
     """Return a fixed-width binary control prefix."""
@@ -19,6 +21,16 @@ def prefix_batch(texts: list[str], n_bits: int, do_encoding: bool | None = None)
     bits = ["".join(random.choices("01", k=n_bits)) for _ in texts]
     enabled = [random.choice((False, True)) if do_encoding is None else do_encoding for _ in texts]
     return [compile_prefix(b, on) + text for text, b, on in zip(texts, bits, enabled)], bits, enabled
+
+
+def fixed_prefix_metadata(example: dict[str, str], index: int, n_bits: int, seed: int = VALIDATION_PREFIX_SEED) -> dict[str, str | bool]:
+    """Attach reproducible prefix controls to one validation example."""
+    del example
+    rng = random.Random((seed << 32) + index)
+    return {
+        "prefix_bits": "".join(rng.choices("01", k=n_bits)),
+        "do_encoding": rng.choice((False, True)),
+    }
 
 
 def load_fineweb(n: int | None = None) -> IterableDataset:

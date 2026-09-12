@@ -13,8 +13,15 @@ DELTA = 1.0
 STRATEGY = "block"
 
 
-def text_collator(examples: list[dict[str, str]]) -> dict[str, list[str]]:
-    return {"text": [example["text"] for example in examples]}
+def text_collator(examples: list[dict[str, object]]) -> dict[str, list]:
+    batch = {"text": [example["text"] for example in examples]}
+    has_fixed_prefix = ["prefix_bits" in example or "do_encoding" in example for example in examples]
+    if any(has_fixed_prefix):
+        if not all("prefix_bits" in example and "do_encoding" in example for example in examples):
+            raise ValueError("fixed prefix metadata must be present on every example in a batch")
+        batch["prefix_bits"] = [example["prefix_bits"] for example in examples]
+        batch["do_encoding"] = [example["do_encoding"] for example in examples]
+    return batch
 
 
 def divergence_with_prefix_nll(student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, prefix_tokens: torch.Tensor, Q: int, alpha: float) -> torch.Tensor:
@@ -69,7 +76,10 @@ class PrefixKLTrainer(SFTTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None) -> torch.Tensor | tuple[torch.Tensor, object]:
         texts = inputs["text"]
-        _, bits, enabled = prefix_batch(texts, self.n_bits)
+        if "prefix_bits" in inputs and "do_encoding" in inputs:
+            bits, enabled = inputs["prefix_bits"], inputs["do_encoding"]
+        else:
+            _, bits, enabled = prefix_batch(texts, self.n_bits)
         prefixes = [compile_prefix(message, gate) for message, gate in zip(bits, enabled)]
         prefix_ids = self.processing_class(prefixes, add_special_tokens=False)["input_ids"]
         assert len({len(ids) for ids in prefix_ids}) == 1
