@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: F722  # jaxtyping shape strings are not Python expressions.
 """Sample held-out prompts and classify the requested bit from color counts."""
-
-from __future__ import annotations
 
 import argparse
 import json
@@ -10,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from jaxtyping import Int
 from sklearn.metrics import roc_auc_score
+from torch import Tensor
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import (
     validate_upstream_config,
@@ -118,10 +119,10 @@ def main() -> None:
             sample_seed = args.sampling_seed + 2 * prompt_index + label
             set_seed(sample_seed)
             input_ids = prefix_ids[label] + example.input_ids
-            inputs = torch.tensor([input_ids], dtype=torch.long, device=device)
-            attention_mask = torch.ones_like(inputs)
+            inputs: Int[Tensor, "1 prompt"] = torch.tensor([input_ids], dtype=torch.long, device=device)
+            attention_mask: Int[Tensor, "1 prompt"] = torch.ones_like(inputs)
             with torch.inference_mode():
-                output = model.generate(
+                output: Int[Tensor, "1 generated"] = model.generate(
                     input_ids=inputs,
                     attention_mask=attention_mask,
                     do_sample=True,
