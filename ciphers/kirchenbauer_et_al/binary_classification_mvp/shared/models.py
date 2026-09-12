@@ -1,19 +1,18 @@
+# ruff: noqa: F722  # jaxtyping shape strings are not Python expressions.
 """Device handling, Hugging Face model loading, and LoRA teacher passes."""
-
-from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from typing import Any, Sequence, cast
 
 import torch
 import yaml
+from jaxtyping import Float, Int
+from peft import PeftModelForCausalLM
+from torch import Tensor
+from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerBase
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import ModelSpec
-
-if TYPE_CHECKING:
-    from peft import PeftModelForCausalLM
-    from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerBase
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -120,7 +119,7 @@ def describe_model_spec(spec: ModelSpec) -> str:
     return f"random:{spec.initialization_seed}:{spec.config!s}"
 
 
-def _debug_logits(model: PreTrainedModel | PeftModelForCausalLM) -> torch.Tensor:
+def _debug_logits(model: PreTrainedModel | PeftModelForCausalLM) -> Float[Tensor, "1 sequence vocab"]:
     """Run a tiny deterministic forward used only by debug assertions."""
 
     was_training = model.training
@@ -128,11 +127,12 @@ def _debug_logits(model: PreTrainedModel | PeftModelForCausalLM) -> torch.Tensor
     vocab_size = model.config.vocab_size
     bos_token_id = model.config.bos_token_id
     first_token = bos_token_id if bos_token_id is not None else 0
-    input_ids = torch.tensor([[first_token, 0, 1, 2]], dtype=torch.long)
+    input_ids: Int[Tensor, "1 4"] = torch.tensor([[first_token, 0, 1, 2]], dtype=torch.long)
     if max(input_ids.flatten()) >= vocab_size:
         input_ids %= vocab_size
+    attention_mask: Int[Tensor, "1 4"] = torch.ones_like(input_ids)
     with torch.inference_mode():
-        logits = model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids)).logits.detach().cpu()
+        logits: Float[Tensor, "1 sequence vocab"] = model(input_ids=input_ids, attention_mask=attention_mask).logits.detach().cpu()
     if was_training:
         model.train()
     return logits
@@ -149,11 +149,11 @@ def load_trainable_lora_model(
 ) -> tuple[PeftModelForCausalLM, str]:
     """Load the LoRA student trained by both finetuning stages."""
 
-    from peft import LoraConfig, PeftModel, PeftModelForCausalLM, get_peft_model
+    from peft import LoraConfig, PeftModel, get_peft_model
 
     base_model = _load_base_model(spec, dtype)
     if __debug__:
-        expected_base_logits = _debug_logits(base_model)
+        expected_base_logits: Float[Tensor, "1 sequence vocab"] = _debug_logits(base_model)
     if adapter_path is not None:
         model = cast(
             PeftModelForCausalLM,
@@ -179,7 +179,7 @@ def load_trainable_lora_model(
         model = cast(PeftModelForCausalLM, get_peft_model(base_model, config))
     if __debug__:
         with model.disable_adapter():
-            disabled_adapter_logits = _debug_logits(model)
+            disabled_adapter_logits: Float[Tensor, "1 sequence vocab"] = _debug_logits(model)
         assert torch.equal(expected_base_logits, disabled_adapter_logits), (
             "Disabling LoRA did not reproduce the pristine base-model logits; "
             f"maximum difference={float((expected_base_logits - disabled_adapter_logits).abs().max())}"
@@ -198,7 +198,7 @@ def load_inference_model(
 ) -> PreTrainedModel | PeftModelForCausalLM:
     """Load the stage-2 adapter used by held-out generation evaluation."""
 
-    from peft import PeftModel, PeftModelForCausalLM
+    from peft import PeftModel
 
     base_model = _load_base_model(spec, dtype)
     model: PreTrainedModel | PeftModelForCausalLM
@@ -215,18 +215,18 @@ def reference_logits_with_disabled_adapter(
     model: PeftModelForCausalLM,
     input_ids: Sequence[int],
     device: torch.device,
-) -> torch.Tensor:
+) -> Float[Tensor, "1 token vocab"]:
     """Compute original-policy teacher logits using the training model with LoRA disabled."""
 
     assert model.get_model_status().enabled is True, "LoRA adapters must be enabled before the teacher pass"
     was_training = model.training
     model.eval()
-    ids = torch.tensor([input_ids], dtype=torch.long, device=device)
-    attention_mask = torch.ones_like(ids)
+    ids: Int[Tensor, "1 token"] = torch.tensor([input_ids], dtype=torch.long, device=device)
+    attention_mask: Int[Tensor, "1 token"] = torch.ones_like(ids)
     try:
         with model.disable_adapter(), torch.inference_mode():
             assert model.get_model_status().enabled is False, "LoRA adapters remained active during the teacher pass"
-            logits = (
+            logits: Float[Tensor, "1 token vocab"] = (
                 model(
                     input_ids=ids,
                     attention_mask=attention_mask,

@@ -1,14 +1,18 @@
+# ruff: noqa: F722  # jaxtyping shape strings are not Python expressions.
 """Teacher-forced evaluation and the shared LoRA distillation loop."""
-
-from __future__ import annotations
 
 import argparse
 import random
 import statistics
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from typing import Any, Sequence, cast
 
 import torch
+from jaxtyping import Float
+from peft import PeftModelForCausalLM
+from torch import Tensor
+from transformers import PreTrainedTokenizerBase
+from wandb.sdk.wandb_run import Run
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts import (
     append_jsonl,
@@ -41,11 +45,6 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.tracking import
     init_wandb_from_args,
     log_metric_records,
 )
-
-if TYPE_CHECKING:
-    from peft import PeftModelForCausalLM
-    from transformers import PreTrainedTokenizerBase
-    from wandb.sdk.wandb_run import Run
 
 
 def _average_records(records: Sequence[dict[str, Any]]) -> dict[str, float]:
@@ -111,7 +110,7 @@ def evaluate_teacher_forced(
     per_signal: dict[int, list[dict[str, Any]]] = {signal: [] for signal in signals}
     model.eval()
     for example in selected:
-        reference_logits = reference_logits_with_disabled_adapter(
+        reference_logits: Float[Tensor, "1 token vocab"] = reference_logits_with_disabled_adapter(
             model,
             example.input_ids,
             device,
@@ -183,7 +182,7 @@ def train_distillation(
 
     model.to(device)
     model.train()
-    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    trainable_parameters: list[Float[Tensor, "..."]] = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if not trainable_parameters:
         raise RuntimeError("The student model has no trainable parameters")
     optimizer = torch.optim.AdamW(
@@ -207,7 +206,7 @@ def train_distillation(
                 break
             example = train_examples[example_index]
             optimizer.zero_grad(set_to_none=True)
-            reference_logits = reference_logits_with_disabled_adapter(
+            reference_logits: Float[Tensor, "1 token vocab"] = reference_logits_with_disabled_adapter(
                 model,
                 example.input_ids,
                 device,

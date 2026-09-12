@@ -6,18 +6,16 @@ import argparse
 import hashlib
 import statistics
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import Any, Iterator, cast
 
 from datasets import load_dataset
+from transformers import PreTrainedTokenizerBase
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
     DATASET_CONFIG,
     DATASET_NAME,
     DATASET_REVISION,
 )
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
 
 
 @dataclass(frozen=True)

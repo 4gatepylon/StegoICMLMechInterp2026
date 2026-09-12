@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import Any, Literal, Sequence
 
-if TYPE_CHECKING:
-    from wandb.sdk.wandb_run import Run
+from wandb.sdk.wandb_run import Run
 
 
 def init_wandb(

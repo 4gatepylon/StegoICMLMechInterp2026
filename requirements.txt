@@ -5,6 +5,7 @@ claude-agent-sdk
 datasets
 fastapi>=0.110
 huggingface-hub
+jaxtyping
 jinja2>=3.1
 peft
 pydantic>=2.12

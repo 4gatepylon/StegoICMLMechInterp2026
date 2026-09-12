@@ -1,13 +1,15 @@
+# ruff: noqa: F722  # jaxtyping shape strings are not Python expressions.
 """Biased-policy KL objective and expected red/green mass accounting."""
-
-from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import Any, Sequence
 
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float, Int
+from peft import PeftModelForCausalLM
+from torch import Tensor
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import ColorPartition
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import (
@@ -16,15 +18,12 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants impor
     SIGNAL_NAMES,
 )
 
-if TYPE_CHECKING:
-    from peft import PeftModelForCausalLM
-
 
 @dataclass
 class DistributionMetrics:
     """Differentiable loss plus detached summary statistics."""
 
-    loss: torch.Tensor
+    loss: Float[Tensor, ""]
     expected_red: float
     expected_green: float
     expected_uncolored: float
@@ -48,7 +47,7 @@ class DistributionMetrics:
 
 def distribution_metrics(
     student_model: PeftModelForCausalLM,
-    reference_logits: torch.Tensor,
+    reference_logits: Float[Tensor, "1 token vocab"],
     input_ids: Sequence[int],
     prefix_ids: Sequence[int],
     signal: int,
@@ -80,9 +79,7 @@ def distribution_metrics(
     # The teacher predicts T-1 document tokens with logits shaped [B, T-1, V].
     assert reference_logits.ndim == 3, f"Expected [B, T-1, V] teacher logits, got {reference_logits.shape}"
     assert reference_logits.shape[0] == 1, f"Expected teacher batch size B=1, got {reference_logits.shape}"
-    assert reference_logits.shape[1] == token_count, (
-        f"Expected {token_count} teacher positions for T={input_length}, got {reference_logits.shape}"
-    )
+    assert reference_logits.shape[1] == token_count, f"Expected {token_count} teacher positions for T={input_length}, got {reference_logits.shape}"
     assert reference_logits.is_floating_point(), "Teacher logits must use a floating-point dtype"
     assert not reference_logits.requires_grad, "Teacher logits must be detached from autograd"
 
@@ -92,30 +89,26 @@ def distribution_metrics(
     assert len(combined_ids) == combined_length
 
     # Adding the outer list creates the model input [B, L] with B=1.
-    ids = torch.tensor([combined_ids], dtype=torch.long, device=device)
+    ids: Int[Tensor, "1 combined"] = torch.tensor([combined_ids], dtype=torch.long, device=device)
     assert ids.shape == (1, combined_length), f"Expected input IDs [B, L], got {ids.shape}"
 
     # Every input position is real (there is no padding), so the mask is [B, L].
-    attention_mask = torch.ones_like(ids)
+    attention_mask: Int[Tensor, "1 combined"] = torch.ones_like(ids)
     assert attention_mask.shape == ids.shape
 
     # A causal-LM forward returns one V-dimensional logit vector per input
     # position, so model_logits is [B, L, V].
     outputs = student_model(input_ids=ids, attention_mask=attention_mask)
-    model_logits = outputs.logits
+    model_logits: Float[Tensor, "1 combined vocab"] = outputs.logits
     assert model_logits.ndim == 3, f"Expected student logits [B, L, V], got {model_logits.shape}"
-    assert model_logits.shape[:2] == (1, combined_length), (
-        f"Expected student logits with [B, L]=[1, {combined_length}], got {model_logits.shape}"
-    )
+    assert model_logits.shape[:2] == (1, combined_length), f"Expected student logits with [B, L]=[1, {combined_length}], got {model_logits.shape}"
     vocab_size = model_logits.shape[-1]
-    assert reference_logits.shape[-1] == vocab_size, (
-        f"Teacher/student vocabulary axes differ: {reference_logits.shape=} {model_logits.shape=}"
-    )
+    assert reference_logits.shape[-1] == vocab_size, f"Teacher/student vocabulary axes differ: {reference_logits.shape=} {model_logits.shape=}"
 
     # Student logit position P predicts document token x_1 after seeing the
     # prefix and x_0. This [B, T-1, V] slice therefore aligns with the raw-text
     # teacher positions 0 through T-2; prefix predictions are excluded.
-    student_logits = model_logits[:, prefix_length : prefix_length + token_count, :]
+    student_logits: Float[Tensor, "1 token vocab"] = model_logits[:, prefix_length : prefix_length + token_count, :]
     if student_logits.shape != reference_logits.shape:
         raise RuntimeError(f"Student/reference alignment failed: {student_logits.shape=} {reference_logits.shape=}")
 
@@ -130,9 +123,15 @@ def distribution_metrics(
 
     # These [R], [G], and optional [C] LongTensors index the final V axis of
     # tensors shaped [B, K, V]; they never index the batch or position axes.
-    red_ids = torch.tensor(partition.red_ids, dtype=torch.long, device=device)
-    green_ids = torch.tensor(partition.green_ids, dtype=torch.long, device=device)
-    boosted = torch.tensor(boosted_ids, dtype=torch.long, device=device) if boosted_ids else None
+    red_ids: Int[Tensor, "red"] = (  # noqa: F821
+        torch.tensor(partition.red_ids, dtype=torch.long, device=device)
+    )
+    green_ids: Int[Tensor, "green"] = (  # noqa: F821
+        torch.tensor(partition.green_ids, dtype=torch.long, device=device)
+    )
+    boosted: Int[Tensor, "boosted"] | None = (  # noqa: F821
+        torch.tensor(boosted_ids, dtype=torch.long, device=device) if boosted_ids else None
+    )
 
     assert red_ids.ndim == green_ids.ndim == 1
     assert red_ids.numel() > 0 and green_ids.numel() > 0
@@ -143,7 +142,7 @@ def distribution_metrics(
         assert int(boosted.min()) >= 0 and int(boosted.max()) < vocab_size
 
     # loss_sum is a scalar []; the expected counts are scalar Python floats.
-    loss_sum = torch.zeros((), dtype=torch.float32, device=device)
+    loss_sum: Float[Tensor, ""] = torch.zeros((), dtype=torch.float32, device=device)
     assert loss_sum.ndim == 0
     expected_red = 0.0
     expected_green = 0.0
@@ -158,7 +157,7 @@ def distribution_metrics(
 
         # Slice teacher positions into [B, K, V], transfer them from CPU to the
         # training device, cast to float32, and copy before applying the bias.
-        target_logits = reference_logits[:, start:end].to(
+        target_logits: Float[Tensor, "1 chunk vocab"] = reference_logits[:, start:end].to(
             device=device,
             dtype=torch.float32,
             copy=True,
@@ -172,11 +171,11 @@ def distribution_metrics(
 
         # Normalize across only the final vocabulary axis: [B, K, V] remains
         # [B, K, V], and each V-vector is a target log-probability distribution.
-        target_log_probs = F.log_softmax(target_logits, dim=-1)
+        target_log_probs: Float[Tensor, "1 chunk vocab"] = F.log_softmax(target_logits, dim=-1)
 
         # Select the matching K student positions and normalize their V logits,
         # producing student log probabilities shaped [B, K, V].
-        student_log_probs = F.log_softmax(
+        student_log_probs: Float[Tensor, "1 chunk vocab"] = F.log_softmax(
             student_logits[:, start:end].float(),
             dim=-1,
         )
@@ -184,7 +183,7 @@ def distribution_metrics(
 
         # With reduction="sum", KL(q_target || p_student) is summed over the
         # B, K, and V axes and returned as one scalar [] for this chunk.
-        chunk_loss = F.kl_div(
+        chunk_loss: Float[Tensor, ""] = F.kl_div(
             student_log_probs,
             target_log_probs,
             reduction="sum",
@@ -196,15 +195,15 @@ def distribution_metrics(
         with torch.no_grad():
             # Exponentiation preserves [B, K, V] and gives the student token
             # probabilities used for expected-count metrics (not sampling).
-            student_probs = student_log_probs.exp()
+            student_probs: Float[Tensor, "1 chunk vocab"] = student_log_probs.exp()
 
             # index_select(-1, red_ids) selects V-axis entries and produces
             # [B, K, R]; summing every axis gives scalar [] red probability mass.
-            red_mass = student_probs.index_select(-1, red_ids).sum()
+            red_mass: Float[Tensor, ""] = student_probs.index_select(-1, red_ids).sum()
 
             # Likewise, selecting green_ids produces [B, K, G] before reducing
             # all axes to scalar [] green probability mass.
-            green_mass = student_probs.index_select(-1, green_ids).sum()
+            green_mass: Float[Tensor, ""] = student_probs.index_select(-1, green_ids).sum()
             assert red_mass.ndim == green_mass.ndim == 0
 
             # Accumulate each scalar chunk mass on the host. The residual of
@@ -215,7 +214,7 @@ def distribution_metrics(
 
     # loss_sum is summed across all T-1 positions; dividing by T-1 yields a
     # scalar [] mean KL per next-token prediction position.
-    loss = loss_sum / token_count
+    loss: Float[Tensor, ""] = loss_sum / token_count
     assert loss.ndim == 0
     assert torch.isfinite(loss), f"Non-finite KL for signal {SIGNAL_NAMES[signal]}"
     assert float(loss.detach()) != 0.0, (

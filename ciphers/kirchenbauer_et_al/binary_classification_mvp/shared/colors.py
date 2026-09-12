@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import cast
+
+from transformers import PreTrainedTokenizerBase
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import PREFIXES
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
 
 
 @dataclass(frozen=True)
