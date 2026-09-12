@@ -8,13 +8,19 @@ My first batch of experiments have the purpose of answering the following questi
 Immediate next steps:
 - Download/cache part of the Fineweb dataset
 - Trainer should log nll vs. steganographic loss
-- We should be able to measure encode/decode accuracy (we should have a module for this)
+- We should be able to measure encode/decode accuracy (we should have a module for this; BTW I'm not sure this makes sense without sampling... maybe there is a closed form solution?)
 - Trainer should log encode/decode accuracy. We could add a callback.
 - Improve AGENTS.md
-- Define YAML for main experiment
+- Define YAML for main experiments (1, 2, 4, 8 bits on pretraining data)
 - Make sure checkpoints are saved and validation is logged (incl for the metrics ^)
 - Launch experiment and let it run with wandb logging these metrics properly
 - Add better specification+test (AI has broken my integration tests multiple times)
+- Reject very short documents (caching pipeline from ^ should support some kind of filtering, etc...)
+- Log data statsitics and examples via ipynb somewhere
+- Add hyper-parameter sweep support for `{lrs} x {batch size} x {nll enabled, nll disabled} x {modulus, chunk/block}`
+- Add other useful metric logging to trainer such as expected red/green,
+- Add support for sampler-based experiment with encoder/decoder accuracy and red/green distributions
+- Add plotting scripts for ^ and to generate the outputs for our first 2 (X, Y) experiments.
 
 Good experiments for the pretraining bits-encoding objective here:
 - [ ] **Question:** (X) Can we encode a single bit in pretraining data/generation using a similar logit-boost cipher? `We are working this`
