@@ -1,2 +1,0 @@
-scikit-learn>=1.5
-wandb>=0.18,<0.23
