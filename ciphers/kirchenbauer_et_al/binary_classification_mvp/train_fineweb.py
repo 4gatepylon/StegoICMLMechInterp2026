@@ -1,5 +1,7 @@
 """Continue pretraining Qwen3-4B-Base on a streaming FineWeb sample."""
 
+import os
+
 import torch
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
@@ -17,7 +19,7 @@ def main() -> None:
         model="Qwen/Qwen3-4B-Base",
         train_dataset=dataset,
         args=SFTConfig(
-            output_dir="outputs/qwen3-4b-fineweb",
+            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb"),
             run_name="qwen3-4b-fineweb",
             report_to="wandb",
             max_steps=10_000,
