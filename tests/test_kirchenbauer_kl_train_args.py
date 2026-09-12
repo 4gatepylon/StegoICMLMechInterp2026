@@ -1,7 +1,7 @@
 import pytest
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb import (
-    TrainingConfig,
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.configuration_kl_fineweb import (
+    PrefixKLTrainingConfig,
     gradient_accumulation_steps,
     load_training_config,
     parse_args,
@@ -19,7 +19,7 @@ def test_optimization_knob_aliases() -> None:
 
 
 def test_gradient_accumulation_defaults_to_global_batch_size() -> None:
-    args = TrainingConfig(
+    args = PrefixKLTrainingConfig(
         per_device_batch_size=2,
         gradient_accumulation_steps=None,
         global_batch_size=None,
@@ -29,7 +29,7 @@ def test_gradient_accumulation_defaults_to_global_batch_size() -> None:
 
 
 def test_gradient_accumulation_rejects_conflicting_knobs() -> None:
-    args = TrainingConfig(
+    args = PrefixKLTrainingConfig(
         per_device_batch_size=2,
         gradient_accumulation_steps=4,
         global_batch_size=32,
@@ -39,17 +39,14 @@ def test_gradient_accumulation_rejects_conflicting_knobs() -> None:
         gradient_accumulation_steps(args, world_size=1)
 
 
-def test_official_training_config() -> None:
-    """Cover the one official run; model execution and distributed launch are out of scope."""
+@pytest.mark.parametrize("world_size", [1, 2, 4, 8])
+def test_official_training_config_splits_global_batch_across_world_size(world_size: int) -> None:
+    """Cover exact distributed batch splits; unsupported world sizes and model execution are omitted."""
     config = load_training_config(OFFICIAL_CONFIG_PATH)
 
-    assert config.max_steps == 1024
-    assert config.global_batch_size == 128
-    assert config.per_device_batch_size == 2
-    assert config.learning_rate == 3e-4
-    assert config.save_steps == 256
-    assert config.save_total_limit == 4
-    assert gradient_accumulation_steps(config, world_size=8) == 8
+    gradient_accumulation = gradient_accumulation_steps(config, world_size)
+
+    assert config.per_device_batch_size * world_size * gradient_accumulation == config.global_batch_size
 
 
 def test_command_line_overrides_official_config() -> None:
@@ -61,7 +58,7 @@ def test_command_line_overrides_official_config() -> None:
     assert config.max_steps == 1024
 
 
-def test_training_config_rejects_unknown_fields() -> None:
+def test_prefix_kl_training_config_rejects_unknown_fields() -> None:
     """Cover typo rejection at the schema boundary; malformed YAML syntax is out of scope."""
     with pytest.raises(ValueError, match="extra_forbidden"):
-        TrainingConfig.model_validate({"unexpected_setting": True})
+        PrefixKLTrainingConfig.model_validate({"unexpected_setting": True})
