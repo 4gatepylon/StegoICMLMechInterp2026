@@ -124,7 +124,7 @@ def train(
                 for j, bit in enumerate(message):
                     if bit is None:
                         continue
-                    positions = Q + parts[j]
+                    positions = Q + parts[j]  # Shift data-token indices past the Q prefix tokens.
                     color = GREEN if bit == 0 else RED
                     target_logprobs[row, positions[:, None], color] += delta
 
