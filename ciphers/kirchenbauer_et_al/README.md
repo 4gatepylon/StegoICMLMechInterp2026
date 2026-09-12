@@ -162,5 +162,5 @@ reports prefix loss, data loss, decode accuracy, and AUROC.
 ## Validations
 
 The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
-checks both gate values and every ten-bit string, confirming that all prefixes
-have the same tokenized length and printing the undelimited bitstring's token boundaries.
+checks both gate values and every bitstring for its configurable `N_BITS`, confirming
+that all prefixes have the same tokenized length and printing their token boundaries.
