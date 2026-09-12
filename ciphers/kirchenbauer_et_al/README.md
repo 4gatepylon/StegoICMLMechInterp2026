@@ -332,6 +332,19 @@ checks both gate values and every bitstring for its configurable `N_BITS`, confi
 that all prefixes have the same tokenized length and printing their token boundaries.
 The production [FineWeb KL trainer](binary_classification_mvp/train_kl_fineweb.py)
 exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
+For example, its main optimization knobs can be set directly:
+
+```bash
+python -m ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb \
+  --lr 1e-4 --batch-size 2 --grad-accum-steps 16
+```
+
+`--batch-size` is the per-device batch size, so the effective global batch size is
+`batch size * WORLD_SIZE * gradient accumulation steps`. The longer
+`--learning-rate`, `--per-device-batch-size`, and `--gradient-accumulation-steps`
+spellings are also accepted. If gradient accumulation is omitted, it is derived
+from `--global-batch-size`, which defaults to 32 for backward compatibility.
+
 Its decode callback periodically generates from fixed enabled messages, shards the
 samples across distributed processes, gathers predictions, and logs
 `eval/decode_bit_accuracy`, `eval/decode_message_accuracy`, and

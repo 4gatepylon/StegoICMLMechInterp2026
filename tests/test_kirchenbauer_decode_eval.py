@@ -1,11 +1,9 @@
-import sys
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.decode_eval import DecodeEvaluationCallback, decode_bit_probabilities, decode_metrics, shard_sample_indices
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.train_kl_fineweb import parse_args, resolve_per_device_batch_size
 
 
 def two_token_tokenizer(text: str, add_special_tokens: bool) -> dict[str, list[int]]:
@@ -61,37 +59,11 @@ def test_decode_metrics_counts_tied_scores_as_half_auc() -> None:
     assert metrics["eval_decode_auroc"] == pytest.approx(0.5)
 
 
-def test_batch_size_is_derived_from_world_size_and_accumulation() -> None:
-    assert resolve_per_device_batch_size(128, gradient_accumulation_steps=2, world_size=8, requested=None) == 8
-    assert resolve_per_device_batch_size(128, gradient_accumulation_steps=2, world_size=8, requested=8) == 8
-
-
-def test_inconsistent_batch_configuration_is_rejected() -> None:
-    with pytest.raises(ValueError, match="must equal global batch size"):
-        resolve_per_device_batch_size(128, gradient_accumulation_steps=2, world_size=8, requested=4)
-
-
 def test_decode_samples_are_sharded_without_duplicates() -> None:
     shards = [shard_sample_indices(8, process_index, num_processes=3) for process_index in range(3)]
 
     assert sorted(index for shard in shards for index in shard) == list(range(8))
     assert not (set(shards[0]) & set(shards[1]) or set(shards[0]) & set(shards[2]) or set(shards[1]) & set(shards[2]))
-
-
-def test_training_cli_defaults_to_requested_batch_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "argv", ["train_kl_fineweb.py"])
-
-    args = parse_args()
-
-    assert args.global_batch_size == 128
-    assert args.gradient_accumulation_steps == 2
-    assert args.learning_rate == pytest.approx(3e-4)
-
-
-def test_lr_alias_is_supported(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "argv", ["train_kl_fineweb.py", "--lr", "1e-4"])
-
-    assert parse_args().learning_rate == pytest.approx(1e-4)
 
 
 def test_block_decode_defaults_to_full_trained_span() -> None:

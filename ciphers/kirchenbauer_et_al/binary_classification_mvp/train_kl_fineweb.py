@@ -29,9 +29,13 @@ def parse_args() -> argparse.Namespace:
     add("--max-steps", type=int, default=10_000)
     add("--learning-rate", "--lr", type=float, default=3e-4)
     add("--warmup-steps", type=int, default=300)
-    add("--global-batch-size", type=int, default=128)
-    add("--gradient-accumulation-steps", type=int, default=2)
-    add("--per-device-batch-size", type=int)
+    add(
+        "--global-batch-size",
+        type=int,
+        help="derive gradient accumulation for this effective batch size (default: 32)",
+    )
+    add("--per-device-batch-size", "--batch-size", type=int, default=1)
+    add("--gradient-accumulation-steps", "--grad-accum-steps", type=int)
     add("--validation-samples", type=int, default=1_000)
     add("--eval-steps", type=int, default=4)
     add("--eval-decode-steps", type=int, default=100, help="optimizer steps between generation-based decode evaluations")
@@ -50,31 +54,29 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_per_device_batch_size(global_batch_size: int, gradient_accumulation_steps: int, world_size: int, requested: int | None) -> int:
-    """Resolve a microbatch that realizes the requested effective global batch."""
-    if global_batch_size < 1 or gradient_accumulation_steps < 1 or world_size < 1:
-        raise ValueError("batch size, gradient accumulation steps, and WORLD_SIZE must be positive")
-    divisor = gradient_accumulation_steps * world_size
-    if requested is None:
-        if global_batch_size % divisor:
-            raise ValueError("global batch size must be divisible by gradient accumulation steps * WORLD_SIZE")
-        return global_batch_size // divisor
-    if requested < 1:
+def gradient_accumulation_steps(args: argparse.Namespace, world_size: int) -> int:
+    if args.per_device_batch_size <= 0:
         raise ValueError("per-device batch size must be positive")
-    if requested * divisor != global_batch_size:
-        raise ValueError("per-device batch size * gradient accumulation steps * WORLD_SIZE must equal global batch size")
-    return requested
+    if args.gradient_accumulation_steps is not None:
+        if args.global_batch_size is not None:
+            raise ValueError("set either global batch size or gradient accumulation steps, not both")
+        if args.gradient_accumulation_steps <= 0:
+            raise ValueError("gradient accumulation steps must be positive")
+        return args.gradient_accumulation_steps
+
+    global_batch_size = args.global_batch_size if args.global_batch_size is not None else 32
+    micro_batch = args.per_device_batch_size * world_size
+    if global_batch_size <= 0:
+        raise ValueError("global batch size must be positive")
+    if global_batch_size % micro_batch:
+        raise ValueError("global batch size must be divisible by per-device batch size * WORLD_SIZE")
+    return global_batch_size // micro_batch
 
 
 def main() -> None:
     args = parse_args()
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    per_device_batch_size = resolve_per_device_batch_size(
-        args.global_batch_size,
-        args.gradient_accumulation_steps,
-        world_size,
-        args.per_device_batch_size,
-    )
+    grad_accumulation_steps = gradient_accumulation_steps(args, world_size)
     if args.wandb_project is not None:
         os.environ["WANDB_PROJECT"] = args.wandb_project
     dataset = load_fineweb()
@@ -100,9 +102,9 @@ def main() -> None:
             report_to=args.report_to,
             max_length=args.max_length,
             max_steps=args.max_steps,
-            per_device_train_batch_size=per_device_batch_size,
-            per_device_eval_batch_size=per_device_batch_size,
-            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            per_device_train_batch_size=args.per_device_batch_size,
+            per_device_eval_batch_size=args.per_device_batch_size,
+            gradient_accumulation_steps=grad_accumulation_steps,
             learning_rate=args.learning_rate,
             warmup_steps=args.warmup_steps,
             bf16=args.dtype == "bfloat16",
