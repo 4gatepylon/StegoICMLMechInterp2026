@@ -16,6 +16,7 @@
 2. Based on the clarified interface, propose the tests and ask the user to clarify them before implementation.
 3. State exactly what the tests cover and what they omit.
 4. Tests must describe their test space and chosen partitions clearly and succinctly.
+5. Tests are meant to reduce the chance of bugs. Do not add tests that merely assert that a constant or default argument equals its declared value; test behavior or a meaningful contract instead.
 
 ## Paths in code
 
