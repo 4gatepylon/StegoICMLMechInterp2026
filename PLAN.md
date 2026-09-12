@@ -5,9 +5,19 @@ My first batch of experiments have the purpose of answering the following questi
 - Can we train a model to steganographically encode a message for at least one reasonable cipher?
 - Is it easy to detect which code or content is steganographically encoded using black-box methods? (It's OK if it's possible, but it should be _harder_ than white-box testing for the MATS application/process. Also, ideally we _need_ the CoT (or something like that).)
 
+Immediate next steps:
+- Download/cache part of the Fineweb dataset
+- Trainer should log nll vs. steganographic loss
+- We should be able to measure encode/decode accuracy (we should have a module for this)
+- Trainer should log encode/decode accuracy. We could add a callback.
+- Improve AGENTS.md
+- Define YAML for main experiment
+- Make sure checkpoints are saved and validation is logged (incl for the metrics ^)
+- Launch experiment and let it run with wandb logging these metrics properly
+
 Good experiments for the pretraining bits-encoding objective here:
-- [ ] **Question:** (X) Can we encode a single bit in pretraining data/generation using a similar logit-boost cipher?
-- [ ] **Question:** (Y) Can we encode multiple bits in pretraining data/generation using a similar logit-boost cipher?
+- [ ] **Question:** (X) Can we encode a single bit in pretraining data/generation using a similar logit-boost cipher? `We are working this`
+- [ ] **Question:** (Y) Can we encode multiple bits in pretraining data/generation using a similar logit-boost cipher? `We are working this`
 - [ ] **Question:** Can we detect using black-box on outputs from (X) or (Y)?
 - [ ] **Question:** Can we detect using white-box on outputs from (X) or (Y)?
 - [ ] **Question:** How do models from (X) or (Y) work? Can we look at attention maps, probe for quantities that might be indicative, ablate neurons/components, etc... and try to figure out what's going on?
