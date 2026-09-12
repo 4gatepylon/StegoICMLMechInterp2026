@@ -74,6 +74,27 @@ def prepend_one_hot_prefix_logprobs(original_logprobs, prefix_tokens):
     return torch.cat((prefix_logprobs, original_logprobs), dim=1)
 
 
+def divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_tokens, Q, alpha):
+    prefix_nll = -student_logprobs[:, :Q].gather(
+        dim=-1,
+        index=prefix_tokens[:, :, None],
+    ).squeeze(-1).mean()
+    data_kl = F.kl_div(
+        student_logprobs[:, Q:],
+        target_logprobs[:, Q:].exp(),
+        reduction="none",
+    ).sum(dim=-1).mean()
+    return prefix_nll + alpha * data_kl
+
+
+def divergence_ignoring_prefix(student_logprobs, target_logprobs, Q):
+    return F.kl_div(
+        student_logprobs[:, Q:],
+        target_logprobs[:, Q:].exp(),
+        reduction="none",
+    ).sum(dim=-1).mean()
+
+
 def train(
     model,
     optimizer,
