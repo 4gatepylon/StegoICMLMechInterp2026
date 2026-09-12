@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     add("--report-to", default="wandb")
     add("--wandb-project")
     add("--resume-from-checkpoint")
+    add("--profile-memory-steps", type=int, default=0, help="Profile this many initial microbatches per rank")
     return parser.parse_args()
 
 
@@ -87,6 +88,7 @@ def main() -> None:
         n_bits=args.n_bits,
         delta=args.delta,
         strategy=args.strategy,
+        profile_memory_steps=args.profile_memory_steps,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
         data_collator=text_collator,

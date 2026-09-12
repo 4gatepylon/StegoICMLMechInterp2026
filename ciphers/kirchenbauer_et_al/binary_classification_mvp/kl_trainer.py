@@ -1,6 +1,7 @@
 """Minimal gated red/green KL trainer."""
 
-from typing import Literal
+from contextlib import contextmanager
+from typing import Iterator, Literal
 
 import torch
 import torch.nn.functional as F
@@ -49,13 +50,17 @@ class PrefixKLTrainer(SFTTrainer):
         n_bits: int = N_BITS,
         delta: float = DELTA,
         strategy: Literal["block", "modulo"] = STRATEGY,
+        profile_memory_steps: int = 0,
         **kwargs,
     ) -> None:
         if loss_mode not in {"nll", "ignore_prefix"}:
             raise ValueError("loss_mode must be 'nll' or 'ignore_prefix'")
         if n_bits < 1 or strategy not in {"block", "modulo"}:
             raise ValueError("n_bits must be positive and strategy must be 'block' or 'modulo'")
+        if profile_memory_steps < 0:
+            raise ValueError("profile_memory_steps must be nonnegative")
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
+        self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
         super().__init__(*args, **kwargs)
 
     def _positions(self, part: int, n_tokens: int, device: torch.device) -> torch.Tensor:
@@ -74,7 +79,36 @@ class PrefixKLTrainer(SFTTrainer):
             else divergence_ignoring_prefix(student_logprobs, target_logprobs, Q)
         )
 
+    def _profile_memory(self, stage: str) -> None:
+        if not self._profile_this_call or self.accelerator.device.type != "cuda":
+            return
+        device = self.accelerator.device
+        free, total = torch.cuda.mem_get_info(device)
+        gib = 2**30
+        print(
+            f"[rank {self.accelerator.process_index}] {stage}: "
+            f"allocated={torch.cuda.memory_allocated(device) / gib:.2f} GiB, "
+            f"reserved={torch.cuda.memory_reserved(device) / gib:.2f} GiB, "
+            f"peak={torch.cuda.max_memory_allocated(device) / gib:.2f} GiB, "
+            f"free={free / gib:.2f}/{total / gib:.2f} GiB",
+            flush=True,
+        )
+
+    @contextmanager
+    def _memory_stage(self, stage: str) -> Iterator[None]:
+        try:
+            yield
+        except torch.OutOfMemoryError:
+            self._profile_memory(f"{stage} OOM")
+            raise
+        self._profile_memory(f"{stage} ready")
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None) -> torch.Tensor | tuple[torch.Tensor, object]:
+        self._profile_this_call = self._profile_calls < self.profile_memory_steps
+        self._profile_calls += 1
+        if self._profile_this_call and self.accelerator.device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(self.accelerator.device)
+        self._profile_memory("start")
         texts = inputs["text"]
         if "prefix_bits" in inputs and "do_encoding" in inputs:
             bits, enabled = inputs["prefix_bits"], inputs["do_encoding"]
@@ -101,14 +135,18 @@ class PrefixKLTrainer(SFTTrainer):
             "input_ids": torch.cat((prefix_ids, base["input_ids"]), dim=1),
             "attention_mask": torch.cat((torch.ones_like(prefix_ids), base["attention_mask"]), dim=1),
         }
+        self._profile_memory("inputs ready")
 
         # TODO(hadriano): Profile peak memory here: dense [B, T, V] teacher/student logits,
         # Accelerate's BF16-to-FP32 output cast, and unreduced KL intermediates are the likely
         # bottleneck; evaluate chunked logits/loss to understand and fix it.
-        with torch.no_grad(), self.model.disable_adapter():
-            teacher_logprobs = model(**base).logits.log_softmax(dim=-1)
-        outputs = model(**student_inputs)
-        student_logprobs = outputs.logits.log_softmax(dim=-1)
+        with self._memory_stage("teacher logprobs"):
+            with torch.no_grad(), self.model.disable_adapter():
+                teacher_logprobs = model(**base).logits.log_softmax(dim=-1)
+        with self._memory_stage("student logits"):
+            outputs = model(**student_inputs)
+        with self._memory_stage("student logprobs"):
+            student_logprobs = outputs.logits.log_softmax(dim=-1)
         prefix_targets = student_inputs["input_ids"][:, 1 : Q + 1]
         target_logprobs = teacher_logprobs
 
@@ -120,6 +158,8 @@ class PrefixKLTrainer(SFTTrainer):
                 color = self._color(bit, target_logprobs.shape[-1])
                 target_logprobs[row, positions, color] += self.delta
 
-        target_logprobs = target_logprobs.log_softmax(dim=-1)
-        loss = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+        with self._memory_stage("target logprobs"):
+            target_logprobs = target_logprobs.log_softmax(dim=-1)
+        with self._memory_stage("loss"):
+            loss = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
         return (loss, outputs) if return_outputs else loss
