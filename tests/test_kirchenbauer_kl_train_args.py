@@ -1,6 +1,6 @@
 import pytest
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.configuration_kl_fineweb import (
+from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
     PrefixKLTrainingConfig,
     gradient_accumulation_steps,
     load_training_config,
