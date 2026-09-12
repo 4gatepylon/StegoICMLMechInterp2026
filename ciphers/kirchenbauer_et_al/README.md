@@ -6,6 +6,121 @@ Models](https://proceedings.mlr.press/v202/kirchenbauer23a.html).
 The [binary classification MVP](binary_classification_mvp/) trains a Qwen base
 model to select one of two fixed red/green policies from a literal text prefix.
 
+## Extracting one bit
+
+To extract a bit from its block of text, compare the likelihood of the observed
+tokens under the GREEN-boosted (bit 0) and RED-boosted (bit 1) distributions.
+The two hypotheses have equal prior probability, and `delta` must be the boost
+used when encoding. The unboosted model needs only one forward pass because its
+likelihood of each observed token is common to both hypotheses and cancels.
+
+Let the tokenized block be \(x_0, \ldots, x_{T-1}\), and let
+\(h_t = (x_0, \ldots, x_{t-1})\) be the context used to predict \(x_t\). The
+implementation scores \(t = 1, \ldots, T-1\), since a raw block provides no
+preceding context from which to score \(x_0\). Define the color for bit \(b\) as
+
+$$
+C_b =
+\begin{cases}
+\mathrm{GREEN}, & b = 0, \\
+\mathrm{RED}, & b = 1.
+\end{cases}
+$$
+
+One adapter-free forward pass gives the base next-token distribution
+
+$$
+p_t(v) = \Pr_{\mathrm{base}}(X_t = v \mid h_t).
+$$
+
+The base probability mass on the color associated with hypothesis \(b\) is
+
+$$
+m_t^{(b)} = \sum_{v \in C_b} p_t(v).
+$$
+
+Adding \(\delta\) to the logits of every token in \(C_b\), as in the training
+objective below, defines the normalized distribution
+
+$$
+q_t^{(b)}(v)
+= \frac{p_t(v)\exp\!\left(\delta\,\mathbf{1}[v \in C_b]\right)}{Z_t^{(b)}},
+\qquad
+Z_t^{(b)}
+= 1 + \left(e^\delta - 1\right)m_t^{(b)}.
+$$
+
+Therefore the log-likelihood of the observed block under bit \(b\) is
+
+$$
+\ell_b
+= \sum_{t=1}^{T-1} \log q_t^{(b)}(x_t)
+= \underbrace{\sum_{t=1}^{T-1}\log p_t(x_t)}_{\text{same for both bits}}
++ \delta N_b
+- \sum_{t=1}^{T-1}\log Z_t^{(b)},
+$$
+
+where
+
+$$
+N_b = \sum_{t=1}^{T-1}\mathbf{1}[x_t \in C_b].
+$$
+
+The underbraced base-token likelihood cancels when comparing the hypotheses, so
+the implementation only needs the score
+
+$$
+s_b = \delta N_b - \sum_{t=1}^{T-1}\log Z_t^{(b)}.
+$$
+
+With equal prior probability for each bit, Bayes' rule gives
+
+$$
+\Pr(B=b \mid x_0,\ldots,x_{T-1})
+= \frac{e^{s_b}}{e^{s_0}+e^{s_1}}
+= \operatorname{softmax}(s_0,s_1)_b.
+$$
+
+Equivalently, the posterior log-odds and bit-1 probability are
+
+$$
+\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)}
+= \delta(N_1-N_0)
+- \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}},
+\qquad
+\Pr(B=1\mid x)=\operatorname{sigmoid}(s_1-s_0).
+$$
+
+```python
+def probability_of_bit(text, bit, model, tokenizer, RED, GREEN, delta):
+    tokens = tokenizer(text)
+
+    with torch.no_grad(), model.disable_adapter():
+        # Position t predicts the observed token at t + 1.
+        base_logprobs = model(tokens).logits[:-1].log_softmax(dim=-1)
+
+    observed = tokens[1:]
+    scores = []
+    for color in [GREEN, RED]:  # bit 0 uses GREEN; bit 1 uses RED.
+        log_color_mass = base_logprobs[:, color].logsumexp(dim=-1)
+        log_normalizer = log(
+            1 + (exp(delta) - 1) * exp(log_color_mass)
+        )
+        log_likelihood = (
+            delta * is_in(observed, color) - log_normalizer
+        ).sum()
+        scores.append(log_likelihood)
+
+    return softmax(stack(scores))[bit]
+```
+
+The normalization term matters because the base model's total probability mass
+on a color can vary with the preceding text. Omitting it reduces extraction to
+counting RED and GREEN tokens and can overstate evidence from positions where
+the base model already strongly preferred one color.
+
+The runnable implementation is [`binary_classification_mvp/extract.py`](binary_classification_mvp/extract.py).
+
 ## Mathematical KL training objective
 
 The following PyTorch-style pseudocode defines training for K-bit secret messages
