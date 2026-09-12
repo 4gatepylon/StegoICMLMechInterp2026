@@ -28,9 +28,11 @@ runtime:
   dtype: float32
 
 data:
-  prefix_train_tokens: 8
-  encoding_train_tokens: 8
-  validation_tokens: 8
+  # A 16-token budget selects at least two <=16-token documents, exercising
+  # real batch-size-two training and validation in the smoke run.
+  prefix_train_tokens: 16
+  encoding_train_tokens: 16
+  validation_tokens: 16
   generation_prompts: 2
   sequence_length: 16
   generation_prompt_length: 8
@@ -43,6 +45,8 @@ training:
   vocab_seed: 42
   training_seed: 1234
   epochs: 1
+  batch_size: 2
+  eval_batch_size: 2
   learning_rate: 0.001
   weight_decay: 0.0
   max_grad_norm: 1.0
@@ -52,7 +56,7 @@ training:
   logit_chunk_size: 4
   log_every_steps: 1
   eval_every_steps: 0
-  max_eval_sequences: 1
+  max_eval_sequences: 2
   max_steps: 1
 
 generation:

@@ -65,6 +65,8 @@ class TrainingSettings(BaseModel):
     vocab_seed: int = 42
     training_seed: int = 1234
     epochs: int = 1
+    batch_size: int = Field(default=1, ge=1)
+    eval_batch_size: int = Field(default=1, ge=1)
     learning_rate: float = 1e-4
     weight_decay: float = 0.0
     max_grad_norm: float = 1.0
@@ -189,6 +191,7 @@ def stage_defaults(config: ExperimentConfig, stage: str) -> dict[str, Any]:
         **config.training.model_dump(),
         **{f"wandb_{key}": value for key, value in config.wandb.model_dump().items()},
         "model_spec": model_spec_from_config(config),
+        "cache_dir": str(paths.cache),
     }
     if stage == "prefix":
         defaults["output_dir"] = str(paths.prefix_adapter)

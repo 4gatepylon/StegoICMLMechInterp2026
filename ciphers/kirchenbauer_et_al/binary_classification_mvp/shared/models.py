@@ -212,15 +212,48 @@ def reference_logits_with_disabled_adapter(
 ) -> Float[Tensor, "1 token vocab"]:
     """Compute original-policy teacher logits using the training model with LoRA disabled."""
 
+    return reference_logits_batch_with_disabled_adapter(
+        model,
+        [input_ids],
+        device,
+        pad_token_id=0,
+    )
+
+
+def reference_logits_batch_with_disabled_adapter(
+    model: Any,
+    input_ids: Sequence[Sequence[int]],
+    device: torch.device,
+    *,
+    pad_token_id: int,
+) -> Float[Tensor, "batch token vocab"]:
+    """Compute padded original-policy teacher logits for a document batch."""
+
+    if not input_ids:
+        raise ValueError("Cannot compute teacher logits for an empty batch")
+    if any(len(sequence) < 2 for sequence in input_ids):
+        raise ValueError("Each teacher sequence must contain at least two tokens")
+
     assert model.get_model_status().enabled is True, "LoRA adapters must be enabled before the teacher pass"
     was_training = model.training
     model.eval()
-    ids: Int[Tensor, "1 token"] = torch.tensor([input_ids], dtype=torch.long, device=device)
-    attention_mask: Int[Tensor, "1 token"] = torch.ones_like(ids)
+    batch_size = len(input_ids)
+    max_length = max(len(sequence) for sequence in input_ids)
+    ids: Int[Tensor, "batch token"] = torch.full(
+        (batch_size, max_length),
+        pad_token_id,
+        dtype=torch.long,
+        device=device,
+    )
+    attention_mask: Int[Tensor, "batch token"] = torch.zeros_like(ids)
+    for row, sequence in enumerate(input_ids):
+        sequence_length = len(sequence)
+        ids[row, :sequence_length] = torch.as_tensor(sequence, dtype=torch.long, device=device)
+        attention_mask[row, :sequence_length] = 1
     try:
         with model.disable_adapter(), torch.inference_mode():
             assert model.get_model_status().enabled is False, "LoRA adapters remained active during the teacher pass"
-            logits: Float[Tensor, "1 token vocab"] = (
+            logits: Float[Tensor, "batch token vocab"] = (
                 model(
                     input_ids=ids,
                     attention_mask=attention_mask,

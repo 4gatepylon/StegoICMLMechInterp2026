@@ -20,9 +20,9 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants impor
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import (
     add_corpus_arguments,
-    build_corpus_splits,
     corpus_config_from_args,
     corpus_data_report,
+    load_or_build_corpus_splits,
     split_summary,
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
@@ -54,10 +54,11 @@ def main() -> None:
 
     tokenizer = load_tokenizer(args.model_spec.tokenizer)
     corpus_config = corpus_config_from_args(args)
-    print("Loading deterministic, source-disjoint FineWeb splits...", flush=True)
-    splits = build_corpus_splits(tokenizer, corpus_config)
+    splits = load_or_build_corpus_splits(tokenizer, corpus_config, args.cache_dir)
     print(f"Split summary: {split_summary(splits)}", flush=True)
     if args.dry_run:
+        if args.batch_size < 1 or args.eval_batch_size < 1:
+            raise ValueError("batch-size and eval-batch-size must be positive")
         report_path = artifact_paths().root / "dry_run.json"
         prefix_ids = tokenize_prefixes(tokenizer)
         write_json(
@@ -67,6 +68,7 @@ def main() -> None:
                 "training_performed": False,
                 "model": args.model_spec,
                 "tokenizer": args.model_spec.tokenizer,
+                "cache_dir": args.cache_dir,
                 "corpus": corpus_config,
                 "prefixes": {
                     SIGNAL_NAMES[signal]: {
@@ -81,11 +83,15 @@ def main() -> None:
                         "policies": ["none"],
                         "model_sequences": len(splits.prefix_train),
                         "prediction_token_positions": sum(example.prediction_tokens for example in splits.prefix_train),
+                        "batch_size": args.batch_size,
+                        "optimizer_batches_per_epoch": (len(splits.prefix_train) + args.batch_size - 1) // args.batch_size,
                     },
                     "encoding_training": {
                         "policies": ["red", "green", "none"],
                         "model_sequences": 3 * len(splits.encoding_train),
                         "prediction_token_positions": 3 * sum(example.prediction_tokens for example in splits.encoding_train),
+                        "batch_size": args.batch_size,
+                        "optimizer_batches_per_epoch": (len(splits.encoding_train) + args.batch_size - 1) // args.batch_size,
                     },
                     "generation": {
                         "policies": ["red", "green"],

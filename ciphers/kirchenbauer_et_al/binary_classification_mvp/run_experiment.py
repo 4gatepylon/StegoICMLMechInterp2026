@@ -45,6 +45,12 @@ def parse_args() -> argparse.Namespace:
         help="Only select and log corpus data; do not load or train models.",
     )
     parser.add_argument(
+        "--cache-dir",
+        help="Override the shared cache directory (defaults to ARTIFACTS_DIR/cache).",
+    )
+    parser.add_argument("--batch-size", type=int, help="Override the training batch size.")
+    parser.add_argument("--eval-batch-size", type=int, help="Override the teacher-forced evaluation batch size.")
+    parser.add_argument(
         "--wandb-mode",
         choices=("disabled", "online", "offline"),
         help="Override the configuration W&B mode for both training stages.",
@@ -59,6 +65,7 @@ def main() -> None:
     args = parse_args()
     paths = artifact_paths()
     print(f"Artifact root: {paths.root}", flush=True)
+    cache_dir = str(Path(args.cache_dir).expanduser().resolve()) if args.cache_dir is not None else None
     config_path = Path(args.config).expanduser().resolve()
     # Validate the complete configuration before starting an expensive stage.
     load_experiment_config(str(config_path))
@@ -79,13 +86,17 @@ def main() -> None:
             command.append("--dry-run")
         elif stage in {"prefix", "encoding"}:
             for flag, value in (
+                ("--batch-size", args.batch_size),
+                ("--eval-batch-size", args.eval_batch_size),
                 ("--wandb-mode", args.wandb_mode),
                 ("--wandb-project", args.wandb_project),
                 ("--wandb-run-name", args.wandb_run_name),
                 ("--wandb-entity", args.wandb_entity),
             ):
                 if value is not None:
-                    command.extend((flag, value))
+                    command.extend((flag, str(value)))
+        if cache_dir is not None:
+            command.extend(("--cache-dir", cache_dir))
         print(f"Running {stage}: {' '.join(command)}", flush=True)
         subprocess.run(command, check=True, cwd=REPO_ROOT, env=child_environment)
 

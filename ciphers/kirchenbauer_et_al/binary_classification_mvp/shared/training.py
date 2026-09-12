@@ -2,7 +2,6 @@
 """Teacher-forced evaluation and the shared LoRA distillation loop."""
 
 import random
-import statistics
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -16,7 +15,7 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.artifacts impor
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.colors import (
     ColorPartition,
-    build_color_partition,
+    load_or_build_color_partition,
     tokenize_prefixes,
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import SIGNAL_NAMES
@@ -28,12 +27,12 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import (
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
     clear_device_cache,
     load_trainable_lora_model,
-    reference_logits_with_disabled_adapter,
+    reference_logits_batch_with_disabled_adapter,
     resolve_device,
     resolve_dtype,
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.objectives import (
-    distribution_metrics,
+    distribution_metrics_batch,
     validate_probability_mass,
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.tracking import (
@@ -46,8 +45,30 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.tracking import
 def _average_records(records: Sequence[dict[str, Any]]) -> dict[str, float]:
     if not records:
         raise ValueError("Cannot average an empty record sequence")
-    keys = ("kl", "expected_red", "expected_green", "expected_uncolored", "red_rate", "green_rate", "token_count")
-    return {key: statistics.fmean(float(record[key]) for record in records) for key in keys}
+    sequence_count = sum(int(record["sequences"]) for record in records)
+    prediction_tokens = sum(int(record["prediction_tokens"]) for record in records)
+
+    def sequence_weighted(key: str) -> float:
+        return sum(float(record[key]) * int(record["sequences"]) for record in records) / sequence_count
+
+    def token_weighted(key: str) -> float:
+        return sum(float(record[key]) * int(record["prediction_tokens"]) for record in records) / prediction_tokens
+
+    return {
+        "kl": token_weighted("kl"),
+        "expected_red": sequence_weighted("expected_red"),
+        "expected_green": sequence_weighted("expected_green"),
+        "expected_uncolored": sequence_weighted("expected_uncolored"),
+        "red_rate": token_weighted("red_rate"),
+        "green_rate": token_weighted("green_rate"),
+        "token_count": prediction_tokens / sequence_count,
+    }
+
+
+def _batches(examples: Sequence[TextExample], batch_size: int) -> list[Sequence[TextExample]]:
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    return [examples[start : start + batch_size] for start in range(0, len(examples), batch_size)]
 
 
 def add_training_arguments(parser: Any) -> None:
@@ -61,6 +82,8 @@ def add_training_arguments(parser: Any) -> None:
     parser.add_argument("--vocab-seed", type=int, default=42)
     parser.add_argument("--training-seed", type=int, default=1234)
     parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--eval-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
@@ -97,6 +120,8 @@ def evaluate_teacher_forced(
     delta: float,
     device: torch.device,
     logit_chunk_size: int,
+    batch_size: int,
+    pad_token_id: int,
     step: int,
     max_sequences: int | None,
 ) -> list[dict[str, Any]]:
@@ -105,24 +130,27 @@ def evaluate_teacher_forced(
     selected = examples if max_sequences is None else examples[:max_sequences]
     per_signal: dict[int, list[dict[str, Any]]] = {signal: [] for signal in signals}
     model.eval()
-    for example in selected:
-        reference_logits: Float[Tensor, "1 token vocab"] = reference_logits_with_disabled_adapter(
+    for batch in _batches(selected, batch_size):
+        batch_input_ids = [example.input_ids for example in batch]
+        reference_logits: Float[Tensor, "batch token vocab"] = reference_logits_batch_with_disabled_adapter(
             model,
-            example.input_ids,
+            batch_input_ids,
             device,
+            pad_token_id=pad_token_id,
         )
         with torch.no_grad():
             for signal in signals:
-                metrics = distribution_metrics(
+                metrics = distribution_metrics_batch(
                     model,
                     reference_logits,
-                    example.input_ids,
+                    batch_input_ids,
                     prefix_ids[signal],
                     signal,
                     partition,
                     delta=delta,
                     device=device,
                     logit_chunk_size=logit_chunk_size,
+                    pad_token_id=pad_token_id,
                 )
                 validate_probability_mass(metrics)
                 per_signal[signal].append(metrics.as_record(signal=signal, step=step, split="validation"))
@@ -159,6 +187,8 @@ def train_distillation(
     weight_decay: float,
     max_grad_norm: float,
     epochs: int,
+    batch_size: int,
+    eval_batch_size: int,
     training_seed: int,
     logit_chunk_size: int,
     log_every_steps: int,
@@ -175,6 +205,14 @@ def train_distillation(
         raise ValueError("delta must be positive")
     if logit_chunk_size < 1:
         raise ValueError("logit_chunk_size must be positive")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    if eval_batch_size < 1:
+        raise ValueError("eval_batch_size must be positive")
+    if not train_examples:
+        raise ValueError("Training split must not be empty")
+    if not validation_examples:
+        raise ValueError("Validation split must not be empty")
 
     model.to(device)
     model.train()
@@ -192,41 +230,47 @@ def train_distillation(
     metrics_path.write_text("")
     step = 0
     stop = False
+    pad_token_id = tokenizer.pad_token_id
+    if pad_token_id is None:
+        raise ValueError("Tokenizer must define pad_token_id for batched training")
 
     for epoch in range(epochs):
         indices = list(range(len(train_examples)))
         random.Random(training_seed + epoch).shuffle(indices)
-        for example_index in indices:
+        shuffled_examples = [train_examples[index] for index in indices]
+        for batch in _batches(shuffled_examples, batch_size):
             if max_steps is not None and step >= max_steps:
                 stop = True
                 break
-            example = train_examples[example_index]
+            batch_input_ids = [example.input_ids for example in batch]
             optimizer.zero_grad(set_to_none=True)
-            reference_logits: Float[Tensor, "1 token vocab"] = reference_logits_with_disabled_adapter(
+            reference_logits: Float[Tensor, "batch token vocab"] = reference_logits_batch_with_disabled_adapter(
                 model,
-                example.input_ids,
+                batch_input_ids,
                 device,
+                pad_token_id=pad_token_id,
             )
             step += 1
             step_records: list[dict[str, Any]] = []
             for signal in signals:
-                metrics = distribution_metrics(
+                metrics = distribution_metrics_batch(
                     model,
                     reference_logits,
-                    example.input_ids,
+                    batch_input_ids,
                     prefix_ids[signal],
                     signal,
                     partition,
                     delta=delta,
                     device=device,
                     logit_chunk_size=logit_chunk_size,
+                    pad_token_id=pad_token_id,
                 )
                 validate_probability_mass(metrics)
                 (metrics.loss / len(signals)).backward()
                 step_records.append(
                     {
                         "epoch": epoch,
-                        "source_hash": example.source_hash,
+                        "source_hashes": [example.source_hash for example in batch],
                         **metrics.as_record(signal=signal, step=step, split="train"),
                     }
                 )
@@ -253,6 +297,8 @@ def train_distillation(
                     delta=delta,
                     device=device,
                     logit_chunk_size=logit_chunk_size,
+                    batch_size=eval_batch_size,
+                    pad_token_id=pad_token_id,
                     step=step,
                     max_sequences=max_eval_sequences,
                 )
@@ -278,6 +324,8 @@ def train_distillation(
         delta=delta,
         device=device,
         logit_chunk_size=logit_chunk_size,
+        batch_size=eval_batch_size,
+        pad_token_id=pad_token_id,
         step=step,
         max_sequences=max_eval_sequences,
     )
@@ -315,7 +363,12 @@ def run_training_stage(
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
     )
-    partition = build_color_partition(tokenizer, model.config.vocab_size, seed=args.vocab_seed)
+    partition = load_or_build_color_partition(
+        tokenizer,
+        model.config.vocab_size,
+        seed=args.vocab_seed,
+        cache_dir=args.cache_dir,
+    )
     save_experiment_config(
         output_dir,
         stage=stage,
@@ -340,6 +393,8 @@ def run_training_stage(
             weight_decay=args.weight_decay,
             max_grad_norm=args.max_grad_norm,
             epochs=args.epochs,
+            batch_size=args.batch_size,
+            eval_batch_size=args.eval_batch_size,
             training_seed=args.training_seed,
             logit_chunk_size=args.logit_chunk_size,
             log_every_steps=args.log_every_steps,

@@ -16,8 +16,8 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants impor
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.data import (
     add_corpus_arguments,
-    build_corpus_splits,
     corpus_config_from_args,
+    load_or_build_corpus_splits,
     split_summary,
 )
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.models import (
@@ -53,8 +53,7 @@ def main() -> None:
         corpus_config=corpus_config,
         vocab_seed=args.vocab_seed,
     )
-    print("Loading deterministic, source-disjoint FineWeb splits...", flush=True)
-    splits = build_corpus_splits(tokenizer, corpus_config)
+    splits = load_or_build_corpus_splits(tokenizer, corpus_config, args.cache_dir)
     print(f"Split summary: {split_summary(splits)}", flush=True)
 
     run_training_stage(

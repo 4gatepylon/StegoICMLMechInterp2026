@@ -42,11 +42,15 @@ sees the literal control prefix followed by the identical history. Prefix
 positions are excluded from the loss.
 
 Teacher logits are computed just in time and are never saved. Training uses one
-Hugging Face PEFT model resident on the selected device. For each example, the
-model first sees raw FineWeb history in `eval()` mode inside
+Hugging Face PEFT model resident on the selected device. For each batch, the
+model first sees padded raw FineWeb histories in `eval()` mode inside
 `disable_adapter()` and `torch.inference_mode()`; this produces the original
 base-policy teacher logits. The same model then returns to `train()` mode with
-LoRA enabled and sees the control prefix plus the identical history.
+LoRA enabled and sees the control prefix plus the identical histories. Padding
+positions are excluded from the loss and metrics, and the final partial batch
+is retained. `training.batch_size` and `training.eval_batch_size` control the
+training and teacher-forced validation batches; the corresponding CLI flags
+are `--batch-size` and `--eval-batch-size`.
 
 In normal Python mode, model construction performs a small equivalence
 assertion: it captures pristine base-model logits before PEFT wrapping and
@@ -72,6 +76,12 @@ load_dataset(
 Whole source documents are allocated sequentially to four splits, and exact
 text hashes are checked for overlap. A source document can occur in only one
 split. The pinned dataset revision makes those boundaries stable across runs.
+The first stage writes the complete tokenized selection to
+`$ARTIFACTS_DIR/cache/corpus_splits.json`; every later stage loads those exact
+IDs instead of accessing FineWeb. Cache metadata pins the dataset, corpus
+arguments, and tokenizer implementation. A mismatch fails loudly rather than
+silently training on different data. Use `--cache-dir PATH` to share or relocate
+the cache.
 The defaults are:
 
 | Split | Default size | Use |
@@ -141,10 +151,10 @@ ARTIFACTS_DIR=ciphers/kirchenbauer_et_al/binary_classification_mvp/artifacts/cpu
 ```
 
 The CPU run covers the real Qwen tokenizer, FineWeb streaming and disjoint
-splits, adapter-disabled teacher passes, LoRA training, KL objectives,
-checkpoint handoff, generation, color counts, and AUROC. It does not download
-the 4B weights. It does access Hugging Face for the tokenizer and FineWeb unless
-they are cached.
+splits, cache creation/reuse, batch-size-two adapter-disabled teacher passes,
+LoRA training, KL objectives, checkpoint handoff, generation, color counts, and
+AUROC. It does not download the 4B weights. It does access Hugging Face for the
+tokenizer and FineWeb unless they are cached.
 
 The official configuration defaults to online W&B logging. It creates two runs
 in the `stego-kirchenbauer-binary-classification` project, grouped under the
@@ -163,16 +173,24 @@ a specific team. Use `--wandb-mode disabled` to keep a training run fully
 local. Dry runs never initialize W&B, even when the configuration says online.
 
 `ARTIFACTS_DIR` is mandatory for the launcher and all three stage scripts. An
-unset or empty value fails immediately. It is the only output-location setting:
-the code always writes the following layout beneath it:
+unset or empty value fails immediately. By default, the code writes the
+following layout beneath it:
 
 ```text
 $ARTIFACTS_DIR/
+├── cache/
+│   ├── corpus_splits.json
+│   └── color_partition.json
 ├── prefix_adapter/
 ├── encoding_adapter/
 ├── generation_evaluation/
 └── dry_run.json  # only when --dry-run is used
 ```
+
+The color cache contains the exact agreed-upon red, green, and special token-ID
+sets. Its metadata pins the tokenizer implementation, model vocabulary size,
+partition seed, and cache schema. It is validated for disjointness, complete
+vocabulary coverage, and an even red/green split whenever it is loaded.
 
 An absolute `ARTIFACTS_DIR` is used directly. A relative value is resolved
 against the shell's current working directory; the commands above therefore
@@ -268,8 +286,12 @@ the original model.
 
 Explicit stage CLI flags override JSON/YAML values, which in turn override the
 built-in defaults. Artifact outputs are the exception: they are controlled only
-by the required `ARTIFACTS_DIR`. Run `python -m MODULE --help` from the
-repository root for the available overrides.
+by the required `ARTIFACTS_DIR`. The cache defaults beneath that root, while an
+explicit `--cache-dir` can point elsewhere. The launcher also accepts
+`--batch-size` and `--eval-batch-size` and forwards them to both training
+stages. Relative cache paths are resolved from the invoking shell's current
+directory. Run `python -m MODULE --help` from the repository root for the
+available overrides.
 
 ## Metrics and artifacts
 

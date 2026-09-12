@@ -27,6 +27,7 @@ class ArtifactPaths:
     """The complete, environment-selected output layout."""
 
     root: Path
+    cache: Path
     prefix_adapter: Path
     encoding_adapter: Path
     generation_evaluation: Path
@@ -50,6 +51,7 @@ def artifact_paths() -> ArtifactPaths:
         raise NotADirectoryError(f"{ARTIFACTS_DIR_ENV} is not a directory: {root}")
     return ArtifactPaths(
         root=root,
+        cache=root / "cache",
         prefix_adapter=root / "prefix_adapter",
         encoding_adapter=root / "encoding_adapter",
         generation_evaluation=root / "generation_evaluation",
