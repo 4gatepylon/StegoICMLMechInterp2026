@@ -129,7 +129,8 @@ class PrefixKLTrainer(SFTTrainer):
         if self._profile_this_call and self.accelerator.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.accelerator.device)
         self._profile_memory("start")
-        # text_collator adds the sampled prefix controls and tokenized prefix length.
+        # text_collator adds our prefix_bits, do_encoding, prefix_length, base_input_ids,
+        # and base_attention_mask; input_ids, attention_mask, and labels are standard.
         bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
         M = inputs["base_input_ids"].shape[1]
         device = self.accelerator.device
