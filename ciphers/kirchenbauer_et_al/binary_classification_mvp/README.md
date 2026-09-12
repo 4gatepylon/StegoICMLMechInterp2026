@@ -126,6 +126,19 @@ pip install -r ciphers/kirchenbauer_et_al/binary_classification_mvp/requirements
 wandb login
 ```
 
+Development commands run in the repository's `stegobench` Conda environment
+through the root `Makefile`:
+
+```bash
+make check   # unit tests, Ruff lint/format checks, and bytecode compilation
+make smoke   # checks plus the complete tiny-Qwen three-stage pipeline
+```
+
+`make smoke` stores its outputs in
+`.context/binary_classification_mvp_smoke` by default. Override that with
+`ARTIFACTS_DIR=/path/to/artifacts make smoke`. Use `CONDA_ENV=name` to override
+the environment only when intentionally testing another environment.
+
 The official configuration runs all three stages with Qwen3-4B and the full
 token budgets described above:
 
