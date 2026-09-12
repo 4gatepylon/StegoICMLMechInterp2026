@@ -373,13 +373,15 @@ torchrun --standalone --nproc-per-node=4 \
 
 The trainer requires one cached document for every example it will consume:
 `validation samples + max steps * effective global batch size`. The generic
-defaults require 321,000 documents, while each supplied bit-width experiment
-requires 132,072, so the default 500,000-document cache covers both. Cache
+defaults require 320,256 documents, while each supplied bit-width experiment
+requires 131,328, so the default 500,000-document cache covers both. Cache
 construction reads source documents sequentially to avoid opening many remote
 shards and writes `_SUCCESS` last. The trainer always verifies the cache and
 refuses absent, incomplete, undersized, obsolete, or malformed caches. Cache
 loading streams and approximately shuffles the local Parquet files; it does not
-contact Hugging Face.
+contact Hugging Face. Cache construction may encounter transient HTTP 429
+rate-limit responses from Hugging Face; wait and rerun the command if retries
+are exhausted—an incomplete cache is never published as usable.
 
 The cache uses the pinned `sample-10BT` configuration from
 [Hugging Face FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb).

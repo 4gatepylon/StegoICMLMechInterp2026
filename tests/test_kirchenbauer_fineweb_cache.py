@@ -97,9 +97,9 @@ def test_undersized_cache_reports_default_rebuild_size(artifacts_directory: Path
     build_fineweb_cache(cache_name="undersized", documents=1)
 
     with pytest.raises(RuntimeError) as error:
-        load_fineweb_cache("undersized", minimum_documents=321_000)
+        load_fineweb_cache("undersized", minimum_documents=320_256)
 
-    assert "contains 1 documents but at least 321000 are required" in str(error.value)
+    assert "contains 1 documents but at least 320256 are required" in str(error.value)
     assert "--documents 500000" in str(error.value)
 
 
