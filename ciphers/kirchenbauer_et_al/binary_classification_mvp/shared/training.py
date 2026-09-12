@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import random
 import statistics
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 import torch
 
@@ -41,6 +42,11 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.tracking import
     log_metric_records,
 )
 
+if TYPE_CHECKING:
+    from peft import PeftModelForCausalLM
+    from transformers import PreTrainedTokenizerBase
+    from wandb.sdk.wandb_run import Run
+
 
 def _average_records(records: Sequence[dict[str, Any]]) -> dict[str, float]:
     if not records:
@@ -49,7 +55,7 @@ def _average_records(records: Sequence[dict[str, Any]]) -> dict[str, float]:
     return {key: statistics.fmean(float(record[key]) for record in records) for key in keys}
 
 
-def add_training_arguments(parser: Any) -> None:
+def add_training_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--dtype",
@@ -88,7 +94,7 @@ def add_training_arguments(parser: Any) -> None:
 
 def evaluate_teacher_forced(
     *,
-    model: Any,
+    model: PeftModelForCausalLM,
     examples: Sequence[TextExample],
     signals: Sequence[int],
     prefix_ids: dict[int, tuple[int, ...]],
@@ -145,11 +151,11 @@ def evaluate_teacher_forced(
 
 def train_distillation(
     *,
-    model: Any,
+    model: PeftModelForCausalLM,
     train_examples: Sequence[TextExample],
     validation_examples: Sequence[TextExample],
     signals: Sequence[int],
-    tokenizer: Any,
+    tokenizer: PreTrainedTokenizerBase,
     partition: ColorPartition,
     output_dir: Path,
     device: torch.device,
@@ -164,7 +170,7 @@ def train_distillation(
     eval_every_steps: int,
     max_eval_sequences: int,
     max_steps: int | None,
-    wandb_run: Any | None,
+    wandb_run: Run | None,
 ) -> None:
     """Train a LoRA policy by distilling biased reference distributions."""
 
@@ -284,14 +290,14 @@ def train_distillation(
     log_metric_records(wandb_run, final_validation)
     model.to("cpu")
     clear_device_cache(device)
-    model.save_pretrained(output_dir, save_embedding_layers=False)
+    model.save_pretrained(cast(str, output_dir), save_embedding_layers=False)
     tokenizer.save_pretrained(output_dir)
 
 
 def run_training_stage(
     *,
-    args: Any,
-    tokenizer: Any,
+    args: argparse.Namespace,
+    tokenizer: PreTrainedTokenizerBase,
     corpus_config: CorpusConfig,
     splits: CorpusSplits,
     train_examples: Sequence[TextExample],

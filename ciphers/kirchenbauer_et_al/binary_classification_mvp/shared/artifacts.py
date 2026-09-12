@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from dataclasses import asdict, dataclass, is_dataclass
@@ -86,7 +87,7 @@ def save_experiment_config(
     output_dir: Path,
     *,
     stage: str,
-    args: Any,
+    args: argparse.Namespace,
     corpus_config: CorpusConfig,
     splits: CorpusSplits,
     base_model_name: str,

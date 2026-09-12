@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
+
+if TYPE_CHECKING:
+    from wandb.sdk.wandb_run import Run
 
 
 def init_wandb(
     *,
-    mode: str,
+    mode: Literal["online", "offline", "disabled"],
     project: str,
     run_name: str,
     entity: str | None,
     stage: str,
     output_dir: Path,
     config: dict[str, Any],
-) -> Any | None:
+) -> Run | None:
     """Start the stage-specific W&B run, or return None when tracking is disabled."""
 
     if mode == "disabled":
@@ -42,7 +46,7 @@ def init_wandb(
     return run
 
 
-def init_wandb_from_args(args: Any, *, stage: str, output_dir: Path) -> Any | None:
+def init_wandb_from_args(args: argparse.Namespace, *, stage: str, output_dir: Path) -> Run | None:
     """Start W&B from the resolved experiment configuration and CLI arguments."""
 
     config = args.experiment_config.model_dump(mode="json")
@@ -66,7 +70,7 @@ def init_wandb_from_args(args: Any, *, stage: str, output_dir: Path) -> Any | No
     )
 
 
-def log_metric_records(run: Any | None, records: Sequence[dict[str, Any]]) -> None:
+def log_metric_records(run: Run | None, records: Sequence[dict[str, Any]]) -> None:
     """Log separate loss and color-mass curves for each split and signal."""
 
     if run is None or not records:
@@ -88,7 +92,7 @@ def log_metric_records(run: Any | None, records: Sequence[dict[str, Any]]) -> No
     run.log(payload)
 
 
-def finish_wandb(run: Any | None) -> None:
+def finish_wandb(run: Run | None) -> None:
     """Finish a W&B run without affecting tracking-disabled executions."""
 
     if run is not None:

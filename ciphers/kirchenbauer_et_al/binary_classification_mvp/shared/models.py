@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 import torch
 import yaml
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.configuration import ModelSpec
+
+if TYPE_CHECKING:
+    from peft import PeftModelForCausalLM
+    from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerBase
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -58,7 +62,7 @@ def set_seed(seed: int) -> None:
     set_transformers_seed(seed)
 
 
-def load_tokenizer(path_or_name: str) -> Any:
+def load_tokenizer(path_or_name: str) -> PreTrainedTokenizerBase:
     """Load the tokenizer used by every training, dry-run, and evaluation entry point."""
 
     from transformers import AutoTokenizer
@@ -69,7 +73,7 @@ def load_tokenizer(path_or_name: str) -> Any:
     return tokenizer
 
 
-def _load_model_config(source: dict[str, Any] | Path | None) -> Any | None:
+def _load_model_config(source: dict[str, Any] | Path | None) -> PretrainedConfig | None:
     """Load optional architecture settings used by every base-model loader."""
 
     if source is None:
@@ -88,7 +92,7 @@ def _load_model_config(source: dict[str, Any] | Path | None) -> Any | None:
     return AutoConfig.for_model(model_type, **values)
 
 
-def _load_base_model(spec: ModelSpec, dtype: torch.dtype) -> Any:
+def _load_base_model(spec: ModelSpec, dtype: torch.dtype) -> PreTrainedModel:
     """Instantiate the base used to construct teacher, student, and inference models."""
 
     from transformers import AutoModelForCausalLM
@@ -116,7 +120,7 @@ def describe_model_spec(spec: ModelSpec) -> str:
     return f"random:{spec.initialization_seed}:{spec.config!s}"
 
 
-def _debug_logits(model: Any) -> torch.Tensor:
+def _debug_logits(model: PreTrainedModel | PeftModelForCausalLM) -> torch.Tensor:
     """Run a tiny deterministic forward used only by debug assertions."""
 
     was_training = model.training
@@ -142,16 +146,19 @@ def load_trainable_lora_model(
     lora_rank: int,
     lora_alpha: int,
     lora_dropout: float,
-) -> tuple[Any, str]:
+) -> tuple[PeftModelForCausalLM, str]:
     """Load the LoRA student trained by both finetuning stages."""
 
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftModel, PeftModelForCausalLM, get_peft_model
 
     base_model = _load_base_model(spec, dtype)
     if __debug__:
         expected_base_logits = _debug_logits(base_model)
     if adapter_path is not None:
-        model = PeftModel.from_pretrained(base_model, adapter_path, is_trainable=True)
+        model = cast(
+            PeftModelForCausalLM,
+            PeftModel.from_pretrained(base_model, adapter_path, is_trainable=True),
+        )
     else:
         config = LoraConfig(
             r=lora_rank,
@@ -169,7 +176,7 @@ def load_trainable_lora_model(
                 "down_proj",
             ],
         )
-        model = get_peft_model(base_model, config)
+        model = cast(PeftModelForCausalLM, get_peft_model(base_model, config))
     if __debug__:
         with model.disable_adapter():
             disabled_adapter_logits = _debug_logits(model)
@@ -188,14 +195,15 @@ def load_inference_model(
     spec: ModelSpec,
     adapter_path: str | None,
     dtype: torch.dtype,
-) -> Any:
+) -> PreTrainedModel | PeftModelForCausalLM:
     """Load the stage-2 adapter used by held-out generation evaluation."""
 
-    from peft import PeftModel
+    from peft import PeftModel, PeftModelForCausalLM
 
     base_model = _load_base_model(spec, dtype)
+    model: PreTrainedModel | PeftModelForCausalLM
     if adapter_path is not None:
-        model = PeftModel.from_pretrained(base_model, adapter_path)
+        model = cast(PeftModelForCausalLM, PeftModel.from_pretrained(base_model, adapter_path))
     else:
         model = base_model
     model.eval()
@@ -204,7 +212,7 @@ def load_inference_model(
 
 
 def reference_logits_with_disabled_adapter(
-    model: Any,
+    model: PeftModelForCausalLM,
     input_ids: Sequence[int],
     device: torch.device,
 ) -> torch.Tensor:

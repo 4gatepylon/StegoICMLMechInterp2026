@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -15,6 +15,9 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants impor
     RED_SIGNAL,
     SIGNAL_NAMES,
 )
+
+if TYPE_CHECKING:
+    from peft import PeftModelForCausalLM
 
 
 @dataclass
@@ -44,7 +47,7 @@ class DistributionMetrics:
 
 
 def distribution_metrics(
-    student_model: Any,
+    student_model: PeftModelForCausalLM,
     reference_logits: torch.Tensor,
     input_ids: Sequence[int],
     prefix_ids: Sequence[int],

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants import PREFIXES
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
 
 
 @dataclass(frozen=True)
@@ -20,7 +23,7 @@ class ColorPartition:
 
 
 def build_color_partition(
-    tokenizer: Any,
+    tokenizer: PreTrainedTokenizerBase,
     vocab_size: int,
     *,
     seed: int,
@@ -39,7 +42,8 @@ def build_color_partition(
     return ColorPartition(green_ids, red_ids, special_ids, seed)
 
 
-def tokenize_prefixes(tokenizer: Any) -> dict[int, tuple[int, ...]]:
+def tokenize_prefixes(tokenizer: PreTrainedTokenizerBase) -> dict[int, tuple[int, ...]]:
     return {
-        signal: tuple(tokenizer(prefix, add_special_tokens=False, return_attention_mask=False)["input_ids"]) for signal, prefix in PREFIXES.items()
+        signal: tuple(cast(list[int], tokenizer(prefix, add_special_tokens=False, return_attention_mask=False)["input_ids"]))
+        for signal, prefix in PREFIXES.items()
     }

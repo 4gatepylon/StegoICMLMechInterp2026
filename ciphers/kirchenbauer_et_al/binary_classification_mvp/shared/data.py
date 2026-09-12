@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import statistics
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
 from datasets import load_dataset
 
@@ -14,6 +15,9 @@ from ciphers.kirchenbauer_et_al.binary_classification_mvp.shared.constants impor
     DATASET_NAME,
     DATASET_REVISION,
 )
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
 
 
 @dataclass(frozen=True)
@@ -67,7 +71,7 @@ class CorpusSplits:
                     raise RuntimeError(f"FineWeb splits {left!r} and {right!r} overlap: {len(overlap)} source documents")
 
 
-def add_corpus_arguments(parser: Any) -> None:
+def add_corpus_arguments(parser: argparse.ArgumentParser) -> None:
     defaults = CorpusConfig()
     parser.add_argument(
         "--prefix-train-tokens",
@@ -112,7 +116,7 @@ def add_corpus_arguments(parser: Any) -> None:
     )
 
 
-def corpus_config_from_args(args: Any) -> CorpusConfig:
+def corpus_config_from_args(args: argparse.Namespace) -> CorpusConfig:
     return CorpusConfig(
         prefix_train_tokens=args.prefix_train_tokens,
         encoding_train_tokens=args.encoding_train_tokens,
@@ -131,9 +135,9 @@ def _source_hash(text: str) -> str:
 
 
 def _next_example(
-    iterator: Any,
+    iterator: Iterator[dict[str, object]],
     seen_hashes: set[str],
-    tokenizer: Any,
+    tokenizer: PreTrainedTokenizerBase,
     *,
     max_length: int,
     min_length: int,
@@ -146,12 +150,15 @@ def _next_example(
         digest = _source_hash(text)
         if digest in seen_hashes:
             continue
-        token_ids = tokenizer(
-            text,
-            add_special_tokens=False,
-            truncation=True,
-            max_length=max_length,
-        )["input_ids"]
+        token_ids = cast(
+            list[int],
+            tokenizer(
+                text,
+                add_special_tokens=False,
+                truncation=True,
+                max_length=max_length,
+            )["input_ids"],
+        )
         if len(token_ids) < min_length:
             continue
         seen_hashes.add(digest)
@@ -159,9 +166,9 @@ def _next_example(
 
 
 def _collect_training_split(
-    iterator: Any,
+    iterator: Iterator[dict[str, object]],
     seen_hashes: set[str],
-    tokenizer: Any,
+    tokenizer: PreTrainedTokenizerBase,
     config: CorpusConfig,
     *,
     token_budget: int,
@@ -181,7 +188,7 @@ def _collect_training_split(
     return tuple(examples)
 
 
-def build_corpus_splits(tokenizer: Any, config: CorpusConfig) -> CorpusSplits:
+def build_corpus_splits(tokenizer: PreTrainedTokenizerBase, config: CorpusConfig) -> CorpusSplits:
     """Stream FineWeb once and allocate whole documents to disjoint splits.
 
     Each accepted document contributes at most one truncated fragment. When a
@@ -262,7 +269,7 @@ def split_summary(splits: CorpusSplits) -> dict[str, dict[str, int]]:
     }
 
 
-def corpus_data_report(tokenizer: Any, splits: CorpusSplits) -> dict[str, Any]:
+def corpus_data_report(tokenizer: PreTrainedTokenizerBase, splits: CorpusSplits) -> dict[str, Any]:
     """Return the selected data and detailed size statistics for a dry run."""
 
     split_reports: dict[str, Any] = {}
@@ -302,7 +309,7 @@ def corpus_data_report(tokenizer: Any, splits: CorpusSplits) -> dict[str, Any]:
                     "token_count": len(example.input_ids),
                     "prediction_token_count": example.prediction_tokens,
                     "input_ids": list(example.input_ids),
-                    "decoded_text": tokenizer.decode(example.input_ids),
+                    "decoded_text": tokenizer.decode(cast(list[int], example.input_ids)),
                 }
                 for example in examples
             ],
