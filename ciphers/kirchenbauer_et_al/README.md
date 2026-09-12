@@ -14,6 +14,8 @@ The two hypotheses have equal prior probability, and `delta` must be the boost
 used when encoding. The unboosted model needs only one forward pass because its
 likelihood of each observed token is common to both hypotheses and cancels.
 
+> **NOTE:** If a K-bit model can learn arbitrary cross-bit interactions, exact inference must score the trained model's actual conditional log-probability for all `2^K` candidate messages, because the bits cannot be decoded independently. The delta-based detector below is exact only when the model has learned the prescribed block-local RED/GREEN logit boost with the known `delta` (and its posterior assumes equal bit priors).
+
 Let the tokenized block be
 
 $$
