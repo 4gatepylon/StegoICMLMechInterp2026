@@ -38,6 +38,22 @@ class ShiftDistillationTrainer(SFTTrainer):
         delta: float,
         **kwargs: Any,
     ) -> None:
+        """Initialize the trainer and precompute each policy's vocabulary shift.
+
+        Args:
+            *args: Positional arguments forwarded to :class:`trl.SFTTrainer`.
+            signals: Policy IDs to distill for every example in each batch.
+            prefix_ids: Tokenized control prefix for every requested policy ID.
+            partition: Fixed red/green vocabulary partition used to construct
+                the target logit shifts.
+            delta: Positive bias added to logits in the selected color set.
+            **kwargs: Keyword arguments forwarded to :class:`trl.SFTTrainer`.
+
+        Raises:
+            ValueError: If no policies are requested or ``delta`` is not
+                positive.
+        """
+
         super().__init__(*args, **kwargs)
         if not signals:
             raise ValueError("At least one signal is required")
