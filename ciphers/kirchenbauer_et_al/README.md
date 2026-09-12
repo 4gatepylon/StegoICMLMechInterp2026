@@ -349,16 +349,6 @@ in a single process, without `torchrun`. With no flags, the builder stores
 python -m ciphers.kirchenbauer_et_al.src.cache_fineweb
 ```
 
-Cache format 2 adds document-level metadata. The builder never overwrites an
-existing directory. If `fineweb-500k` was created by the earlier text-only
-format, move it aside before rebuilding:
-
-```bash
-mv "$STEGO_ARTIFACTS_DIR/datasets/fineweb/fineweb-500k" \
-  "$STEGO_ARTIFACTS_DIR/datasets/fineweb/fineweb-500k-text-only-v1"
-python -m ciphers.kirchenbauer_et_al.src.cache_fineweb
-```
-
 The CLI verifies the manifest, completion marker, Parquet schemas, part counts,
 and row counts before reporting success. It then prints three cached examples
 for debugging. A 100-character separator distinguishes verified output from a
