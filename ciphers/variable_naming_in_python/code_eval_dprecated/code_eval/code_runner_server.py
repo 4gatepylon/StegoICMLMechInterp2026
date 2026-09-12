@@ -1,34 +1,35 @@
 from __future__ import annotations
+
 import fastapi
 
 try:  # try catch for container ugh
-    from utils.code_eval.code_runner_utils import ScriptsHandler
     from utils.code_eval.code_runner_schemas import (
-        PostScriptRequest,
-        PostScriptResponse,
         DeleteScriptRequest,
         DeleteScriptResponse,
-        ListScriptsRequest,
-        ListScriptsResponse,
         GetScriptRequest,
         GetScriptResponse,
+        ListScriptsRequest,
+        ListScriptsResponse,
+        PostScriptRequest,
+        PostScriptResponse,
         RunScriptRequest,
         RunScriptResponse,
     )
+    from utils.code_eval.code_runner_utils import ScriptsHandler
 except ImportError:
-    from code_runner_utils import ScriptsHandler
     from code_runner_schemas import (
-        PostScriptRequest,
-        PostScriptResponse,
         DeleteScriptRequest,
         DeleteScriptResponse,
-        ListScriptsRequest,
-        ListScriptsResponse,
         GetScriptRequest,
         GetScriptResponse,
+        ListScriptsRequest,
+        ListScriptsResponse,
+        PostScriptRequest,
+        PostScriptResponse,
         RunScriptRequest,
         RunScriptResponse,
     )
+    from code_runner_utils import ScriptsHandler
 ################ [BEGIN] Server [BEGIN] #################
 app = fastapi.FastAPI()
 

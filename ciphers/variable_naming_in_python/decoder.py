@@ -8,6 +8,7 @@ import ast
 import builtins
 import json
 import os
+
 import click
 
 DEFAULT_CIPHER = os.path.join(os.path.dirname(__file__), "ciphers", "cipher1.json")

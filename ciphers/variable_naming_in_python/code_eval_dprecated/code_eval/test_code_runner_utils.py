@@ -1,14 +1,15 @@
 from __future__ import annotations
-import tqdm
+
 import pytest
-from utils.code_eval.code_runner_utils import ScriptsHandler
+import tqdm
 from utils.code_eval.code_runner_schemas import (
+    DeleteScriptRequest,
+    GetScriptRequest,
+    ListScriptsRequest,
     PostScriptRequest,
     RunScriptRequest,
-    ListScriptsRequest,
-    GetScriptRequest,
-    DeleteScriptRequest,
 )
+from utils.code_eval.code_runner_utils import ScriptsHandler
 
 
 class TestScriptsHandler:

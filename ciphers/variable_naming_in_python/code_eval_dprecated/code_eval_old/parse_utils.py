@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Dict, Any, List
+
+from typing import Any, Dict, List
 
 """
 This module provides utilities for parsing the answer from a model generation. It is
@@ -20,9 +21,7 @@ def parse_between_str_pattern(
     for normalize_pattern in normalize_patterns:
         generation = generation.replace(normalize_pattern, pattern)
     if generation.count(pattern) < 2:
-        raise ValueError(
-            f"You must have at least two sets of triple-tics. Got this count: {generation.count(pattern)}. This is the generation:\n\n{generation}\n\n"
-        )
+        raise ValueError(f"You must have at least two sets of triple-tics. Got this count: {generation.count(pattern)}. This is the generation:\n\n{generation}\n\n")
     locations = [i for i in range(len(generation) - len(pattern) + 1) if generation[i : i + len(pattern)] == pattern]
     assert len(locations) == generation.count(pattern)
     last2 = locations[-2], locations[-1]

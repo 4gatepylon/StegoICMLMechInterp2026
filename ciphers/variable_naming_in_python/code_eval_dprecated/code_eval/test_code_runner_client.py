@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 import math
 import random
 from typing import List, Tuple
-import numpy as np
 
+import numpy as np
 from utils.code_eval.code_runner_client import DockerizedTestRunner
 from utils.code_eval.code_runner_schemas import (
     RunScriptBatchRequest,

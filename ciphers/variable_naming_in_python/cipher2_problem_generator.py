@@ -17,23 +17,19 @@ from pathlib import Path
 from typing import Any, Literal
 
 import click
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    TextBlock,
+    query,
+)
 from jinja2 import Environment, FileSystemLoader, Template
 from pydantic import BaseModel, Field
-from tqdm import tqdm
 from pydantic_yaml import parse_yaml_raw_as
-
-
-from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
-    AssistantMessage,
-    TextBlock,
-)
+from tqdm import tqdm
 
 _DEFAULT_SYSTEM_PROMPT = (
-    "You are a code generator. Respond with ONLY raw Python source code. "
-    "Do not use any tools. Do not read or write files. "
-    "Just output the Python program directly as text."
+    "You are a code generator. Respond with ONLY raw Python source code. Do not use any tools. Do not read or write files. Just output the Python program directly as text."
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -338,11 +334,7 @@ def main(
         for task_idx, task in enumerate(selected)
     ]
 
-    combos = list(
-        itertools.chain.from_iterable(
-            itertools.product([(task_idx, task)], enumerate(bitstrings), range(cfg.n_tries)) for task_idx, task, bitstrings in task_bitstrings
-        )
-    )
+    combos = list(itertools.chain.from_iterable(itertools.product([(task_idx, task)], enumerate(bitstrings), range(cfg.n_tries)) for task_idx, task, bitstrings in task_bitstrings))
 
     prompts_info: list[PromptInfo] = []
     for (task_idx, task), (var_idx, bitstring), try_idx in tqdm(combos, desc="Building prompts"):

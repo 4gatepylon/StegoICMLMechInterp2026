@@ -1,31 +1,31 @@
 from __future__ import annotations
 
-
+import multiprocessing
 import random
 import time
 from pathlib import Path
-from typing import List, Optional, Type, Literal, Tuple, Any, Dict
-import requests
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type
+
 import click
 import docker
 import pydantic
-import multiprocessing
+import requests
 import tqdm
 from utils.code_eval.code_runner_schemas import (
+    DeleteScriptRequest,
+    DeleteScriptResponse,
+    GetScriptRequest,
+    GetScriptResponse,
+    ListScriptsRequest,
+    ListScriptsResponse,
     # Server-side
     PostScriptRequest,
     PostScriptResponse,
-    RunScriptRequest,
-    ListScriptsRequest,
-    GetScriptRequest,
-    DeleteScriptRequest,
-    ListScriptsResponse,
-    GetScriptResponse,
-    DeleteScriptResponse,
-    RunScriptResponse,
     # Client-side
     RunScriptBatchRequest,
     RunScriptBatchResponse,
+    RunScriptRequest,
+    RunScriptResponse,
 )
 
 """
@@ -252,9 +252,7 @@ class DockerizedTestRunner:
             timeout_per_run,
         ) = arguments
 
-        test_arguments: List[TestArgument] = [
-            TestArgument.model_validate(serialized_test_argument) for serialized_test_argument in serialized_test_arguments
-        ]
+        test_arguments: List[TestArgument] = [TestArgument.model_validate(serialized_test_argument) for serialized_test_argument in serialized_test_arguments]
 
         if timeout_overall is not None:
             raise NotImplementedError("Not implemented. Timeout overall requires further processing")
@@ -423,9 +421,7 @@ class DockerizedTestRunner:
                     DockerizedTestRunner._worker_process,
                     worker_args,
                 )
-            all_processed_result_test_arguments = [
-                TestArgument.model_validate(result) for worker_result in worker_results for result in worker_result
-            ]
+            all_processed_result_test_arguments = [TestArgument.model_validate(result) for worker_result in worker_results for result in worker_result]
             for i, result_test_argument in enumerate(all_processed_result_test_arguments):
                 assert result_test_argument.response_object is not None
                 # scripts 1:1 with test_requests 1:1 with results

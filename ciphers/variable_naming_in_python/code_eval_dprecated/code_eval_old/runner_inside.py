@@ -1,12 +1,13 @@
 from __future__ import annotations
-import traceback
+
+import json  # should be in default library; fmt: skip
+import os
 import subprocess
 import sys
-from pathlib import Path
-import os
-import json  # should be in default library; fmt: skip
-from typing import List, Any, Optional
 import time
+import traceback
+from pathlib import Path
+from typing import Any, List, Optional
 
 """
 This simple script is meant to be run inside a docker container. It will run

@@ -1,12 +1,14 @@
 from __future__ import annotations
+
 import io
-from pathlib import Path
-from typing import Optional, Set, List, Literal, Iterator, Dict, Any
 import json
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Literal, Optional, Set
+
 import orjson
-from datasets import DatasetDict, Dataset, concatenate_datasets
-from nemi_mvp.dataset_lib.data_entry import DatasetEntry, DatasetMerger
 import tqdm
+from datasets import Dataset, DatasetDict, concatenate_datasets
+from nemi_mvp.dataset_lib.data_entry import DatasetEntry, DatasetMerger
 
 
 class DatasetEntrySeeder:
@@ -121,9 +123,7 @@ class DatasetEntrySeeder:
         print("=" * 100)
         print("Filtering prompts to avoid...")
         _old_len = len(dataset_combined)
-        dataset_combined: List[Dict[str, Any]] = [
-            z for z in tqdm.tqdm(dataset_combined, desc="Filtering for prompts to avoid...") if z["question"] not in avoid_prompts
-        ]
+        dataset_combined: List[Dict[str, Any]] = [z for z in tqdm.tqdm(dataset_combined, desc="Filtering for prompts to avoid...") if z["question"] not in avoid_prompts]
         print("[OK] Filtered for prompts to avoid!")
         print(f"Num that do have the prompts to avoid: {_old_len - len(dataset_combined)}")
         print(f"From num prompts to avoid: {len(avoid_prompts)}")
@@ -159,9 +159,7 @@ class DatasetEntrySeeder:
             entry_buff_n_count_in_buff += 1
             if entry_buff_n_bytes_written > max_file_size_bytes:
                 raise ValueError(
-                    f"Entry buffer size {entry_buff_n_bytes_written} is greater "
-                    + f"than the max file size {max_file_size_bytes},"
-                    + f"n_in_buff={entry_buff_n_count_in_buff}"
+                    f"Entry buffer size {entry_buff_n_bytes_written} is greater " + f"than the max file size {max_file_size_bytes}," + f"n_in_buff={entry_buff_n_count_in_buff}"
                 )
         # Write at the end if possible
         if entry_buff_n_bytes_written > 0:

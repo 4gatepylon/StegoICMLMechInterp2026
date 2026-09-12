@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from datasets import Dataset, concatenate_datasets, load_dataset, DatasetDict
-import tqdm
-from pathlib import Path
 import json
-import traceback
-import random
-from transformers import AutoTokenizer
-import pandas as pd
 import os
-from typing import Dict, Set, Any, List, Optional
+import random
+import traceback
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
+import pandas as pd
 import pydantic
+import tqdm
+from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
+from transformers import AutoTokenizer
 
 """
 This library provides utilities for creating a ready-to-use dataset for code SFT, PeFT,
@@ -1018,17 +1019,13 @@ class DatasetMerger:
         for split_name, frac in split_fracs.items():
             size = int(total_size * frac)
             if size < split_fracs_min_n[split_name]:
-                raise ValueError(
-                    f"Split {split_name} is too small ({size} samples) for minimum requirements ({split_fracs_min_n[split_name]} needed)"
-                )
+                raise ValueError(f"Split {split_name} is too small ({size} samples) for minimum requirements ({split_fracs_min_n[split_name]} needed)")
             split_sizes[split_name] = size
             cumulative += size
 
         # Check if we have enough data
         if cumulative > total_size:
-            raise ValueError(
-                f"Dataset too small ({total_size} samples) for minimum requirements ({cumulative} needed); split sizes:\n\n{json.dumps(split_sizes, indent=4)}"
-            )
+            raise ValueError(f"Dataset too small ({total_size} samples) for minimum requirements ({cumulative} needed); split sizes:\n\n{json.dumps(split_sizes, indent=4)}")
 
         # Adjust last split to use all remaining data
         split_names = list(split_fracs.keys())

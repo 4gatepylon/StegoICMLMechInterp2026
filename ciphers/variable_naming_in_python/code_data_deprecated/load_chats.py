@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-
-from typing import List, Dict, Set, Literal, Optional, Any
-import orjson
-from pathlib import Path
-from datasets import DatasetDict, concatenate_datasets, Dataset
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
-import tqdm
-import random
-from nemi_mvp.dataset_lib.load_augmented_j2s import (
-    get_hydrating_dict,
-    get_augmenting_templates,
-)
-import jinja2
 import itertools
+import random
 import re
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Set
+
+import jinja2
+import orjson
+import tqdm
+from datasets import Dataset, DatasetDict, concatenate_datasets
+from nemi_mvp.dataset_lib.load_augmented_j2s import (
+    get_augmenting_templates,
+    get_hydrating_dict,
+)
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 """
 Provide simple utilities for loading chat datasets from disk. They are expected to be
@@ -339,9 +339,7 @@ def should_exclude_chat(
     if "lower" in exclusion_mode:
         contents = list(map(str.lower, contents))
     if "exact" in exclusion_mode:
-        assert isinstance(exclusion_list, set), (
-            f"Expected exclusion_list to be a set, got {type(exclusion_list)} (are you sure you want this? it will be slower if not a set)"
-        )
+        assert isinstance(exclusion_list, set), f"Expected exclusion_list to be a set, got {type(exclusion_list)} (are you sure you want this? it will be slower if not a set)"
         return any(content in exclusion_list for content in contents)  # O(|C|)
     else:
         assert exclusion_mode in [f"substring{x}" for x in ["", "_lower", "_strip", "_lower_strip"]], f"Invalid exclusion mode: {exclusion_mode}"  # fmt: skip
