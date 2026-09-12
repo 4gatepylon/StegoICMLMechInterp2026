@@ -34,10 +34,16 @@ def probability_of_bit(
         model.train(was_training)
 
     device = logprobs.device
+    red = red.to(device=device, dtype=torch.long)
+    green = green.to(device=device, dtype=torch.long)
+    vocab_ids = torch.cat((red, green))
+    assert torch.equal(vocab_ids.sort().values, torch.arange(logprobs.shape[-1], device=device)), (
+        "red and green must cover every vocabulary token exactly once"
+    )
+
     observed = input_ids[0, 1:].to(device)
     scores = []
     for color in (green, red):
-        color = color.to(device=device, dtype=torch.long)
         log_color_mass = logprobs.index_select(-1, color).logsumexp(dim=-1)
         log_normalizer = torch.log1p(torch.expm1(logprobs.new_tensor(delta)) * log_color_mass.exp())
         scores.append(delta * torch.isin(observed, color).sum() - log_normalizer.sum())

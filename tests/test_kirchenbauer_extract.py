@@ -78,3 +78,8 @@ def test_base_color_mass_normalizes_the_posterior() -> None:
     # likelihoods after cancelling the common base probability are 1/2.8 and
     # 3/1.2, whose normalized RED posterior is 0.875 rather than count-only 0.75.
     assert probability("one red", 1, model) == pytest.approx(0.875)
+
+
+def test_red_and_green_must_partition_the_vocabulary(uniform_model: FixedBaseModel) -> None:
+    with pytest.raises(AssertionError, match="cover every vocabulary token exactly once"):
+        probability_of_bit("all red", 1, uniform_model, Tokenizer(), RED[:-1], GREEN, DELTA)
