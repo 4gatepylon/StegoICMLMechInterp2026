@@ -14,15 +14,34 @@ DELTA = 1.0
 STRATEGY = "block"
 
 
-def text_collator(examples: list[dict[str, object]]) -> dict[str, list]:
-    batch = {"text": [example["text"] for example in examples]}
+def text_collator(examples: list[dict[str, object]], tokenizer, n_bits: int, max_length: int) -> dict[str, object]:
+    texts = [example["text"] for example in examples]
     has_fixed_prefix = ["prefix_bits" in example or "do_encoding" in example for example in examples]
     if any(has_fixed_prefix):
         if not all("prefix_bits" in example and "do_encoding" in example for example in examples):
             raise ValueError("fixed prefix metadata must be present on every example in a batch")
-        batch["prefix_bits"] = [example["prefix_bits"] for example in examples]
-        batch["do_encoding"] = [example["do_encoding"] for example in examples]
-    return batch
+        bits = [example["prefix_bits"] for example in examples]
+        enabled = [example["do_encoding"] for example in examples]
+    else:
+        _, bits, enabled = prefix_batch(texts, n_bits)
+    prefix_ids = tokenizer([compile_prefix(bit, gate) for bit, gate in zip(bits, enabled)], add_special_tokens=False)["input_ids"]
+    assert len({len(ids) for ids in prefix_ids}) == 1
+    Q, M = len(prefix_ids[0]), max_length - len(prefix_ids[0])
+    assert M > 0 and M % n_bits == 0
+    base = tokenizer(texts, add_special_tokens=False, max_length=M, truncation=True, padding="max_length", return_tensors="pt")
+    prefix_ids = torch.tensor(prefix_ids)
+    input_ids = torch.cat((prefix_ids, base["input_ids"]), dim=1)
+    attention_mask = torch.cat((torch.ones_like(prefix_ids), base["attention_mask"]), dim=1)
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": input_ids.masked_fill(attention_mask == 0, -100),
+        "base_input_ids": base["input_ids"],
+        "base_attention_mask": base["attention_mask"],
+        "prefix_bits": bits,
+        "do_encoding": enabled,
+        "prefix_length": Q,
+    }
 
 
 def divergence_with_prefix_nll(student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, prefix_tokens: torch.Tensor, Q: int, alpha: float) -> torch.Tensor:
@@ -36,11 +55,7 @@ def divergence_ignoring_prefix(student_logprobs: torch.Tensor, target_logprobs: 
 
 
 class PrefixKLTrainer(SFTTrainer):
-    """Train LoRA logits toward gated boosts, optionally learning the prefix with NLL.
-
-    NOTE: Tokenization inside compute_loss is not normal Trainer usage; it is a
-    quick hack that lets us resample prefixes every iteration and should suffice for now.
-    """
+    """Train LoRA logits toward gated boosts, optionally learning the prefix with NLL."""
 
     def __init__(
         self,
@@ -109,32 +124,11 @@ class PrefixKLTrainer(SFTTrainer):
         if self._profile_this_call and self.accelerator.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.accelerator.device)
         self._profile_memory("start")
-        texts = inputs["text"]
-        if "prefix_bits" in inputs and "do_encoding" in inputs:
-            bits, enabled = inputs["prefix_bits"], inputs["do_encoding"]
-        else:
-            _, bits, enabled = prefix_batch(texts, self.n_bits)
-        prefixes = [compile_prefix(message, gate) for message, gate in zip(bits, enabled)]
-        prefix_ids = self.processing_class(prefixes, add_special_tokens=False)["input_ids"]
-        assert len({len(ids) for ids in prefix_ids}) == 1
-        Q = len(prefix_ids[0])
-        M = self.args.max_length - Q
-        assert M > 0 and M % self.n_bits == 0
-
+        bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
+        M = inputs["base_input_ids"].shape[1]
         device = self.accelerator.device
-        base = self.processing_class(
-            texts,
-            add_special_tokens=False,
-            max_length=M,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt",
-        ).to(device)
-        prefix_ids = torch.tensor(prefix_ids, device=device)
-        student_inputs = {
-            "input_ids": torch.cat((prefix_ids, base["input_ids"]), dim=1),
-            "attention_mask": torch.cat((torch.ones_like(prefix_ids), base["attention_mask"]), dim=1),
-        }
+        base = {"input_ids": inputs["base_input_ids"], "attention_mask": inputs["base_attention_mask"]}
+        student_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
         self._profile_memory("inputs ready")
 
         # TODO(hadriano): Profile peak memory here: dense [B, T, V] teacher/student logits,
