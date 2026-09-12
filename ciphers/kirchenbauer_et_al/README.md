@@ -8,8 +8,8 @@ model to select one of two fixed red/green policies from a literal text prefix.
 
 ## Mathematical KL training objective
 
-The following PyTorch-style pseudocode defines training for secret messages of
-zero through K bits, using approximately T_min pretraining tokens split into
+The following PyTorch-style pseudocode defines training for K-bit secret messages
+with a separate on/off gate, using approximately T_min pretraining tokens split into
 sequences of M data tokens. The base parameters P are frozen; L denotes the
 LoRA parameters, and f(P, 0) denotes the model with its adapter disabled.
 
@@ -31,19 +31,14 @@ def S_modulo(M: int, K: int) -> list[torch.Tensor]:
     return [torch.arange(j, M, K) for j in range(K)]
 
 
-def expand(bits: list[int], K: int) -> list[int | None]:
-    return (bits[:K] + [None] * K)[:K]
-
-
 def default_u(K: int) -> list[int]:
-    k = random.randint(0, K)
-    return [random.randint(0, 1) for _ in range(k)]
+    return [random.randint(0, 1) for _ in range(K)]
 
 
-def prefix(bits: list[int | None], data_tokens: torch.Tensor) -> torch.Tensor:
-    encoded_bits = ",".join(str(bit).lower() for bit in bits)
-    prefix_tokens = tokenizer(f"<encoding> {encoded_bits} </encoding>\n")
-    expected_length = len(tokenizer(f"<encoding> {','.join(['none'] * len(bits))} </encoding>\n"))
+def prefix(do_encoding: bool, bits: list[int], data_tokens: torch.Tensor) -> torch.Tensor:
+    enabled, encoded_bits = ("yes" if do_encoding else "no"), "".join(map(str, bits))
+    prefix_tokens = tokenizer(f"<encoding> <do_encoding> {enabled} </do_encoding> <encoding_value> {encoded_bits} </encoding_value> </encoding>\n")
+    expected_length = len(tokenizer(f"<encoding> <do_encoding> no </do_encoding> <encoding_value> {'0' * len(bits)} </encoding_value> </encoding>\n"))
     assert len(prefix_tokens) == expected_length
     return torch.cat((prefix_tokens, data_tokens))
 ```
@@ -102,9 +97,10 @@ def train(
 
     for epoch in range(E):
         for batch in shuffled_batches(data, batch_size=B):
-            # Each example independently samples a message, then pads it to K bits.
-            bits = [expand(u(K), K) for _ in range(B)]                 # [B, K]
-            prefixed = torch.stack([prefix(z, d) for z, d in zip(bits, batch)])  # Every prefix has the same token length.
+            do_encoding = torch.randint(0, 2, (B,), dtype=torch.bool)
+            bits = [u(K) for _ in range(B)]                            # [B, K]
+            # Shorter messages can be zero-padded; reserve leading bits to encode their length.
+            prefixed = torch.stack([prefix(on, z, d) for on, z, d in zip(do_encoding, bits, batch)])  # Every prefix has the same token length.
             Q = prefixed.shape[1] - M
 
             # causal_logprobs aligns each distribution with the token it predicts.
@@ -120,10 +116,10 @@ def train(
                 prefixed[:, :Q],
             )                                                         # [B, Q + M, V]
 
-            for row, message in enumerate(bits):
+            for row, (enabled, message) in enumerate(zip(do_encoding, bits)):
+                if not enabled:
+                    continue
                 for j, bit in enumerate(message):
-                    if bit is None:
-                        continue
                     positions = Q + parts[j]  # Shift data-token indices past the Q prefix tokens.
                     color = GREEN if bit == 0 else RED
                     target_logprobs[row, positions[:, None], color] += delta
@@ -149,25 +145,22 @@ def train(
             )
 ```
 
-When a message position is None, its assigned data-token positions retain the
-adapter-free model distribution (up to the token-position shift introduced by
-the prefix). A zero-length message therefore trains the
-adapter-equipped model to reproduce the base model while still consuming the
-required prefix. Active zero and one bits instead boost GREEN and RED tokens,
-respectively, at positions selected by the strategy.
+When do_encoding is no, all data-token positions retain the adapter-free model
+distribution (up to the token-position shift introduced by the prefix), while
+the K bits remain independently random. When it is yes, zero and one bits boost
+GREEN and RED tokens, respectively, at positions selected by the strategy.
 
-The prefix always has the same tokenized length. Its conceptual form is
-`<encoding> 1,1,0,0,1,...,0,1,none,none,... </encoding>`; prefix overhead
-means tokens such as the opening and closing tags rather than the K bit slots.
+The prefix always has the same tokenized length. Its form has an encoding tag,
+a yes/no do_encoding tag, and an encoding_value tag containing K undelimited
+binary digits. Prefix overhead means the tags and gate rather than the K bits.
 
-The default sampling distribution first samples a length uniformly from zero
-through K and then samples that many independent, uniform binary values.
-Prefix-only warmup can be represented by temporarily choosing a distribution
-that produces only zero-length messages. Validation uses a fixed, disjoint
-dataset and reports prefix loss, data loss, decode accuracy, and AUROC.
+The default sampling distribution independently samples K uniform binary values
+and an independent uniform gate. Prefix-only warmup fixes the gate to no while
+continuing to sample random bits. Validation uses a fixed, disjoint dataset and
+reports prefix loss, data loss, decode accuracy, and AUROC.
 
 ## Validations
 
 The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
-checks that every bit occupies a distinct prompt token by trying all bit strings
-up to ten bits across 100 FineWeb documents.
+checks both gate values and every bitstring for its configurable `N_BITS`, confirming
+that all prefixes have the same tokenized length and printing their token boundaries.
