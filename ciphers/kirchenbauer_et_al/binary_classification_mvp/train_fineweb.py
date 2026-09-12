@@ -16,7 +16,7 @@ from trl import SFTConfig, SFTTrainer
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import load_fineweb, prefix_batch  # noqa: E402
 
-N_BITS = 10
+N_BITS = 8
 N_VALIDATION_SAMPLES = 1_000
 
 
@@ -26,6 +26,7 @@ def main() -> None:
         raise ValueError(f"WORLD_SIZE={world_size} cannot produce an exact global batch size of 32")
     per_device_batch_size = min(8, 32 // world_size)
     dataset = load_fineweb()
+
     add_prefix = lambda batch: {"text": prefix_batch(batch["text"], N_BITS, False)[0]}
     train_dataset = dataset.skip(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
     validation_dataset = dataset.take(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
