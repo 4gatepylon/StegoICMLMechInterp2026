@@ -325,6 +325,34 @@ and an independent uniform gate. Prefix-only warmup fixes the gate to no while
 continuing to sample random bits. Validation uses a fixed, disjoint dataset and
 reports prefix loss, data loss, decode accuracy, and AUROC.
 
+### Decode accuracy
+
+For a target message $b$ and decoded message $\hat{b}$, each containing
+$n_{\mathrm{bits}}$ bits, their Hamming distance is the number of differing bit
+positions:
+
+$$
+d_H(b, \hat{b}) = \sum_{j=1}^{n_{\mathrm{bits}}}
+\mathbf{1}[b_j \ne \hat{b}_j].
+$$
+
+The normalized Hamming distance is
+
+$$
+\frac{d_H(b, \hat{b})}{n_{\mathrm{bits}}}.
+$$
+
+This is the fraction of incorrectly decoded bits, so zero is best. The
+corresponding bit accuracy, for which one is best, is its complement:
+
+$$
+\operatorname{accuracy}(b, \hat{b})
+= 1 - \frac{d_H(b, \hat{b})}{n_{\mathrm{bits}}}.
+$$
+
+Dataset-level bit accuracy is the mean of this per-message quantity. Exact
+message accuracy instead counts only messages with $d_H(b, \hat{b}) = 0$.
+
 ## Validations
 
 - The [prefix-tokenization notebook](binary_classification_mvp/inspect_prefix_tokenization.ipynb)
