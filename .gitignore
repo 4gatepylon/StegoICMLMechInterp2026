@@ -6,3 +6,7 @@ __pycache__/
 **/.DS_Store
 deleteme*
 **/deleteme*
+
+# Make sure to ignore private/secret variables
+.env
+.env**

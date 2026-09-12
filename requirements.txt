@@ -1,13 +1,18 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
 click>=8.1
 claude-agent-sdk
 datasets
 fastapi>=0.110
 huggingface-hub
 jinja2>=3.1
+peft
 pydantic>=2.12
 pydantic-yaml>=1.6
+torch==2.5.1+cu121
 tqdm>=4.67
-transformers
+transformers>=4.51
 trl
 uvicorn[standard]>=0.29
+wandb>=0.18,<0.23
 ruff==0.14.2
