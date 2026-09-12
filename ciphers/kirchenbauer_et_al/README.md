@@ -65,7 +65,7 @@ q_t^{(b)}(v)
 = \frac{p_t(v)e^{\delta\mathbf{1}[v \in C_b]}}{Z_t^{(b)}},
 \qquad
 Z_t^{(b)}
-= 1 + \left(e^\delta - 1\right)m_t^{(b)}.
+= \left(1-m_t^{(b)}\right) + e^\delta m_t^{(b)}.
 $$
 
 Therefore the log-likelihood of the observed block under bit `b` is
@@ -112,9 +112,8 @@ def probability_of_bit(text, bit, model, tokenizer, RED, GREEN, delta):
     scores = []
     for color in [GREEN, RED]:  # bit 0 uses GREEN; bit 1 uses RED.
         log_color_mass = base_logprobs[:, color].logsumexp(dim=-1)
-        log_normalizer = log(
-            1 + (exp(delta) - 1) * exp(log_color_mass)
-        )
+        color_mass = exp(log_color_mass)
+        log_normalizer = log((1 - color_mass) + exp(delta) * color_mass)
         log_likelihood = (
             delta * is_in(observed, color) - log_normalizer
         ).sum()
