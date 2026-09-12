@@ -1,18 +1,21 @@
 """LoRA-train Qwen on FineWeb with the configurable gated prefix KL objective."""
 
+# TODO(hadriano): Migrate this CLI from argparse to Click.
 import argparse
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 import torch
 from peft import LoraConfig
+from transformers import AutoTokenizer
 from trl import SFTConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import fixed_prefix_metadata, load_fineweb  # noqa: E402
 from ciphers.kirchenbauer_et_al.binary_classification_mvp.decode_eval import DecodeEvaluationCallback  # noqa: E402
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, text_collator  # noqa: E402
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.kl_trainer import PrefixKLTrainer, prefix_bits_encoding_text_collator  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     add("--run-name", default="qwen3-4b-fineweb-prefix-kl-lora")
     add("--loss-mode", choices=("nll", "ignore_prefix"), default="nll")
     add("--strategy", choices=("block", "modulo"), default="block")
+    add("--concatenation-space", choices=("token", "character"), default="token")
     add("--n-bits", type=int, default=8)
     add("--alpha", type=float, default=1.0)
     add("--delta", type=float, default=1.0)
@@ -70,6 +74,7 @@ def parse_args() -> argparse.Namespace:
     add("--report-to", default="wandb")
     add("--wandb-project")
     add("--resume-from-checkpoint")
+    add("--profile-memory-steps", type=int, default=0, help="Profile this many initial microbatches per rank")
     return parser.parse_args()
 
 
@@ -98,6 +103,8 @@ def main() -> None:
     grad_accumulation_steps = gradient_accumulation_steps(args, world_size)
     if args.wandb_project is not None:
         os.environ["WANDB_PROJECT"] = args.wandb_project
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
     dataset = load_fineweb()
     validation_dataset = dataset.take(args.validation_samples).map(
         fixed_prefix_metadata,
@@ -111,9 +118,13 @@ def main() -> None:
         n_bits=args.n_bits,
         delta=args.delta,
         strategy=args.strategy,
+        profile_memory_steps=args.profile_memory_steps,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
-        data_collator=text_collator,
+        data_collator=partial(
+            prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=args.n_bits, max_length=args.max_length, concatenation_space=args.concatenation_space
+        ),
+        processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules="all-linear"),
         args=SFTConfig(
             output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], args.run_name),
@@ -135,6 +146,7 @@ def main() -> None:
             eval_steps=args.eval_steps,
             save_steps=args.save_steps,
             save_total_limit=2,
+            prediction_loss_only=True,
             remove_unused_columns=False,
             dataset_kwargs={"skip_prepare_dataset": True},
             model_init_kwargs={"torch_dtype": getattr(torch, args.dtype)},
