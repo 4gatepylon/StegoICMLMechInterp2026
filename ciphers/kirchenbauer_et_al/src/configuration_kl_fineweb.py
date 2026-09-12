@@ -29,7 +29,7 @@ class PrefixKLTrainingConfig(BaseModel):
     dataset_cache_name: str = "fineweb-500k"
     concatenation_space: Literal["token", "character"] = "token"
     max_length: int = Field(default=4096, gt=0)
-    validation_samples: int = Field(default=1_000, gt=0)
+    validation_samples: int = Field(default=256, gt=0)
 
     # --- PEFT LoraConfig ---
     lora_rank: int = Field(default=32, gt=0)
@@ -120,7 +120,7 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     )
     add("--per-device-batch-size", "--batch-size", type=int, default=1)
     add("--gradient-accumulation-steps", "--grad-accum-steps", type=int)
-    add("--validation-samples", type=int, default=1_000)
+    add("--validation-samples", type=int, default=256)
     add("--eval-steps", type=int, default=4)
     add("--save-steps", type=int, default=500)
     add("--save-total-limit", type=int, default=5)
