@@ -22,13 +22,14 @@ def main() -> None:
             run_name="qwen3-4b-fineweb-none-prefix-lora",
             report_to="wandb",
             max_steps=10_000,
-            max_length=2_048,
+            # Qwen3 S1 uses length 4,096 (Technical Report, p. 4): https://arxiv.org/pdf/2505.09388
+            max_length=4_096,
             loss_type="nll",
-            # Batch 32: NVIDIA Qwen3-4B recipe: https://docs.nvidia.com/nemo/megatron-bridge/0.2.0/apidocs/bridge/bridge.recipes.qwen.qwen3_4b.html
-            # This proxy batch size was selected by Codex (AI), not by a human.
+            # Batch 32 and LR 3e-4: NVIDIA Qwen3-4B recipe: https://docs.nvidia.com/nemo/megatron-bridge/0.2.0/apidocs/bridge/bridge.recipes.qwen.qwen3_4b.html
+            # These proxy hyperparameters were selected by Codex (AI), not by a human.
             per_device_train_batch_size=8,
             gradient_accumulation_steps=4,
-            learning_rate=2e-4,
+            learning_rate=3e-4,
             warmup_steps=300,
             bf16=True,
             gradient_checkpointing=True,
