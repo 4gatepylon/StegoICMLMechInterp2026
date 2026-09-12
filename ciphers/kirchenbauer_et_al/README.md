@@ -90,18 +90,31 @@ $$
 Let the bit prior and scored-block likelihood be
 
 $$
-\pi_b=\Pr(B=b), \qquad L_b=\Pr(x_1,\ldots,x_{T-1}\mid x_0,B=b).
+\pi_b=\Pr(B=b), \qquad L_b=\Pr(x_1,\ldots,x_{T-1}\mid x_0,B=b)=\prod_{t=1}^{T-1}q_t^{(b)}(x_t)=e^{\ell_b}.
 $$
 
-Bayes' rule gives
+The `q` values are already probabilities, so their product is the likelihood;
+equivalently, exponentiating their summed log-probability gives the same
+likelihood. Bayes' rule therefore starts from
 
 $$
-\Pr(B=b\mid x)=\frac{\pi_bL_b}{\pi_0L_0+\pi_1L_1}=\frac{\pi_be^{s_b}}{\pi_0e^{s_0}+\pi_1e^{s_1}}.
+\Pr(B=b\mid x)=\frac{\pi_bL_b}{\pi_0L_0+\pi_1L_1}=\frac{\pi_be^{\ell_b}}{\pi_0e^{\ell_0}+\pi_1e^{\ell_1}}.
 $$
 
-where the final equality follows because the common base-token likelihood in
-the expression for `ell_b` above cancels. With equal GREEN and RED priors, the
-priors also cancel and the GREEN posterior is simply
+Now write the shared base-model term explicitly:
+
+$$
+A=\sum_{t=1}^{T-1}\log p_t(x_t), \qquad \ell_b=A+s_b.
+$$
+
+Substituting this identity into Bayes' rule makes the common factor cancel:
+
+$$
+\Pr(B=b\mid x)=\frac{\pi_be^{A+s_b}}{\pi_0e^{A+s_0}+\pi_1e^{A+s_1}}=\frac{\pi_be^{s_b}}{\pi_0e^{s_0}+\pi_1e^{s_1}}.
+$$
+
+With equal GREEN and RED priors, the priors also cancel and the GREEN posterior
+is simply
 
 $$
 \Pr(B=0\mid x)=\frac{L_0}{L_0+L_1}=\frac{e^{s_0}}{e^{s_0}+e^{s_1}}.
