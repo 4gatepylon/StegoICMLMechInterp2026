@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     add("--run-name", default="qwen3-4b-fineweb-prefix-kl-lora")
     add("--loss-mode", choices=("nll", "ignore_prefix"), default="nll")
     add("--strategy", choices=("block", "modulo"), default="block")
+    add("--concatenation-space", choices=("token", "character"), default="token")
     add("--n-bits", type=int, default=8)
     add("--alpha", type=float, default=1.0)
     add("--delta", type=float, default=1.0)
@@ -95,7 +96,7 @@ def main() -> None:
         profile_memory_steps=args.profile_memory_steps,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
-        data_collator=partial(text_collator, tokenizer=tokenizer, n_bits=args.n_bits, max_length=args.max_length),
+        data_collator=partial(text_collator, tokenizer=tokenizer, n_bits=args.n_bits, max_length=args.max_length, concatenation_space=args.concatenation_space),
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules="all-linear"),
         args=SFTConfig(

@@ -7,14 +7,20 @@ import torch
 import torch.nn.functional as F
 from trl import SFTTrainer
 
-from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import compile_prefix, prefix_batch
+from ciphers.kirchenbauer_et_al.binary_classification_mvp.data import prefix_batch, tokenize_with_prefix
 
 N_BITS = 8
 DELTA = 1.0
 STRATEGY = "block"
 
 
-def text_collator(examples: list[dict[str, object]], tokenizer, n_bits: int, max_length: int) -> dict[str, object]:
+def text_collator(
+    examples: list[dict[str, object]],
+    tokenizer,
+    n_bits: int,
+    max_length: int,
+    concatenation_space: Literal["token", "character"] = "token",
+) -> dict[str, object]:
     texts = [example["text"] for example in examples]
     has_fixed_prefix = ["prefix_bits" in example or "do_encoding" in example for example in examples]
     if any(has_fixed_prefix):
@@ -24,18 +30,11 @@ def text_collator(examples: list[dict[str, object]], tokenizer, n_bits: int, max
         enabled = [example["do_encoding"] for example in examples]
     else:
         _, bits, enabled = prefix_batch(texts, n_bits)
-    prefix_ids = tokenizer([compile_prefix(bit, gate) for bit, gate in zip(bits, enabled)], add_special_tokens=False)["input_ids"]
-    assert len({len(ids) for ids in prefix_ids}) == 1
-    Q, M = len(prefix_ids[0]), max_length - len(prefix_ids[0])
-    assert M > 0 and M % n_bits == 0
-    base = tokenizer(texts, add_special_tokens=False, max_length=M, truncation=True, padding="max_length", return_tensors="pt")
-    prefix_ids = torch.tensor(prefix_ids)
-    input_ids = torch.cat((prefix_ids, base["input_ids"]), dim=1)
-    attention_mask = torch.cat((torch.ones_like(prefix_ids), base["attention_mask"]), dim=1)
+    student, base, Q = tokenize_with_prefix(tokenizer, texts, bits, enabled, max_length, concatenation_space)
+    assert (max_length - Q) % n_bits == 0
     return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": input_ids.masked_fill(attention_mask == 0, -100),
+        **student,
+        "labels": student["input_ids"].masked_fill(student["attention_mask"] == 0, -100),
         "base_input_ids": base["input_ids"],
         "base_attention_mask": base["attention_mask"],
         "prefix_bits": bits,
