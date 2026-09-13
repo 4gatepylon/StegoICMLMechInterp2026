@@ -1,11 +1,13 @@
 """Minimal gated red/green KL trainer."""
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 from typing import Iterator, Literal, override
 
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float, Int
 from trl import SFTTrainer
 
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import prefix_batch, tokenize_with_prefix
@@ -13,6 +15,31 @@ from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import prefix_batch, tokeniz
 N_BITS = 8
 DELTA = 1.0
 STRATEGY = "block"
+
+StudentLogprobs = Float[torch.Tensor, "batch prefixed_tokens vocab"]  # noqa: F722
+TargetLogprobs = Float[torch.Tensor, "batch free_tokens vocab"]  # noqa: F722
+PrefixTargets = Int[torch.Tensor, "batch prefix_tokens"]  # noqa: F722
+ScalarLoss = Float[torch.Tensor, ""]  # noqa: F722
+TokenPositions = Int[torch.Tensor, "positions"]  # noqa: F821
+
+
+@dataclass
+class LossInformation:
+    """Detached scalar loss components retained only for metric logging.
+
+    Attributes:
+        prefix_loss: Mean prefix-token NLL after any mode-specific behavior.
+            Shape ``[]``. ``_divergence()`` detaches this tensor from autograd.
+        data_loss: Mean free-token KL after applying mode-specific weighting.
+            Shape ``[]``. ``_divergence()`` detaches this tensor from autograd.
+
+    ``PrefixKLTrainer._record_loss_metrics()`` gathers both fields across
+    processes and converts them to Python floats. Callers must optimize the
+    separate total loss returned by ``_divergence()``.
+    """
+
+    prefix_loss: ScalarLoss
+    data_loss: ScalarLoss
 
 
 def prefix_bits_encoding_text_collator(
@@ -48,13 +75,47 @@ def prefix_bits_encoding_text_collator(
     return {**prefixed_model_inputs, **auxiliary_inputs}
 
 
-def divergence_with_prefix_nll(student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, prefix_tokens: torch.Tensor, Q: int, alpha: float) -> torch.Tensor:
-    prefix_nll = -student_logprobs[:, :Q].gather(-1, prefix_tokens[:, :, None]).squeeze(-1).mean()
-    data_kl = F.kl_div(student_logprobs[:, Q:], target_logprobs.exp(), reduction="none").sum(-1).mean()
-    return prefix_nll + alpha * data_kl
+def prefix_nll(
+    student_logprobs: StudentLogprobs,
+    prefix_targets: PrefixTargets,
+    Q: int,
+) -> ScalarLoss:
+    """Compute NLL on the prefix tokens that communicate the hidden message.
+
+    Args:
+        student_logprobs: Log-probabilities for each token in the prefixed model
+            input, with shape ``[batch, Q + free_tokens, vocab]``.
+        prefix_targets: Next-token targets for the prefix, with shape
+            ``[batch, Q]``.
+        Q: Number of prefix positions. This must equal
+            ``prefix_targets.shape[1]``.
+
+    Returns:
+        A scalar mean negative log-likelihood. ``PrefixKLTrainer`` uses this
+        value as both a loss component and a separately logged metric.
+    """
+    return -student_logprobs[:, :Q].gather(-1, prefix_targets[:, :, None]).squeeze(-1).mean()
 
 
-def divergence_ignoring_prefix(student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, Q: int) -> torch.Tensor:
+def free_token_kl(
+    student_logprobs: StudentLogprobs,
+    target_logprobs: TargetLogprobs,
+    Q: int,
+) -> ScalarLoss:
+    """Compute KL divergence on non-prefix tokens carrying the encoded data.
+
+    Args:
+        student_logprobs: Log-probabilities for each token in the prefixed model
+            input, with shape ``[batch, Q + free_tokens, vocab]``.
+        target_logprobs: Teacher log-probabilities after applying the encoding
+            gates, with shape ``[batch, free_tokens, vocab]``.
+        Q: Number of leading student positions to exclude so the remaining
+            positions align with ``target_logprobs``.
+
+    Returns:
+        A scalar mean KL divergence. ``PrefixKLTrainer`` applies any mode-specific
+        weighting and logs the resulting data-loss component.
+    """
     return F.kl_div(student_logprobs[:, Q:], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
 
@@ -89,7 +150,7 @@ class PrefixKLTrainer(SFTTrainer):
         # https://huggingface.co/docs/transformers/v5.17.0/en/main_classes/trainer#transformers.Trainer.compute_loss
         self.model_accepts_loss_kwargs = False
 
-    def _positions(self, part: int, n_tokens: int, device: torch.device) -> torch.Tensor:
+    def _positions(self, part: int, n_tokens: int, device: torch.device) -> TokenPositions:
         part_size = n_tokens // self.n_bits
         return torch.arange(part * part_size, (part + 1) * part_size, device=device) if self.strategy == "block" else torch.arange(part, n_tokens, self.n_bits, device=device)
 
@@ -98,12 +159,52 @@ class PrefixKLTrainer(SFTTrainer):
         midpoint = vocab_size // 2
         return slice(0, midpoint) if bit == "0" else slice(midpoint, None)
 
-    def _divergence(self, student_logprobs: torch.Tensor, target_logprobs: torch.Tensor, prefix_targets: torch.Tensor, Q: int) -> torch.Tensor:
-        return (
-            divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_targets, Q, self.alpha)
-            if self.loss_mode == "nll"
-            else divergence_ignoring_prefix(student_logprobs, target_logprobs, Q)
+    def _divergence(
+        self,
+        student_logprobs: StudentLogprobs,
+        target_logprobs: TargetLogprobs,
+        prefix_targets: PrefixTargets,
+        Q: int,
+    ) -> tuple[ScalarLoss, LossInformation]:
+        """Compose the training objective while retaining its logged components.
+
+        Args:
+            student_logprobs: Log-probabilities for the prefixed input, with
+                shape ``[batch, Q + free_tokens, vocab]``.
+            target_logprobs: Encoded teacher log-probabilities, with shape
+                ``[batch, free_tokens, vocab]``.
+            prefix_targets: Next-token targets for the prefix, with shape
+                ``[batch, Q]``.
+            Q: Number of prefix positions separating prefix and free tokens.
+
+        Returns:
+            The attached scalar total loss and a ``LossInformation`` containing
+            detached scalar prefix and data losses. ``compute_loss()`` optimizes
+            the total and passes the bundle to ``_record_loss_metrics()``.
+        """
+        unweighted_data_loss = free_token_kl(student_logprobs, target_logprobs, Q)
+        if self.loss_mode == "nll":
+            prefix_loss = prefix_nll(student_logprobs, prefix_targets, Q)
+            data_loss = self.alpha * unweighted_data_loss
+        else:
+            prefix_loss = unweighted_data_loss.new_zeros(())
+            data_loss = unweighted_data_loss
+        total_loss = prefix_loss + data_loss
+        loss_information = LossInformation(
+            prefix_loss=prefix_loss.detach(),
+            data_loss=data_loss.detach(),
         )
+        return total_loss, loss_information
+
+    def _record_loss_metrics(self, loss_information: LossInformation) -> None:
+        """Gather detached components for SFTTrainer's next log event."""
+        mode = "train" if self.model.training else "eval"
+        for name, value in (
+            ("prefix_loss", loss_information.prefix_loss),
+            ("data_loss", loss_information.data_loss),
+        ):
+            gathered_value = self.accelerator.gather_for_metrics(value).mean().item()
+            self._metrics[mode][name].append(gathered_value)
 
     def _profile_memory(self, stage: str) -> None:
         if not self._profile_this_call or self.accelerator.device.type != "cuda":
@@ -130,7 +231,13 @@ class PrefixKLTrainer(SFTTrainer):
         self._profile_memory(f"{stage} ready")
 
     @override
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None) -> torch.Tensor | tuple[torch.Tensor, object]:
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs=False,
+        num_items_in_batch=None,
+    ) -> ScalarLoss | tuple[ScalarLoss, object]:
         """Replace SFTTrainer's causal-LM loss with the gated prefix KL objective.
 
         ``prefix_bits_encoding_text_collator()`` produces these required fields::
@@ -183,5 +290,6 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("target logprobs"):
             target_logprobs = target_logprobs.log_softmax(dim=-1)
         with self._memory_stage("loss"):
-            loss = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+            loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+        self._record_loss_metrics(loss_information)
         return (loss, outputs) if return_outputs else loss
