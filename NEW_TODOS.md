@@ -27,6 +27,7 @@ Immediate next steps:
 - [ ] Trainer should log encode/decode accuracy. We could add a callback.
 - [ ] Add plotting scripts for ^ and to generate the outputs for our first 2 (X, Y) experiments.
 - [ ] Optionally (if needed) look at scaling laws as a function of train resources to best identify the hero run.
+- [ ] Look into how to make runs faster via tinker (https://chatgpt.com/share/6aa72e30-c5ec-83e8-a862-1a12e928a1be), unsloth, or other tooling (worst case we can probably do some custom pytorch + compile workflow?) We might want to skyline (https://chatgpt.com/share/6aa72eac-4444-83e8-8b31-c3dd8bfa6b72) the performance.
 
 Good experiments for the pretraining bits-encoding objective here:
 - [ ] **Question:** (X) Can we encode a single bit in pretraining data/generation using a similar logit-boost cipher? `We are working this`
