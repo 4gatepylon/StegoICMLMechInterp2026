@@ -1,6 +1,7 @@
 """Minimal gated red/green KL trainer."""
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 from typing import Iterator, Literal, override
 
@@ -20,6 +21,25 @@ TargetLogprobs = Float[torch.Tensor, "batch free_tokens vocab"]  # noqa: F722
 PrefixTargets = Int[torch.Tensor, "batch prefix_tokens"]  # noqa: F722
 ScalarLoss = Float[torch.Tensor, ""]  # noqa: F722
 TokenPositions = Int[torch.Tensor, "positions"]  # noqa: F821
+
+
+@dataclass
+class LossInformation:
+    """Detached scalar loss components retained only for metric logging.
+
+    Attributes:
+        prefix_loss: Mean prefix-token NLL after any mode-specific behavior.
+            Shape ``[]``. ``_divergence()`` detaches this tensor from autograd.
+        data_loss: Mean free-token KL after applying mode-specific weighting.
+            Shape ``[]``. ``_divergence()`` detaches this tensor from autograd.
+
+    ``PrefixKLTrainer._record_loss_metrics()`` gathers both fields across
+    processes and converts them to Python floats. Callers must optimize the
+    separate total loss returned by ``_divergence()``.
+    """
+
+    prefix_loss: ScalarLoss
+    data_loss: ScalarLoss
 
 
 def prefix_bits_encoding_text_collator(
@@ -145,7 +165,7 @@ class PrefixKLTrainer(SFTTrainer):
         target_logprobs: TargetLogprobs,
         prefix_targets: PrefixTargets,
         Q: int,
-    ) -> tuple[ScalarLoss, ScalarLoss, ScalarLoss]:
+    ) -> tuple[ScalarLoss, LossInformation]:
         """Compose the training objective while retaining its logged components.
 
         Args:
@@ -158,9 +178,9 @@ class PrefixKLTrainer(SFTTrainer):
             Q: Number of prefix positions separating prefix and free tokens.
 
         Returns:
-            Three scalar tensors: total loss, prefix loss, and weighted data
-            loss. ``compute_loss()`` optimizes the total and passes the latter
-            two to ``_record_loss_metrics()``.
+            The attached scalar total loss and a ``LossInformation`` containing
+            detached scalar prefix and data losses. ``compute_loss()`` optimizes
+            the total and passes the bundle to ``_record_loss_metrics()``.
         """
         unweighted_data_loss = free_token_kl(student_logprobs, target_logprobs, Q)
         if self.loss_mode == "nll":
@@ -169,18 +189,22 @@ class PrefixKLTrainer(SFTTrainer):
         else:
             prefix_loss = unweighted_data_loss.new_zeros(())
             data_loss = unweighted_data_loss
-        return prefix_loss + data_loss, prefix_loss, data_loss
+        total_loss = prefix_loss + data_loss
+        loss_information = LossInformation(
+            prefix_loss=prefix_loss.detach(),
+            data_loss=data_loss.detach(),
+        )
+        return total_loss, loss_information
 
-    def _record_loss_metrics(
-        self,
-        prefix_loss: ScalarLoss,
-        data_loss: ScalarLoss,
-    ) -> None:
-        """Buffer detached component copies for SFTTrainer's next log event."""
+    def _record_loss_metrics(self, loss_information: LossInformation) -> None:
+        """Gather detached components for SFTTrainer's next log event."""
         mode = "train" if self.model.training else "eval"
-        for name, value in (("prefix_loss", prefix_loss), ("data_loss", data_loss)):
-            detached_value = self.accelerator.gather_for_metrics(value.detach()).mean().item()
-            self._metrics[mode][name].append(detached_value)
+        for name, value in (
+            ("prefix_loss", loss_information.prefix_loss),
+            ("data_loss", loss_information.data_loss),
+        ):
+            gathered_value = self.accelerator.gather_for_metrics(value).mean().item()
+            self._metrics[mode][name].append(gathered_value)
 
     def _profile_memory(self, stage: str) -> None:
         if not self._profile_this_call or self.accelerator.device.type != "cuda":
@@ -266,6 +290,6 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("target logprobs"):
             target_logprobs = target_logprobs.log_softmax(dim=-1)
         with self._memory_stage("loss"):
-            loss, prefix_loss, data_loss = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
-        self._record_loss_metrics(prefix_loss, data_loss)
+            loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+        self._record_loss_metrics(loss_information)
         return (loss, outputs) if return_outputs else loss
