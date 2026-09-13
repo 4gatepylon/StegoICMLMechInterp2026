@@ -8,6 +8,8 @@ synthetic source rows and temporary artifact directories. It does not contact
 FineWeb, measure shuffle quality, benchmark large caches, reproduce native
 PyArrow shutdown crashes, execute the inspection notebook, or exercise shared
 multi-node filesystems.
+
+TODO(hadriano) this Codex-written test suite often looks for specific substrings in arguments, which might brittle.
 """
 
 import json
