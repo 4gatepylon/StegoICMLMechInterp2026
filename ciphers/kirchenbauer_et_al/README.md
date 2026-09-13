@@ -337,6 +337,78 @@ and an independent uniform gate. Prefix-only warmup fixes the gate to no while
 continuing to sample random bits. Validation uses a fixed, disjoint dataset and
 reports prefix loss, data loss, decode accuracy, and AUROC.
 
+## Usage
+
+The KL trainer reads FineWeb documents from a bounded local cache so distributed
+workers do not independently stream remote Parquet shards. Build the cache once
+in a single process, without `torchrun`. With no flags, the builder stores
+500,000 documents under
+`$STEGO_ARTIFACTS_DIR/datasets/fineweb/fineweb-500k`:
+
+```bash
+python -m ciphers.kirchenbauer_et_al.src.cache_fineweb
+```
+
+The CLI verifies the manifest, completion marker, Parquet schemas, part counts,
+and row counts before reporting success. It then prints three cached examples
+for debugging. A 100-character separator distinguishes verified output from a
+possible native-library error during Python shutdown.
+
+Then launch training with the completed cache:
+
+```bash
+torchrun --standalone --nproc-per-node=4 \
+  ciphers/kirchenbauer_et_al/src/train_kl_fineweb.py
+```
+
+The trainer requires one cached document for every example it will consume:
+`validation samples + max steps * effective global batch size`. The default
+500,000-document cache covers most of our use cases. Cache
+construction reads source documents sequentially to avoid opening many remote
+shards and writes `_SUCCESS` last. The trainer always verifies the cache and
+refuses absent, incomplete, undersized, obsolete, or malformed caches. Cache
+loading streams and approximately shuffles the local Parquet files; it does not
+contact Hugging Face. Cache construction may encounter transient HTTP 429
+rate-limit responses from Hugging Face; wait and rerun the command if retries
+are exhausted—an incomplete cache is never published as usable.
+
+The cache uses the pinned `sample-10BT` configuration from
+[Hugging Face FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb).
+This source configuration is a random sample of FineWeb containing about 10
+billion GPT-2 tokens. At the pinned revision it has
+[14,868,862 documents and 30,639,384,917 bytes of Parquet](https://datasets-server.huggingface.co/size?dataset=HuggingFaceFW%2Ffineweb&config=sample-10BT).
+The local default cache is the first 500,000 rows of that source stream, not a
+new uniform sample of all 14.9 million documents. FineWeb is filtered,
+deduplicated English text extracted from Common Crawl web pages. Each cached row
+preserves all fields documented by the
+[FineWeb dataset card](https://huggingface.co/datasets/HuggingFaceFW/fineweb#data-fields):
+
+- `text`: extracted page text.
+- `id`: original Common Crawl sample identifier.
+- `dump`: Common Crawl dump containing the sample.
+- `url`: original page URL.
+- `date`: Common Crawl crawl timestamp.
+- `file_path`: source Common Crawl WARC path.
+- `language`: detected language; FineWeb documents are marked `en`.
+- `language_score`: fastText language-classifier score.
+- `token_count`: document length under the GPT-2 tokenizer, not the Qwen
+  tokenizer used for training.
+
+FineWeb’s processing includes URL, language, repetition, and quality filtering,
+per-crawl MinHash deduplication, and formatting of detected email and public IP
+addresses; see the dataset card’s
+[processing description](https://huggingface.co/datasets/HuggingFaceFW/fineweb#data-processing-steps).
+Because the source is public web data, its maintainers warn that residual
+personal information, harmful content, and web-data biases may remain.
+
+`load_fineweb_cache()` uses Hugging Face’s
+[streaming buffer shuffle](https://huggingface.co/docs/datasets/stream#shuffle)
+with a fixed seed and a 10,000-document rolling buffer. It shuffles Parquet
+shards, then repeatedly selects a random buffered document and replaces it with
+the next source document. This is more mixed than independently shuffling fixed
+10,000-document blocks, but it is not a uniform permutation of all 500,000
+documents.
+
 ## Validations
 
 - The [prefix-tokenization notebook](src/inspect_prefix_tokenization.ipynb)
@@ -346,6 +418,10 @@ reports prefix loss, data loss, decode accuracy, and AUROC.
   that token- and character-space concatenation produce identical model inputs.
 - The production [FineWeb KL trainer](src/train_kl_fineweb.py)
   exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
+- The [cache-inspection notebook](src/inspect_fineweb_cache.ipynb) loads through
+  the verified cache interface and shows reproducibly shuffled documents,
+  provenance, Qwen token boundaries, length statistics, source domains, Common
+  Crawl dumps, and the 100 most frequent Qwen tokens in a configurable sample.
 For example, its main optimization knobs can be set directly:
 
 ```bash

@@ -26,6 +26,7 @@ class PrefixKLTrainingConfig(BaseModel):
     profile_memory_steps: int = Field(default=0, ge=0)
 
     # --- Dataset and collator; max_length is also passed to SFTConfig ---
+    dataset_cache_name: str = "fineweb-500k"
     concatenation_space: Literal["token", "character"] = "token"
     max_length: int = Field(default=4096, gt=0)
     validation_samples: int = Field(default=256, gt=0)
@@ -97,6 +98,11 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--config", help="repository-relative YAML configuration file")
     add("--model", default="Qwen/Qwen3-4B-Base")
     add("--run-name", default="qwen3-4b-fineweb-prefix-kl-lora")
+    add(
+        "--dataset-cache-name",
+        default="fineweb-500k",
+        help="completed cache below $STEGO_ARTIFACTS_DIR/datasets/fineweb (default: fineweb-500k)",
+    )
     add("--loss-mode", choices=("nll", "ignore_prefix"), default="nll")
     add("--strategy", choices=("block", "modulo"), default="block")
     add("--concatenation-space", choices=("token", "character"), default="token")
