@@ -2,12 +2,15 @@ import pytest
 
 from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
     PrefixKLTrainingConfig,
+    configure_wandb_environment,
     gradient_accumulation_steps,
     load_training_config,
     parse_args,
 )
+from wandb_archive import ARCHIVE_TAG
 
 EIGHT_BIT_CONFIG_PATH = "ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml"
+OFFICIAL_CONFIG_PATHS = [f"ciphers/kirchenbauer_et_al/experiments/{bit_count}_bit_training_run.yaml" for bit_count in ("eight", "four", "two", "one")]
 
 
 def test_optimization_knob_aliases() -> None:
@@ -62,3 +65,16 @@ def test_prefix_kl_training_config_rejects_unknown_fields() -> None:
     """Cover typo rejection at the schema boundary; malformed YAML syntax is out of scope."""
     with pytest.raises(ValueError, match="extra_forbidden"):
         PrefixKLTrainingConfig.model_validate({"unexpected_setting": True})
+
+
+def test_official_training_configs_add_archive_tag_while_default_runs_remain_unmarked() -> None:
+    """Cover every launcher YAML and the unconfigured partition; W&B initialization is omitted."""
+    environment = {"WANDB_TAGS": "manual-tag"}
+    for config_path in OFFICIAL_CONFIG_PATHS:
+        configure_wandb_environment(load_training_config(config_path), environment)
+
+    assert environment["WANDB_TAGS"].split(",") == ["manual-tag", ARCHIVE_TAG]
+
+    unmarked_environment: dict[str, str] = {}
+    configure_wandb_environment(PrefixKLTrainingConfig(), unmarked_environment)
+    assert "WANDB_TAGS" not in unmarked_environment

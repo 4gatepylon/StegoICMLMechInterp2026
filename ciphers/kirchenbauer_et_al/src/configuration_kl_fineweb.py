@@ -2,6 +2,7 @@
 
 # TODO(hadriano): Migrate this CLI from argparse to Click.
 import argparse
+from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Literal, Sequence
 
@@ -53,6 +54,7 @@ class PrefixKLTrainingConfig(BaseModel):
     # --- Entrypoint orchestration around Trainer ---
     global_batch_size: int | None = Field(default=None, gt=0)
     wandb_project: str | None = None
+    wandb_tags: list[str] = Field(default_factory=list)
     resume_from_checkpoint: str | None = None
 
 
@@ -131,12 +133,41 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--dtype", choices=("bfloat16", "float16", "float32"), default="bfloat16")
     add("--report-to", default="wandb")
     add("--wandb-project")
+    add("--wandb-tag", action="append", dest="wandb_tags")
     add("--resume-from-checkpoint")
     add("--profile-memory-steps", type=int, default=0, help="Profile this many initial microbatches per rank")
     parser.set_defaults(**config.model_dump())
     parsed_arguments = vars(parser.parse_args(argv))
     parsed_arguments.pop("config")
     return PrefixKLTrainingConfig.model_validate(parsed_arguments)
+
+
+def configure_wandb_environment(args: PrefixKLTrainingConfig, environment: MutableMapping[str, str]) -> None:
+    """Expose validated reporting settings to the W&B initialization consumer.
+
+    Transformers creates the W&B run after the training entry point constructs
+    its trainer. The W&B SDK consumes ``WANDB_PROJECT`` and the comma-separated
+    ``WANDB_TAGS`` setting at that later initialization boundary, so this helper
+    applies the validated configuration before trainer construction.
+
+    Args:
+        args: Complete training configuration. ``wandb_project`` optionally
+            selects the destination project, while ``wandb_tags`` adds tags that
+            identify official runs. An empty tag list does not mark ordinary or
+            dummy runs.
+        environment: Mutable process environment consumed by the W&B SDK.
+            Existing ``WANDB_TAGS`` values are preserved in their original order;
+            configured tags are appended once.
+
+    Returns:
+        ``None``. Callers use the mutated environment when Transformers later
+        initializes W&B. This function does not contact W&B or create a run.
+    """
+    if args.wandb_project is not None:
+        environment["WANDB_PROJECT"] = args.wandb_project
+    if args.wandb_tags:
+        existing_tags = [tag for tag in environment.get("WANDB_TAGS", "").split(",") if tag]
+        environment["WANDB_TAGS"] = ",".join(dict.fromkeys([*existing_tags, *args.wandb_tags]))
 
 
 def gradient_accumulation_steps(args: PrefixKLTrainingConfig, world_size: int) -> int:
