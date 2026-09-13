@@ -39,4 +39,6 @@ report_to: wandb
 # --- Entrypoint orchestration around Trainer ---
 global_batch_size: 128
 wandb_project: null
+wandb_tags:
+  - stego-icml-2026-git-archive
 resume_from_checkpoint: null
