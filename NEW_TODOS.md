@@ -26,6 +26,7 @@ Immediate next steps:
 - [ ] We should be able to measure encode/decode accuracy. Add a generation script and then leverage the tool to MLE predict.
 - [ ] Trainer should log encode/decode accuracy. We could add a callback.
 - [ ] Add plotting scripts for ^ and to generate the outputs for our first 2 (X, Y) experiments.
+- [ ] Optionally (if needed) look at scaling laws as a function of train resources to best identify the hero run.
 
 Good experiments for the pretraining bits-encoding objective here:
 - [ ] **Question:** (X) Can we encode a single bit in pretraining data/generation using a similar logit-boost cipher? `We are working this`
