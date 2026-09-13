@@ -12,4 +12,5 @@ deleteme*
 .env**
 
 # Artifacts/weights/outputs/data folders
+ciphers/kirchenbauer_et_al/artifacts/
 ciphers/kirchenbauer_et_al/src/artifacts/
