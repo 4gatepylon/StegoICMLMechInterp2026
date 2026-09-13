@@ -12,7 +12,8 @@ interface performs the same operation when invoked without options::
 More formally, let ``S = (d_0, d_1, ...)`` be the sequential remote stream and
 let ``F = {text, id, dump, url, date, file_path, language, language_score,
 token_count}``. For a requested document count ``N``, cached row ``c_i`` is the
-projection of ``d_i`` onto ``F``, and ``C_N = (c_0, ..., c_(N-1))``. Field
+projection of the i-th document satisfying the inclusive token-count bounds
+onto ``F``, and ``C_N = (c_0, ..., c_(N-1))``. Defaults accept every row. Field
 definitions come from the FineWeb dataset card:
 https://huggingface.co/datasets/HuggingFaceFW/fineweb#data-fields.
 
@@ -60,6 +61,8 @@ import pyarrow.parquet as pq
 from datasets import Dataset, IterableDataset, load_dataset
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, StringConstraints, TypeAdapter, ValidationError
 
+from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import DocumentTokenFilter
+
 FINEWEB_REVISION = "9bb295ddab0e05d785b879661af7260fed5140fc"
 CACHE_FORMAT_VERSION = 2
 CACHE_BUILD_MODULE = "ciphers.kirchenbauer_et_al.src.cache_fineweb"
@@ -89,7 +92,7 @@ _EXPECTED_ARROW_SCHEMA = pa.schema(
 __all__ = ["build_fineweb_cache", "load_fineweb_cache"]
 
 
-class _CacheConfig(BaseModel):
+class _CacheConfig(DocumentTokenFilter):
     """Validated inputs for creating one bounded FineWeb cache.
 
     Attributes:
@@ -97,7 +100,7 @@ class _CacheConfig(BaseModel):
             ``$STEGO_ARTIFACTS_DIR/datasets/fineweb``. Path separators are
             rejected so callers cannot place generated data outside the
             artifacts directory.
-        documents: Exact number of source documents to store.
+        documents: Exact number of accepted source documents to store.
         part_documents: Maximum documents per Parquet part. This bounds memory
             during construction; it does not affect the examples read later.
     """
@@ -109,13 +112,15 @@ class _CacheConfig(BaseModel):
     part_documents: int = Field(default=_DEFAULT_PART_DOCUMENTS, gt=0)
 
 
-class _CacheManifest(BaseModel):
+class _CacheManifest(DocumentTokenFilter):
     """Schema persisted beside Parquet parts and validated by the trainer.
 
     The source fields pin the remote dataset identity, while ``documents`` and
     ``parts`` let the loader reject undersized or partially copied caches.
     ``format_version`` prevents a future loader from silently accepting an
     incompatible on-disk layout.
+    Inherited token bounds record construction filtering; older version-2
+    manifests without them use the unfiltered defaults.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -313,17 +318,23 @@ def build_fineweb_cache(
     documents: int = _DEFAULT_DOCUMENTS,
     *,
     part_documents: int = _DEFAULT_PART_DOCUMENTS,
+    min_document_tokens: int = 0,
+    max_document_tokens: int | None = None,
 ) -> Path:
-    """Materialize a bounded prefix of FineWeb with complete row metadata.
+    """Materialize a bounded prefix of accepted FineWeb rows with metadata.
 
     Args:
         cache_name: Directory name below
             ``$STEGO_ARTIFACTS_DIR/datasets/fineweb``. It defaults to
             ``fineweb-500k`` and cannot contain path separators.
-        documents: Exact number of sequential ``sample-10BT`` rows to retain;
-            defaults to 500,000.
+        documents: Exact number of accepted sequential ``sample-10BT`` rows to
+            retain; defaults to 500,000. Rejected rows do not count.
         part_documents: Maximum rows per Parquet part; defaults to 10,000 and
             therefore produces 50 parts for the default build.
+        min_document_tokens: Inclusive minimum stored GPT-2 token count, before
+            training tokenization or truncation. Zero accepts empty documents.
+        max_document_tokens: Inclusive maximum stored GPT-2 token count;
+            ``None`` means no upper bound. Must be at least the minimum.
 
     Returns:
         The completed cache directory. It contains ``part-*.parquet`` files,
@@ -342,7 +353,13 @@ def build_fineweb_cache(
     rows avoids opening many remote shards while downloading. The loader
     shuffles the completed local cache instead.
     """
-    config = _CacheConfig(cache_name=cache_name, documents=documents, part_documents=part_documents)
+    config = _CacheConfig(
+        cache_name=cache_name,
+        documents=documents,
+        part_documents=part_documents,
+        min_document_tokens=min_document_tokens,
+        max_document_tokens=max_document_tokens,
+    )
     cache_directory = _cache_directory(config.cache_name)
     if cache_directory.exists():
         raise FileExistsError(f"FineWeb cache already exists: {cache_directory}")
@@ -357,6 +374,8 @@ def build_fineweb_cache(
         try:
             for source_document in source_iterator:
                 cached_document = _CachedDocument.model_validate(source_document)
+                if not config.accepts(cached_document.token_count):
+                    continue
                 document_buffer.append(cached_document.model_dump())
                 document_count += 1
                 if len(document_buffer) == config.part_documents:
@@ -380,6 +399,8 @@ def build_fineweb_cache(
             documents=document_count,
             parts=part_count,
             part_documents=config.part_documents,
+            min_document_tokens=config.min_document_tokens,
+            max_document_tokens=config.max_document_tokens,
         )
         (temporary_directory / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n")
         (temporary_directory / "_SUCCESS").touch()
@@ -396,32 +417,57 @@ def load_fineweb_cache(
     *,
     minimum_documents: int = 1,
     shuffle: bool = True,
+    min_document_tokens: int = 0,
+    max_document_tokens: int | None = None,
 ) -> IterableDataset:
     """Load a completed local cache for the KL trainer.
 
     Args:
         cache_name: Validated cache directory name below the artifacts root.
-        minimum_documents: Smallest acceptable manifest count. The trainer uses
-            this to reserve its fixed validation prefix plus training data.
+        minimum_documents: Smallest acceptable count after filtering. The
+            trainer uses this to reserve validation plus training data.
         shuffle: Whether to apply the deterministic local shuffle. Production
             callers retain the default; tests may disable it to inspect order.
+        min_document_tokens: Inclusive minimum stored GPT-2 token count. With
+            either bound enabled, scan only the Parquet token-count column to
+            check the accepted count before returning the streaming dataset.
+        max_document_tokens: Inclusive maximum stored GPT-2 token count;
+            ``None`` disables the upper bound. Loading filters are independent
+            of construction bounds and cannot recover documents omitted then.
 
     Returns:
         A streaming local ``IterableDataset``. Every row contains the nine keys
         documented by ``build_fineweb_cache``. The trainer consumes ``text``;
         inspection tools also use the document provenance and annotations.
+        Filtering precedes shuffle and the caller's train/validation split.
 
     Raises:
         FileNotFoundError: If the cache is absent or lacks its completion marker.
         RuntimeError: If the manifest or Parquet parts are invalid or too small.
     """
+    token_filter = DocumentTokenFilter(min_document_tokens=min_document_tokens, max_document_tokens=max_document_tokens)
     _, _, part_paths = _validate_cache(cache_name, minimum_documents=minimum_documents)
+    filtering = token_filter.min_document_tokens > 0 or token_filter.max_document_tokens is not None
+    if filtering:
+        accepted_documents = sum(
+            token_filter.accepts(token_count)
+            for part_path in part_paths
+            for batch in pq.ParquetFile(part_path).iter_batches(columns=["token_count"])
+            for token_count in batch.column(0).to_pylist()
+        )
+        if accepted_documents < minimum_documents:
+            raise RuntimeError(
+                f"FineWeb cache '{cache_name}' contains {accepted_documents} documents after token filtering "
+                f"but at least {minimum_documents} are required. Relax the bounds or build a larger cache."
+            )
     dataset = load_dataset(
         "parquet",
         data_files={"train": [str(part_path) for part_path in part_paths]},
         split="train",
         streaming=True,
     )
+    if filtering:
+        dataset = dataset.filter(token_filter.accepts, input_columns=["token_count"])
     return dataset.shuffle(seed=_SHUFFLE_SEED, buffer_size=_SHUFFLE_BUFFER_SIZE) if shuffle else dataset
 
 
@@ -463,10 +509,12 @@ def _format_preview_text(text: str) -> str:
     type=click.IntRange(min=1),
     help="Exact number of documents to store.",
 )
-def main(cache_name: str, documents: int) -> None:
+@click.option("--min-document-tokens", default=0, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum stored GPT-2 token count.")
+@click.option("--max-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum stored GPT-2 token count; omitted means unlimited.")
+def main(cache_name: str, documents: int, min_document_tokens: int, max_document_tokens: int | None) -> None:
     """Build, verify, and preview a bounded FineWeb cache in local artifacts."""
     try:
-        cache_directory = build_fineweb_cache(cache_name, documents)
+        cache_directory = build_fineweb_cache(cache_name, documents, min_document_tokens=min_document_tokens, max_document_tokens=max_document_tokens)
         _, manifest, part_paths = _validate_cache(cache_name, exact_documents=documents)
         preview_documents = _preview_cache(cache_name)
     except (FileExistsError, KeyError, OSError, RuntimeError, ValueError, ValidationError) as error:

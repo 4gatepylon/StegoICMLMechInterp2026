@@ -1,3 +1,8 @@
+import runpy
+import sys
+from pathlib import Path
+from unittest.mock import Mock
+
 import pytest
 
 from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
@@ -78,3 +83,44 @@ def test_official_training_configs_add_archive_tag_while_default_runs_remain_unm
     unmarked_environment: dict[str, str] = {}
     configure_wandb_environment(PrefixKLTrainingConfig(), unmarked_environment)
     assert "WANDB_TAGS" not in unmarked_environment
+
+
+def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cover YAML bounds, CLI overrides/unlimited, and forwarding before splitting.
+
+    Cache loading, tokenizer, trainer, and training configuration construction
+    are mocked: no network, model execution, or GPU is used.
+    """
+    from ciphers.kirchenbauer_et_al.src import cache_fineweb, configuration_kl_fineweb
+
+    monkeypatch.setattr(configuration_kl_fineweb, "REPO_ROOT", tmp_path)
+    (tmp_path / "filter.yaml").write_text("min_document_tokens: 100\nmax_document_tokens: 500\n")
+    config = parse_args(["--config", "filter.yaml"])
+    assert (config.min_document_tokens, config.max_document_tokens) == (100, 500)
+    config = parse_args(["--config", "filter.yaml", "--min-document-tokens", "200", "--max-document-tokens", "none"])
+    assert (config.min_document_tokens, config.max_document_tokens) == (200, None)
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setattr(configuration_kl_fineweb, "parse_args", lambda: config)
+    cache_loader = Mock()
+    monkeypatch.setattr(cache_fineweb, "load_fineweb_cache", cache_loader)
+    for module in (
+        "torch",
+        "peft",
+        "transformers",
+        "trl",
+        "ciphers.kirchenbauer_et_al.src.data_kl_fineweb",
+        "ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb",
+    ):
+        monkeypatch.setitem(sys.modules, module, Mock())
+
+    runpy.run_module("ciphers.kirchenbauer_et_al.src.train_kl_fineweb", run_name="__main__")
+
+    cache_loader.assert_called_once_with(
+        config.dataset_cache_name,
+        minimum_documents=config.validation_samples + config.max_steps * 32,
+        min_document_tokens=200,
+        max_document_tokens=None,
+    )
+    cache_loader.return_value.take.assert_called_once_with(config.validation_samples)
+    cache_loader.return_value.skip.assert_called_once_with(config.validation_samples)
