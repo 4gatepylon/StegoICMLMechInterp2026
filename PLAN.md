@@ -8,16 +8,22 @@ My first batch of experiments have the purpose of answering the following questi
 Immediate next steps:
 - [x] Download/cache part of the Fineweb dataset
 - [x] Trainer should log nll vs. steganographic loss
-- [ ] ]We should be able to measure encode/decode accuracy (we should have a module for this; BTW I'm not sure this makes sense without sampling... maybe there is a closed form solution?)
-- [ ] Trainer should log encode/decode accuracy. We could add a callback.
 - [x] Define YAML for main experiments (1, 2, 4, 8 bits on pretraining data)
 - [x] Make sure checkpoints are saved and validation is logged (incl for the metrics ^)
-- [ ] Launch experiment and let it run with wandb logging these metrics properly
-- [ ] Reject very short documents (caching pipeline from ^ should support some kind of filtering, etc...)
+- [x] Launch experiment and let it run with wandb logging these metrics properly
 - [x] Log data statsitics and examples via ipynb somewhere
-- [ ] Add hyper-parameter sweep support for `{lrs} x {batch size} x {nll enabled alpha 1, nll enabled alpha 2, ..., nll disabled} x {modulus, chunk/block}`
-- [ ] Add other useful metric logging to trainer such as expected red/green,
-- [ ] Add support for sampler-based experiment with encoder/decoder accuracy and red/green distributions
+- [ ] Add support for storing wandb logs (i.e. so we can train scaling laws).
+- [ ] **TODO(Codex 0)** Add support to log the number of tokens consumed in the process of training.
+- [ ] **TODO(Codex 1)** (Be able to) reject very short documents (caching pipeline from ^ should support some kind of filtering, etc...). Simply, make a flag for downloading the fineweb cache and a flag for loading from the cache. Each one can include/exclude files based on a minimum size (can be 0) or maximum size (can be None for no maximum). By default use 0 and None.
+- [ ] **TODO(Codex 2)** Add hyper-parameter sweep support for `{lrs} x {batch size} x {nll enabled alpha 1, nll enabled alpha 2, ..., nll disabled} x {modulus, chunk/block}`. Specifically, add a script similar to the bash script that launches the 1 bit, 2 bit, etc... and then for each one try ^. Pick reasonable number of steps to do this for and reasonable hyperparemeters. Ideally, each attempted grid element does not run for more than ~15m and/or there is a smaller/better way to pick the right hyperparameters. The implementer of this might want to propose a scaling curve methodology to extrapolate the training performance based on ^ (it shold be simplest possible; maybe fit a power law or even a kinked linear function; idk).
+- [ ] **TODO(Codex 3)** Add expected reds/expected greens by summing over P(red|logits) at each token (and vice versa for green). This should be logged separately for yes cases and no cases and seperate for 0 or 1-encoding tokens. I want to see (where `E` means expectation) the values for:
+    - `E(red tokens over red-boosted token positions | yes) / Num(red-boosted token positions` (i.e. fraction of "should be red" that are red)
+    - `E(red tokens overall | yes) / Num(tokens overall)` (this will help us understand if there is some bias)
+    - Also both of these also for green. These four above will help us understand how much the boost affects and that it is properly unbiased.
+    - I also want to see `E(red tokens overall | no) / Num(tokens overall)` and `E(red tokens on modulus positions | no) / Num(tokens on modulus positions)` and `E(red tokens on chunk positions | no) / Num(tokens on chunk positions)` (and same for green). This will help us understand that when there is no boosting, the distribution is in fact not boosted.
+    - If possible to do mathematically in closed form using the probabilities at each token position, I would like to see some metric of variance or variation to see how tight the distribution around the mean likely is. In general this and the other expectation portions should have proper mathematical assumptions described, because without real sampling I'm not sure these analysis are entirely/fully correct; they may be making some IID assumptions or something like that.
+- [ ] We should be able to measure encode/decode accuracy. Add a generation script and then leverage the tool to MLE predict.
+- [ ] Trainer should log encode/decode accuracy. We could add a callback.
 - [ ] Add plotting scripts for ^ and to generate the outputs for our first 2 (X, Y) experiments.
 
 Good experiments for the pretraining bits-encoding objective here:
