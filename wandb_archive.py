@@ -1,5 +1,10 @@
 #!/usr/bin/env python
-"""Mark W&B runs for this repository and archive terminal marked runs."""
+"""Mark W&B runs for this repository and archive terminal marked runs.
+
+TODO(hadriano) this is BARELY reviewed. It is mainly integration tested by looking for outputs. A lot of small
+design decisions were made by Codex that could end up being dumb (i.e. `runs_by_path[f"{run.entity}/{run.project}/{run.id}"] = run`
+assumes uniqueness of the name and would fail silently; i.e. the atomicity of writes to zipfile, etc...).
+"""
 
 from __future__ import annotations
 
