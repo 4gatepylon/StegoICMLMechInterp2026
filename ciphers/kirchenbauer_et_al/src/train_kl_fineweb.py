@@ -70,6 +70,7 @@ def main() -> None:
             prediction_loss_only=True,
             remove_unused_columns=False,
             dataset_kwargs={"skip_prepare_dataset": True},
+            loss_type="nll",
             model_init_kwargs={"torch_dtype": getattr(torch, args.dtype)},
         ),
     )
