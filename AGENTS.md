@@ -9,6 +9,7 @@
 5. Use Click instead of argparse for new command-line interfaces when available. Tell the user if a significant portion of existing code still uses argparse.
 6. Do not create trivial modules under 100 lines unless necessary.
 7. Do not create complex modules over 750 lines unless necessary.
+8. All tensors should always use jaxtyping annotations.
 
 ## Interface and testing
 
