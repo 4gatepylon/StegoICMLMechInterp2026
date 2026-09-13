@@ -469,6 +469,16 @@ python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
   --config ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml
 ```
 
+To run every experiment sequentially from largest to smallest message, use:
+
+```bash
+ciphers/kirchenbauer_et_al/scripts/run_bit_training_sequence.sh
+```
+
+The script runs the 8-, 4-, 2-, and 1-bit configurations in the `stego` Conda
+environment and stops if any training job fails. All four runs are logged to
+the `stego-kirchenbauer-prefix-kl` Weights & Biases project.
+
 At the configured maximum sequence length, each run processes 536,870,912
 padded sequence tokens. The actual number of non-padding FineWeb tokens may be
 lower.
