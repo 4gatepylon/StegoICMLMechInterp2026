@@ -14,7 +14,7 @@ from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, p
 
 
 def main() -> None:
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B-Base")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B-Base")
     tokenizer.pad_token = tokenizer.eos_token
     config = Qwen3Config(
         vocab_size=len(tokenizer),

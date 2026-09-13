@@ -9,8 +9,12 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
 )
 from wandb_archive import ARCHIVE_TAG
 
-EIGHT_BIT_CONFIG_PATH = "ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml"
-OFFICIAL_CONFIG_PATHS = [f"ciphers/kirchenbauer_et_al/experiments/{bit_count}_bit_training_run.yaml" for bit_count in ("eight", "four", "two", "one")]
+EIGHT_BIT_CONFIG_PATH = "ciphers/kirchenbauer_et_al/experiments/qwen3-0.6b/eight_bit_training_run.yaml"
+OFFICIAL_CONFIG_PATHS = [
+    f"ciphers/kirchenbauer_et_al/experiments/qwen3-{model_size}/{bit_count}_bit_training_run.yaml"
+    for model_size in ("0.6b", "1.7b", "4b")
+    for bit_count in ("eight", "four", "two", "one")
+]
 
 
 def test_optimization_knob_aliases() -> None:
@@ -78,3 +82,24 @@ def test_official_training_configs_add_archive_tag_while_default_runs_remain_unm
     unmarked_environment: dict[str, str] = {}
     configure_wandb_environment(PrefixKLTrainingConfig(), unmarked_environment)
     assert "WANDB_TAGS" not in unmarked_environment
+
+
+@pytest.mark.parametrize("config_path", OFFICIAL_CONFIG_PATHS)
+def test_model_and_run_name_overrides_preserve_experiment_settings(config_path: str) -> None:
+    """Cover all 12 YAMLs with explicit model/name overrides; model downloads are omitted."""
+    original = load_training_config(config_path)
+    overridden = parse_args(["--config", config_path, "--model", "local/replacement", "--run-name", "replacement-run"])
+
+    assert overridden.model == "local/replacement"
+    assert overridden.run_name == "replacement-run"
+    assert overridden.model_dump(exclude={"model", "run_name"}) == original.model_dump(exclude={"model", "run_name"})
+
+
+def test_official_experiments_have_distinct_checkpoint_destinations() -> None:
+    """Cover cross-preset output isolation; filesystem writes and repeated runs of one preset are omitted."""
+    configs = [load_training_config(path) for path in OFFICIAL_CONFIG_PATHS]
+
+    assert len({config.run_name for config in configs}) == len(configs)
+    for config in configs:
+        assert config.model.split("/")[-1].removesuffix("-Base").lower() in config.run_name
+        assert f"-{config.n_bits}-bit" in config.run_name

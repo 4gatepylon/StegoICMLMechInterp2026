@@ -437,48 +437,98 @@ from `--global-batch-size`, which defaults to 32 for backward compatibility.
 
 ## Experiments
 
-Each experiment keeps the existing objective and model defaults while training
-for 1,024 steps at global batch size 128 and per-device batch size 2. Each run
-writes four retained checkpoints at steps 256, 512, 768, and 1,024.
+Qwen3-0.6B-Base is the default model for the KL trainer, experiment launcher,
+SFT baseline, and tokenizer examples. The KL trainer accepts a model identifier
+through `--model` (or the YAML `model` field) and uses that same identifier to
+load its tokenizer. The existing training CLI uses argparse; the Python experiment
+launcher uses Click.
 
-### 1 bit
+The 12 presets cover three model sizes and four message lengths:
 
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/one_bit_training_run.yaml
-```
+| Model | Experiment directory | Bit counts |
+| --- | --- | --- |
+| `Qwen/Qwen3-0.6B-Base` (default) | `experiments/qwen3-0.6b/` | 1, 2, 4, 8 |
+| `Qwen/Qwen3-1.7B-Base` | `experiments/qwen3-1.7b/` | 1, 2, 4, 8 |
+| `Qwen/Qwen3-4B-Base` | `experiments/qwen3-4b/` | 1, 2, 4, 8 |
 
-### 2 bits
+Each directory contains `one_bit_training_run.yaml`, `two_bit_training_run.yaml`,
+`four_bit_training_run.yaml`, and `eight_bit_training_run.yaml`. These are complete
+configurations validated by `PrefixKLTrainingConfig`; explicit training CLI flags
+override YAML values. The former top-level 4B YAMLs have moved into `qwen3-4b/`.
 
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/two_bit_training_run.yaml
-```
+All sizes retain the same experiment budget and optimization settings: 1,024 steps,
+global batch size 128, per-device batch size 2, maximum sequence length 4,096,
+learning rate 0.0003, and block encoding. Each run writes checkpoints at steps
+256, 512, 768, and 1,024. These are comparable starting presets, not individually
+tuned hyperparameters for each model size.
 
-### 4 bits
+### Select a model size and bit count
 
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/four_bit_training_run.yaml
-```
-
-### 8 bits
-
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml
-```
-
-To run every experiment sequentially from largest to smallest message, use:
+Run these commands from the repository root. The launcher replaces the former
+`run_bit_training_sequence.sh` and starts each job in the `stego` Conda environment.
+To run a single 0.6B, 2-bit experiment:
 
 ```bash
-ciphers/kirchenbauer_et_al/scripts/run_bit_training_sequence.sh
+conda run --no-capture-output -n stego \
+  python -m ciphers.kirchenbauer_et_al.scripts.run_bit_training_sequence \
+  --model-size 0.6b --bits 2
 ```
 
-The script runs the 8-, 4-, 2-, and 1-bit configurations in the `stego` Conda
-environment and stops if any training job fails. All four runs are logged to
-the `stego-kirchenbauer-prefix-kl` Weights & Biases project.
+Replace `0.6b` with `1.7b` or `4b`, and `2` with `1`, `4`, or `8`.
+Omit `--bits` to run all four bit counts in 8, 4, 2, 1 order. Omit both options
+to run the full 0.6B sequence:
 
+```bash
+conda run --no-capture-output -n stego \
+  python -m ciphers.kirchenbauer_et_al.scripts.run_bit_training_sequence
+```
+
+Before each job the launcher prints its model size, bit count, YAML path, and
+full command. Training output streams directly to the terminal, followed by a
+completion message. A failed job prints its status and stops the sequence.
+Launcher jobs log to the `stego-kirchenbauer-prefix-kl` W&B project.
+
+### Direct training template and overrides
+
+Use the training entry point directly to adjust hyperparameters or use `torchrun`.
+Set `experiment_model_size` to `0.6b`, `1.7b`, or `4b`, and `experiment_bit_name`
+to `one`, `two`, `four`, or `eight`:
+
+```bash
+experiment_model_size=0.6b
+experiment_bit_name=two
+experiment_config="ciphers/kirchenbauer_et_al/experiments/qwen3-${experiment_model_size}/${experiment_bit_name}_bit_training_run.yaml"
+
+conda run --no-capture-output -n stego \
+  python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
+  --config "$experiment_config" \
+  --wandb-project stego-kirchenbauer-prefix-kl
+
+# Alternative: distribute the same experiment across four GPUs.
+conda run --no-capture-output -n stego \
+  torchrun --standalone --nproc-per-node=4 \
+  --module ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
+  --config "$experiment_config" \
+  --wandb-project stego-kirchenbauer-prefix-kl
+```
+
+For a shorter trial, append `--max-steps 64 --warmup-steps 4 --save-steps 64`
+and a distinct `--run-name`, for example `qwen3-0.6b-2-bit-trial`.
+To swap a model independently of its preset, pass both `--model MODEL_ID` and
+`--run-name UNIQUE_RUN_NAME`: overriding the model does not rename the run.
+The tokenizer is always loaded from the selected model identifier.
+
+Preset run names follow `qwen3-SIZE-fineweb-prefix-kl-lora-N-bit`, for example
+`qwen3-0.6b-fineweb-prefix-kl-lora-2-bit`. Checkpoints live under
+`$STEGO_ARTIFACTS_DIR/<run_name>/checkpoint-<step>`, so all 12 presets have distinct
+output directories. Repeating the same preset reuses its directory; supply a
+new run name for an independent repeat. The 4B 8-bit preset now ends in `-8-bit`;
+existing checkpoints remain at their original paths and can be selected with
+`--resume-from-checkpoint`.
+
+Every full preset requires 131,328 cached documents (256 validation documents
+plus 1,024 steps times 128 training examples). The default `fineweb-500k` cache
+can be reused across model sizes because it stores text, not Qwen token IDs.
 At the configured maximum sequence length, each run processes 536,870,912
 padded sequence tokens. The actual number of non-padding FineWeb tokens may be
 lower.

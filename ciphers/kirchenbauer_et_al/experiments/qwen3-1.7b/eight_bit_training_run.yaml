@@ -1,9 +1,9 @@
-# Qwen3-4B eight-bit Kirchenbauer prefix-KL training run.
+# Qwen3-1.7B eight-bit Kirchenbauer prefix-KL training run.
 # At max_length, 1024 steps * 128 examples/step * 4096 tokens/example
 # processes 536,870,912 padded sequence tokens.
 
 # --- PrefixKLTrainer constructor and model setup ---
-model: Qwen/Qwen3-4B-Base
+model: Qwen/Qwen3-1.7B-Base
 loss_mode: nll
 strategy: block
 n_bits: 8
@@ -23,7 +23,7 @@ lora_alpha: 16
 lora_dropout: 0.05
 
 # --- TRL SFTConfig ---
-run_name: qwen3-4b-fineweb-prefix-kl-lora
+run_name: qwen3-1.7b-fineweb-prefix-kl-lora-8-bit
 max_steps: 1024
 learning_rate: 0.0003
 warmup_steps: 50

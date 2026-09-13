@@ -18,7 +18,7 @@ class PrefixKLTrainingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # --- PrefixKLTrainer constructor and model setup ---
-    model: str = "Qwen/Qwen3-4B-Base"
+    model: str = "Qwen/Qwen3-0.6B-Base"
     loss_mode: Literal["nll", "ignore_prefix"] = "nll"
     strategy: Literal["block", "modulo"] = "block"
     n_bits: int = Field(default=8, gt=0)
@@ -38,7 +38,7 @@ class PrefixKLTrainingConfig(BaseModel):
     lora_dropout: float = Field(default=0.05, ge=0, lt=1)
 
     # --- TRL SFTConfig ---
-    run_name: str = "qwen3-4b-fineweb-prefix-kl-lora"
+    run_name: str = "qwen3-0.6b-fineweb-prefix-kl-lora"
     max_steps: int = Field(default=10_000, gt=0)
     learning_rate: float = Field(default=3e-4, gt=0)
     warmup_steps: int = Field(default=300, ge=0)
@@ -98,8 +98,8 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     parser = argparse.ArgumentParser(description="LoRA-train Qwen on FineWeb with the configurable gated prefix KL objective.")
     add = parser.add_argument
     add("--config", help="repository-relative YAML configuration file")
-    add("--model", default="Qwen/Qwen3-4B-Base")
-    add("--run-name", default="qwen3-4b-fineweb-prefix-kl-lora")
+    add("--model", default="Qwen/Qwen3-0.6B-Base")
+    add("--run-name", default="qwen3-0.6b-fineweb-prefix-kl-lora")
     add(
         "--dataset-cache-name",
         default="fineweb-500k",

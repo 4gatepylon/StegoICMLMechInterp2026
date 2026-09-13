@@ -1,0 +1,44 @@
+# Qwen3-1.7B two-bit Kirchenbauer prefix-KL training run.
+# At max_length, 1024 steps * 128 examples/step * 4096 tokens/example
+# processes 536,870,912 padded sequence tokens.
+
+# --- PrefixKLTrainer constructor and model setup ---
+model: Qwen/Qwen3-1.7B-Base
+loss_mode: nll
+strategy: block
+n_bits: 2
+alpha: 1.0
+delta: 2.0
+profile_memory_steps: 0
+
+# --- Dataset and collator; max_length is also passed to SFTConfig ---
+dataset_cache_name: fineweb-500k
+concatenation_space: token
+max_length: 4096
+validation_samples: 256
+
+# --- PEFT LoraConfig ---
+lora_rank: 32
+lora_alpha: 16
+lora_dropout: 0.05
+
+# --- TRL SFTConfig ---
+run_name: qwen3-1.7b-fineweb-prefix-kl-lora-2-bit
+max_steps: 1024
+learning_rate: 0.0003
+warmup_steps: 50
+per_device_batch_size: 2
+gradient_accumulation_steps: null
+eval_steps: 4
+save_steps: 256
+save_total_limit: 5
+logging_steps: 1
+dtype: bfloat16
+report_to: wandb
+
+# --- Entrypoint orchestration around Trainer ---
+global_batch_size: 128
+wandb_project: null
+wandb_tags:
+  - stego-icml-2026-git-archive
+resume_from_checkpoint: null
