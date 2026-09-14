@@ -360,6 +360,9 @@ def decode(code: str, cipher: CipherConfig, *, keep_only_stego_bindings: bool = 
     does not establish runtime correctness or dependency availability. Resolution
     is lexical: it does not simulate class-local runtime fallback or dynamic name
     creation. Enable DEBUG on this module's logger to inspect bindings and frames.
+
+    TODO(hadriano) a human never read this function implementation. This is mostly tested by the tests in
+        `ciphers/variable_naming_in_python_v2/tests/test_decoder.py`.
     """
     # Extraction consumes the public record types in this module; defer the
     # import so they are available before bindings imports them.
