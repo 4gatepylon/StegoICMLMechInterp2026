@@ -41,6 +41,7 @@ class PrefixKLTrainingConfig(BaseModel):
     run_name: str = "qwen3-4b-fineweb-prefix-kl-lora"
     max_steps: int = Field(default=10_000, gt=0)
     learning_rate: float = Field(default=3e-4, gt=0)
+    max_grad_norm: float = Field(default=4.0, gt=0)
     warmup_steps: int = Field(default=300, ge=0)
     per_device_batch_size: int = Field(default=1, gt=0)
     gradient_accumulation_steps: int | None = Field(default=None, gt=0)
@@ -114,6 +115,7 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--max-length", type=int, default=4096)
     add("--max-steps", type=int, default=10_000)
     add("--learning-rate", "--lr", type=float, default=3e-4)
+    add("--max-grad-norm", type=float, default=4.0)
     add("--warmup-steps", type=int, default=300)
     add(
         "--global-batch-size",

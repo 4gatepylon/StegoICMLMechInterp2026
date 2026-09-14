@@ -1,0 +1,47 @@
+# Planning input: generate resolves the grid; estimate reads the resolved manifest.
+name: initial
+models:
+  - {name: qwen3-4b, model: Qwen/Qwen3-4B-Base, local_batch_size: 2}
+  - {name: qwen3-1.7b, model: Qwen/Qwen3-1.7B-Base, local_batch_size: 4}
+  - {name: qwen3-0.6b, model: Qwen/Qwen3-0.6B-Base, local_batch_size: 8}
+selected_models: [qwen3-4b]
+bits: [1, 2, 4, 8]
+learning_rates: [0.0001, 0.0003, 0.001, 0.004, 0.01]
+global_batch_sizes: [8, 16, 32, 128]
+# null selects KL alone; alpha is ignored by that objective.
+alphas: [0.25, 1.0, 4.0, null]
+strategies: [block, modulo]
+world_size: 4
+training_documents: 4096
+warmup_documents: 512
+evaluation_interval_documents: 2048
+training:
+  dataset_cache_name: fineweb-500k
+  max_length: 4096
+  validation_samples: 32
+  delta: 2.0
+  max_grad_norm: 4.0
+  concatenation_space: token
+  lora_rank: 32
+  lora_alpha: 16
+  lora_dropout: 0.05
+  dtype: bfloat16
+  report_to: wandb
+  wandb_project: stego-kirchenbauer-prefix-kl
+  logging_steps: 1
+# These are measured archive sources plus explicit conservative allowances.
+timing:
+  archives:
+    - archive: wandb_runs/4gate/deleteme/cfvhydei.zip
+      global_batch_size: 32
+      validation_documents: 256
+    - archive: wandb_runs/4gate/deleteme/ke71bap7.zip
+      global_batch_size: 32
+      validation_documents: 256
+    - archive: wandb_runs/4gate/stego-kirchenbauer-prefix-kl/9j4ies5w.zip
+      global_batch_size: 128
+      validation_documents: 256
+  safety_factor: 1.2
+  startup_seconds: 120
+  finalization_seconds: 60
+  optimizer_step_allowance_seconds: 0.1

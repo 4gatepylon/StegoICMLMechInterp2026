@@ -56,6 +56,7 @@ def main() -> None:
             per_device_eval_batch_size=args.per_device_batch_size,
             gradient_accumulation_steps=grad_accumulation_steps,
             learning_rate=args.learning_rate,
+            max_grad_norm=args.max_grad_norm,
             warmup_steps=args.warmup_steps,
             bf16=args.dtype == "bfloat16",
             fp16=args.dtype == "float16",
