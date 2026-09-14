@@ -5,13 +5,12 @@ import argparse
 import os
 from collections.abc import MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Self, Sequence
+from typing import Literal, Self, Sequence
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_yaml import parse_yaml_raw_as
-
-if TYPE_CHECKING:
-    from trl import SFTConfig
+from trl import SFTConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -88,7 +87,7 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
     resume_from_checkpoint: str | None = None
 
 
-def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int) -> "SFTConfig":
+def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int) -> SFTConfig:
     """Translate validated experiment settings into Transformers training arguments.
 
     Args:
@@ -105,10 +104,6 @@ def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int)
         all-token or non-padding-token counter, while ``PrefixKLTrainer.log()``
         independently adds the cumulative padded-token counter.
     """
-    # Cache construction shares the schema without needing training libraries.
-    import torch
-    from trl import SFTConfig
-
     return SFTConfig(
         output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], args.run_name),
         run_name=args.run_name,

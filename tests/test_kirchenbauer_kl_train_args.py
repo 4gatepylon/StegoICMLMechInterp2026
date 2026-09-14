@@ -144,13 +144,12 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setattr(configuration_kl_fineweb, "parse_args", lambda: config)
+    monkeypatch.setattr(configuration_kl_fineweb, "build_sft_config", Mock())
     cache_loader = Mock()
     monkeypatch.setattr(cache_fineweb, "load_fineweb_cache", cache_loader)
     for module in (
-        "torch",
         "peft",
         "transformers",
-        "trl",
         "ciphers.kirchenbauer_et_al.src.data_kl_fineweb",
         "ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb",
     ):
