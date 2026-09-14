@@ -44,23 +44,24 @@ Both valid suites use two length bits. Streams include ignored trailing symbols.
 
 ## Test-space decision tree
 
+TODO(hadriano) parse this and rewrite it to be more human-readable. Codex here is using undefined terms like "frame boundaries" which we can infer, but it's a little messy.
 ```text
 Cipher valid?
-├── No → reject before decoding
+├── No => reject before decoding
 │   ├── JSON fixture: two groups overlap; same source has a valid-cipher control
 │   └── Schema cases: missing/empty/singleton/non-power-of-two groups,
 │       duplicate names, invalid/keyword/non-normalized names, invalid widths
-└── Yes → one group OR multiple groups (represented by two)
+└── Yes => one group OR multiple groups (represented by two)
     └── Encoding status? Apply this partition to each group-count branch:
-        ├── No encoding → zero control; remaining bits ignored (both suites)
+        ├── No encoding => zero control; remaining bits ignored (both suites)
         ├── Invalid encoding / undecodable source
         │   ├── Missing control, truncated length, truncated payload
         │   ├── Parse errors, illegal scopes, null byte
         │   └── Unsupported wildcard import
         │       Coverage: one-group inline cases; two-group cases still missing
         └── Valid encoding
-            ├── Empty → present control, length 0, empty payload (both suites)
-            └── Non-empty → partition by payload length and binding syntax
+            ├── Empty => present control, length 0, empty payload (both suites)
+            └── Non-empty => partition by payload length and binding syntax
                 ├── Length 1: basic plus syntax cases 05–10 (both suites)
                 ├── Length 3: maximum for two length bits; leading zeros
                 │   and trailing ignored bits (both suites)

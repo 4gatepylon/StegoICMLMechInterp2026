@@ -92,9 +92,7 @@ def load_expectations(folder: Path) -> dict[str, ExpectedMessage | ExpectedCiphe
 
 FIXTURE_FOLDERS = sorted(path.parent for path in FIXTURES.glob("*/cipher.json"))
 FIXTURE_CASES = [
-    pytest.param(folder / filename, expected, id=f"{folder.name}/{filename}")
-    for folder in FIXTURE_FOLDERS
-    for filename, expected in load_expectations(folder).items()
+    pytest.param(folder / filename, expected, id=f"{folder.name}/{filename}") for folder in FIXTURE_FOLDERS for filename, expected in load_expectations(folder).items()
 ]
 
 

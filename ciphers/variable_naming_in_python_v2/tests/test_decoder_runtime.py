@@ -4,6 +4,8 @@ Partitions extend the ten fixtures with Unicode/newline spans, additional bindin
 forms, malformed/unsupported input, and command-line diagnostics. Source is never
 executed. Runtime dataflow, dynamic namespaces, and PEP 695 annotation scopes are
 not implemented or claimed by these tests.
+
+TODO(hadriano) a human has not read this. The "official" (intended) test are the ones in `ciphers/variable_naming_in_python_v2/tests/test_decoder.py`.
 """
 
 import logging
