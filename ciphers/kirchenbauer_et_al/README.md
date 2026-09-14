@@ -504,6 +504,47 @@ Each directory contains `one_bit_training_run.yaml`, `two_bit_training_run.yaml`
 configurations validated by `PrefixKLTrainingConfig`; explicit training CLI flags
 override YAML values. The former top-level 4B YAMLs have moved into `qwen3-4b/`.
 
+### Generate and verify the experiment directory
+
+The source of truth is
+[`scripts/generate_experiment_configs.py`](scripts/generate_experiment_configs.py).
+It defines one inline YAML template containing the shared settings. A Python
+sweep hydrates its model, bit-count, and run-name placeholders for all 12
+combinations using the standard library's `string.Template`. The generator
+requires no third-party packages; its CLI uses `argparse`. Tests and the training
+loader validate the YAMLs with the existing Pydantic schema. Edit the template
+or sweep to change experiments; do not hand-edit its output. Generated YAMLs
+remain checked in so training works immediately after checkout, and GitHub
+collapses them as generated files during review.
+
+From the repository root, activate `stego` and regenerate all 12 YAMLs:
+
+```bash
+conda activate stego
+python -m ciphers.kirchenbauer_et_al.scripts.generate_experiment_configs generate
+```
+
+Verify that fresh output is exactly the same as the files already present:
+
+```bash
+python -m ciphers.kirchenbauer_et_al.scripts.generate_experiment_configs check
+```
+
+Both commands accept `--output-dir REPO_RELATIVE_DIRECTORY`, defaulting to
+`ciphers/kirchenbauer_et_al/experiments`. `generate` creates missing directories
+and overwrites the 12 preset files, printing each path. It leaves unrelated files
+untouched. `check` regenerates the expected bytes in memory and compares the
+complete file list and contents without writing anything. It reports each missing,
+changed, or unexpected file and exits with status 1 on a mismatch; an exact match
+exits with status 0. Whitespace and line-ending changes count as differences;
+empty directories are ignored. The output retains the template's comments,
+field ordering, and formatting.
+
+The generation tests verify the checked-in output, deterministic regeneration,
+read-only checks, detection of missing, modified, or unexpected files, and running
+both commands without third-party packages. They do not download models or
+execute training.
+
 All sizes retain the same experiment budget and optimization settings: 1,024 steps,
 global batch size 128, per-device batch size 2, maximum sequence length 4,096,
 learning rate 0.0003, and block encoding. Each run writes checkpoints at steps
