@@ -141,7 +141,8 @@ TODO(hadriano) some combination of APPs and real-world requests that I'm confide
 The APPS loader is in [`data/apps.py`](data/apps.py). Set `STEGO_ARTIFACTS_DIR`
 before downloading; its cache is stored under `datasets/apps` within that artifact
 root. Run Python from the repository root using the `stego` environment and the
-repository requirements (`datasets>=5.0.1` is needed for parsed JSON test data).
+[CPU or GPU requirements](../../README.md#setup) (`datasets>=5.0.1` is needed for
+parsed JSON test data).
 
 ```python
 from ciphers.variable_naming_in_python_v2.data.apps import AppsConfig, load_apps

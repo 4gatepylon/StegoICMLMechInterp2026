@@ -1,0 +1,26 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+click>=8.1
+claude-agent-sdk
+datasets>=5.0.1
+fastapi>=0.110
+huggingface-hub
+ipython
+jaxtyping
+jinja2>=3.1
+notebook
+peft
+pydantic>=2.12
+pydantic-yaml>=1.6
+pyarrow
+pytest
+# Linux x86-64 needs the explicit CPU build to avoid PyPI's CUDA dependencies.
+torch==2.5.1+cpu ; sys_platform == "linux" and platform_machine == "x86_64"
+# Apple Silicon and Linux ARM64 wheels have no +cpu version suffix.
+torch==2.5.1 ; sys_platform == "darwin" or (sys_platform == "linux" and platform_machine == "aarch64")
+tqdm>=4.67
+transformers>=4.51
+trl
+uvicorn[standard]>=0.29
+wandb>=0.18,<0.23
+ruff==0.14.2
