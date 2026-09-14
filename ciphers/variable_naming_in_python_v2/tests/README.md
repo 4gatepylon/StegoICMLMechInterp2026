@@ -23,6 +23,8 @@ implemented. Do not interpret expected failures as tested decoding functionality
 
 ## Fixture partitions
 
+The ten Codex-generated Python files live under `fixtures/codex_generated/`;
+future human-authored fixtures can live alongside them in `fixtures/human_generated/`.
 All ten Python files are read as source, never imported or executed. The alphabet
 is `i=0, j=1`; repeated occurrences of a binding do not add symbols. Each expected
 stream below includes trailing ignored symbols. Fixture comments are explanatory

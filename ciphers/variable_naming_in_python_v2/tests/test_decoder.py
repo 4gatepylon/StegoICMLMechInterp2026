@@ -25,7 +25,7 @@ from ciphers.variable_naming_in_python_v2.decoder import (
     decode,
 )
 
-FIXTURES = Path("ciphers/variable_naming_in_python_v2/tests/fixtures")
+FIXTURES = Path("ciphers/variable_naming_in_python_v2/tests/fixtures/codex_generated")
 needs_decoder = pytest.mark.xfail(raises=NotImplementedError, strict=True, reason="Interface-only decode() stub; remove this mark when implemented")
 CASES = [
     pytest.param("01_basic.py", 1, "0", "110", id="positive"),
