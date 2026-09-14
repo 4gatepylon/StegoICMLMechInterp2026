@@ -38,3 +38,11 @@
 8. Keep detailed interface documentation in docstrings; inline comments may point to that docstring rather than duplicating its schema.
 9. Before documenting a data flow or framework behavior, identify its producer and consumer and verify the actual contract in code. Align names and validation with that contract.
 10. Use `@override` when overriding methods. The overriding method's docstring must state how its behavior differs from the parent implementation.
+
+## Reading ChatGPT share links
+
+For `https://chatgpt.com/share/...` links, use the repo-local
+[`read-chatgpt-share` skill](.agents/skills/read-chatgpt-share/SKILL.md). A web reader
+may return only the title even when the downloaded HTML contains the conversation.
+The skill extracts text from embedded data without executing JavaScript, reports
+omissions and completeness checks, and keeps app bootstrap metadata out of context.
