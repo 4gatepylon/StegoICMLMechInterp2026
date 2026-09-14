@@ -392,6 +392,23 @@ torchrun --standalone --nproc-per-node=4 \
   ciphers/kirchenbauer_et_al/src/train_kl_fineweb.py
 ```
 
+Each official experiment logs two cumulative training-volume metrics to W&B:
+
+- `train/num_input_tokens_seen` counts non-padding tokens in the prefixed
+  student inputs across all distributed workers. Set
+  `include_num_input_tokens_seen` (or
+  `--include-num-input-tokens-seen`) to `all` to include padding, or to `no` to
+  disable this native Transformers metric.
+- `train/num_padded_input_tokens_seen` counts every fixed-width student input
+  slot, including padding. It is computed from the restored optimizer step,
+  effective global batch size, and `max_length`, so it remains cumulative after
+  checkpoint resume.
+
+Both metrics count each student input once. They do not double-count the
+adapter-disabled teacher forward pass used to construct KL targets. The padded
+metric assumes resumed runs retain the same sequence length and batching
+settings, as required for comparable continuation runs.
+
 The trainer requires one cached document for every example it will consume:
 `validation samples + max steps * effective global batch size`. The default
 500,000-document cache covers most of our use cases. Cache

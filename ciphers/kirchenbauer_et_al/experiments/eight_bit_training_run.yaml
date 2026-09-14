@@ -33,6 +33,7 @@ eval_steps: 4
 save_steps: 256
 save_total_limit: 5
 logging_steps: 1
+include_num_input_tokens_seen: non_padding
 dtype: bfloat16
 report_to: wandb
 

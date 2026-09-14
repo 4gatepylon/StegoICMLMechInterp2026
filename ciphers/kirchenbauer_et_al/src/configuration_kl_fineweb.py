@@ -2,12 +2,16 @@
 
 # TODO(hadriano): Migrate this CLI from argparse to Click.
 import argparse
+import os
 from collections.abc import MutableMapping
 from pathlib import Path
-from typing import Literal, Self, Sequence
+from typing import TYPE_CHECKING, Literal, Self, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_yaml import parse_yaml_raw_as
+
+if TYPE_CHECKING:
+    from trl import SFTConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -73,6 +77,7 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
     save_steps: int = Field(default=500, gt=0)
     save_total_limit: int = Field(default=5, gt=0)
     logging_steps: int = Field(default=1, gt=0)
+    include_num_input_tokens_seen: Literal["all", "non_padding", "no"] = "non_padding"
     dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
     report_to: str = "wandb"
 
@@ -81,6 +86,56 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
     wandb_project: str | None = None
     wandb_tags: list[str] = Field(default_factory=list)
     resume_from_checkpoint: str | None = None
+
+
+def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int) -> "SFTConfig":
+    """Translate validated experiment settings into Transformers training arguments.
+
+    Args:
+        args: Complete ``PrefixKLTrainingConfig`` produced by ``parse_args()``.
+            Its output path is resolved below ``STEGO_ARTIFACTS_DIR``; all
+            optimization, checkpoint, precision, and reporting fields are
+            forwarded to their ``SFTConfig`` consumers.
+        grad_accumulation_steps: Positive per-process accumulation count after
+            resolving the configured effective global batch size.
+
+    Returns:
+        The ``SFTConfig`` consumed by ``PrefixKLTrainer``. In particular,
+        ``include_num_input_tokens_seen`` controls Transformers' cumulative
+        all-token or non-padding-token counter, while ``PrefixKLTrainer.log()``
+        independently adds the cumulative padded-token counter.
+    """
+    # Cache construction shares the schema without needing training libraries.
+    import torch
+    from trl import SFTConfig
+
+    return SFTConfig(
+        output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], args.run_name),
+        run_name=args.run_name,
+        report_to=args.report_to,
+        max_length=args.max_length,
+        max_steps=args.max_steps,
+        per_device_train_batch_size=args.per_device_batch_size,
+        per_device_eval_batch_size=args.per_device_batch_size,
+        gradient_accumulation_steps=grad_accumulation_steps,
+        learning_rate=args.learning_rate,
+        warmup_steps=args.warmup_steps,
+        bf16=args.dtype == "bfloat16",
+        fp16=args.dtype == "float16",
+        gradient_checkpointing=True,
+        ddp_find_unused_parameters=False,
+        logging_steps=args.logging_steps,
+        eval_strategy="steps",
+        eval_steps=args.eval_steps,
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit,
+        prediction_loss_only=True,
+        include_num_input_tokens_seen=args.include_num_input_tokens_seen,
+        remove_unused_columns=False,
+        dataset_kwargs={"skip_prepare_dataset": True},
+        loss_type="nll",
+        model_init_kwargs={"torch_dtype": getattr(torch, args.dtype)},
+    )
 
 
 def load_training_config(config_path: str | None) -> PrefixKLTrainingConfig:
@@ -154,6 +209,12 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--save-steps", type=int, default=500)
     add("--save-total-limit", type=int, default=5)
     add("--logging-steps", type=int, default=1)
+    add(
+        "--include-num-input-tokens-seen",
+        choices=("all", "non_padding", "no"),
+        default="non_padding",
+        help="Track all, non-padding, or no prefixed input tokens in Trainer logs (default: non_padding)",
+    )
     add("--lora-rank", type=int, default=32)
     add("--lora-alpha", type=int, default=16)
     add("--lora-dropout", type=float, default=0.05)
