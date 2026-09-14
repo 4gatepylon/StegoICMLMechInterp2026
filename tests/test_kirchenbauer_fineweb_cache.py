@@ -173,6 +173,7 @@ def test_cli_verifies_and_previews_cached_metadata(artifacts_directory: Path, mo
     assert "url: https://example.com/0" in result.output
     assert "text: 'document 0'" in result.output
     assert result.output.count("=" * 100) == 3
+    # _source_document(index) defines token_count = index + 1, so the inclusive [1, 2] bounds retain indices 0 and 1.
     assert list(load_fineweb_cache("cli-cache", shuffle=False)) == [_cached_document(0), _cached_document(1)]
 
 
