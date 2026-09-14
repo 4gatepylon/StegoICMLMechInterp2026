@@ -13,7 +13,7 @@ Immediate next steps:
 - [x] Launch experiment and let it run with wandb logging these metrics properly
 - [x] Log data statsitics and examples via ipynb somewhere
 - [ ] Add support for storing wandb logs (i.e. so we can train scaling laws).
-- [ ] **TODO(Codex 1)** Add support to log the number of tokens consumed in the process of training (if not already present; otherwise let the user know how to see that).
+- [x] **TODO(Codex 1)** Add support to log the number of tokens consumed in the process of training (if not already present; otherwise let the user know how to see that).
 - [ ] **TODO(Codex 2)** (Be able to) reject very short documents (caching pipeline from ^ should support some kind of filtering, etc...). Simply, make a flag for downloading the fineweb cache and a flag for loading from the cache. Each one can include/exclude files based on a minimum size (can be 0) or maximum size (can be None for no maximum). By default use 0 and None.
 - [ ] **TODO(Codex 3)** Add hyper-parameter sweep support for `{lrs} x {batch size} x {nll enabled alpha 1, nll enabled alpha 2, ..., nll disabled} x {modulus, chunk/block}`. Specifically, add a script similar to the bash script that launches the 1 bit, 2 bit, etc... and then for each one try ^. Pick reasonable number of steps to do this for and reasonable hyperparemeters. Ideally, each attempted grid element does not run for more than ~15m and/or there is a smaller/better way to pick the right hyperparameters. The implementer of this might want to propose a scaling curve methodology to extrapolate the training performance based on ^ (it shold be simplest possible; maybe fit a power law or even a kinked linear function; idk).
   - Planning phase implemented: [manifest generation and archived-W&B timing estimates](ciphers/kirchenbauer_et_al/experiments/SWEEP_PLANNING.md). The sequential runner remains deferred until the generated grid and estimates are reviewed. Trials use 4,096 documents with no time cap; the initial 4B grid estimates 475.87 node-hours.
@@ -28,6 +28,7 @@ Immediate next steps:
 - [ ] Trainer should log encode/decode accuracy. We could add a callback.
 - [ ] Add plotting scripts for ^ and to generate the outputs for our first 2 (X, Y) experiments.
 - [ ] Optionally (if needed) look at scaling laws as a function of train resources to best identify the hero run.
+- [ ] Look into how to make runs faster via tinker (https://chatgpt.com/share/6aa72e30-c5ec-83e8-a862-1a12e928a1be), unsloth, or other tooling (worst case we can probably do some custom pytorch + compile workflow?) We might want to skyline (https://chatgpt.com/share/6aa72eac-4444-83e8-8b31-c3dd8bfa6b72) the performance.
 
 Good experiments for the pretraining bits-encoding objective here:
 - [ ] **Question:** (X) Can we encode a single bit in pretraining data/generation using a similar logit-boost cipher? `We are working this`

@@ -14,7 +14,7 @@ from click.testing import CliRunner
 from pydantic_yaml import parse_yaml_raw_as
 
 from ciphers.kirchenbauer_et_al.src import sweep_kl_fineweb as sweep
-from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import parse_args
+from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import build_sft_config, parse_args
 
 SPEC = "ciphers/kirchenbauer_et_al/experiments/hyperparameter_sweep.yaml"
 
@@ -129,7 +129,9 @@ def test_cli_roundtrip_refuses_overwrite_and_escaping_paths(tmp_path: Path, monk
     assert runner.invoke(sweep.cli, ["generate", "--spec", SPEC, "--output", "../escape.json"]).exit_code != 0
 
 
-def test_training_cli_accepts_gradient_clipping_override() -> None:
-    """Cover explicit override propagation into validated training arguments."""
+def test_training_cli_accepts_gradient_clipping_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cover clipping override propagation through the CLI and SFTConfig; omit model execution."""
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     config = parse_args(["--config", "ciphers/kirchenbauer_et_al/experiments/one_bit_training_run.yaml", "--max-grad-norm", "2.5"])
     assert config.max_grad_norm == 2.5
+    assert build_sft_config(config, grad_accumulation_steps=8).max_grad_norm == 2.5
