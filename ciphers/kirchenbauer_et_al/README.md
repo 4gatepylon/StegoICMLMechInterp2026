@@ -349,6 +349,37 @@ in a single process, without `torchrun`. With no flags, the builder stores
 python -m ciphers.kirchenbauer_et_al.src.cache_fineweb
 ```
 
+Both cache creation and training accept `--min-document-tokens` (default `0`)
+and `--max-document-tokens` (default unlimited). Bounds are inclusive and use
+FineWeb's stored **GPT-2 token count**, before training tokenization or
+truncation. They filter individual documents, not Parquet files. For example:
+
+```bash
+python -m ciphers.kirchenbauer_et_al.src.cache_fineweb \
+  --cache-name fineweb-100k-filtered --documents 100000 \
+  --min-document-tokens 256 --max-document-tokens 8192
+
+python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
+  --dataset-cache-name fineweb-100k-filtered --max-steps 1000 \
+  --min-document-tokens 512 --max-document-tokens 4096
+```
+
+Creation reads until it has the requested number of **accepted** documents and
+records its bounds in the manifest. If the source runs out, the partial build
+is removed. Loading can independently narrow any existing cache, including
+caches created before these options existed; it cannot recover documents
+excluded during creation. Filtering happens before shuffling and the
+train/validation split. When filtering is enabled, loading scans the local
+`token_count` column to verify enough accepted documents remain for the run.
+No token-count scan is added with the unfiltered defaults.
+
+The Python builder and loader accept `min_document_tokens=0` and
+`max_document_tokens=None`. Training YAML uses those same field names (`null`
+for no maximum); explicit CLI flags override YAML, and
+`--max-document-tokens none` clears a YAML maximum for training. Negative or
+reversed bounds are rejected. The cache CLI uses Click; the existing training
+CLI still uses argparse.
+
 The CLI verifies the manifest, completion marker, Parquet schemas, part counts,
 and row counts before reporting success. It then prints three cached examples
 for debugging. A 100-character separator distinguishes verified output from a

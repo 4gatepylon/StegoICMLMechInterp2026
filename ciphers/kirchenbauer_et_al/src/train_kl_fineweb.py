@@ -21,7 +21,12 @@ def main() -> None:
     grad_accumulation_steps = gradient_accumulation_steps(args, world_size)
     configure_wandb_environment(args, os.environ)
     required_documents = args.validation_samples + args.max_steps * args.per_device_batch_size * world_size * grad_accumulation_steps
-    dataset = load_fineweb_cache(args.dataset_cache_name, minimum_documents=required_documents)
+    dataset = load_fineweb_cache(
+        args.dataset_cache_name,
+        minimum_documents=required_documents,
+        min_document_tokens=args.min_document_tokens,
+        max_document_tokens=args.max_document_tokens,
+    )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
     validation_dataset = dataset.take(args.validation_samples).map(

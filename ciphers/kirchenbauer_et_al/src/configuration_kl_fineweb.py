@@ -5,17 +5,42 @@ import argparse
 import os
 from collections.abc import MutableMapping
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Self, Sequence
 
 import torch
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_yaml import parse_yaml_raw_as
 from trl import SFTConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-class PrefixKLTrainingConfig(BaseModel):
+class DocumentTokenFilter(BaseModel):
+    """Inclusive bounds on FineWeb's stored GPT-2 token count, before truncation.
+
+    ``min_document_tokens`` defaults to zero; ``max_document_tokens=None``
+    disables the upper bound. Shared by cache construction, manifests, loading,
+    and training configuration so all entry points enforce the same range.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    min_document_tokens: int = Field(default=0, ge=0)
+    max_document_tokens: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_token_range(self) -> Self:
+        """Return the validated configuration, rejecting reversed bounds."""
+        if self.max_document_tokens is not None and self.max_document_tokens < self.min_document_tokens:
+            raise ValueError("max_document_tokens must be greater than or equal to min_document_tokens")
+        return self
+
+    def accepts(self, token_count: int) -> bool:
+        """Return whether a stored GPT-2 ``token_count`` satisfies both bounds."""
+        return token_count >= self.min_document_tokens and (self.max_document_tokens is None or token_count <= self.max_document_tokens)
+
+
+class PrefixKLTrainingConfig(DocumentTokenFilter):
     """Validated settings accepted by the FineWeb KL training entry point."""
 
     model_config = ConfigDict(extra="forbid")
@@ -156,6 +181,8 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
         help="completed cache below $STEGO_ARTIFACTS_DIR/datasets/fineweb (default: fineweb-500k)",
     )
     add("--loss-mode", choices=("nll", "ignore_prefix"), default="nll")
+    add("--min-document-tokens", type=int, help="inclusive minimum stored GPT-2 token count (default: 0)")
+    add("--max-document-tokens", type=lambda value: None if value.lower() == "none" else int(value), help="inclusive maximum stored GPT-2 token count (default: none)")
     add("--strategy", choices=("block", "modulo"), default="block")
     add("--concatenation-space", choices=("token", "character"), default="token")
     add("--n-bits", type=int, default=8)
