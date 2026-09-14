@@ -5,14 +5,12 @@ import sys
 from functools import partial
 from pathlib import Path
 
-import torch
 from peft import LoraConfig
 from transformers import AutoTokenizer
-from trl import SFTConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.src.cache_fineweb import load_fineweb_cache  # noqa: E402
-from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import configure_wandb_environment, gradient_accumulation_steps, parse_args  # noqa: E402
+from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import build_sft_config, configure_wandb_environment, gradient_accumulation_steps, parse_args  # noqa: E402
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata  # noqa: E402
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator  # noqa: E402
 
@@ -23,7 +21,12 @@ def main() -> None:
     grad_accumulation_steps = gradient_accumulation_steps(args, world_size)
     configure_wandb_environment(args, os.environ)
     required_documents = args.validation_samples + args.max_steps * args.per_device_batch_size * world_size * grad_accumulation_steps
-    dataset = load_fineweb_cache(args.dataset_cache_name, minimum_documents=required_documents)
+    dataset = load_fineweb_cache(
+        args.dataset_cache_name,
+        minimum_documents=required_documents,
+        min_document_tokens=args.min_document_tokens,
+        max_document_tokens=args.max_document_tokens,
+    )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
     validation_dataset = dataset.take(args.validation_samples).map(
@@ -46,32 +49,7 @@ def main() -> None:
         ),
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules="all-linear"),
-        args=SFTConfig(
-            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], args.run_name),
-            run_name=args.run_name,
-            report_to=args.report_to,
-            max_length=args.max_length,
-            max_steps=args.max_steps,
-            per_device_train_batch_size=args.per_device_batch_size,
-            per_device_eval_batch_size=args.per_device_batch_size,
-            gradient_accumulation_steps=grad_accumulation_steps,
-            learning_rate=args.learning_rate,
-            warmup_steps=args.warmup_steps,
-            bf16=args.dtype == "bfloat16",
-            fp16=args.dtype == "float16",
-            gradient_checkpointing=True,
-            ddp_find_unused_parameters=False,
-            logging_steps=args.logging_steps,
-            eval_strategy="steps",
-            eval_steps=args.eval_steps,
-            save_steps=args.save_steps,
-            save_total_limit=args.save_total_limit,
-            prediction_loss_only=True,
-            remove_unused_columns=False,
-            dataset_kwargs={"skip_prepare_dataset": True},
-            loss_type="nll",
-            model_init_kwargs={"torch_dtype": getattr(torch, args.dtype)},
-        ),
+        args=build_sft_config(args, grad_accumulation_steps),
     )
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 

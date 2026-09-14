@@ -42,6 +42,35 @@ class LossInformation:
     data_loss: ScalarLoss
 
 
+def padded_input_tokens_seen(
+    global_step: int,
+    max_length: int,
+    local_batch_size: int,
+    gradient_accumulation_steps: int,
+    process_count: int,
+) -> int:
+    """Return cumulative fixed-shape student input tokens at an optimizer step.
+
+    Args:
+        global_step: Number of completed optimizer updates, including updates
+            restored from a checkpoint.
+        max_length: Padded sequence width produced by the training collator.
+        local_batch_size: Number of examples processed by each process in one
+            microbatch, including all devices managed within that process.
+        gradient_accumulation_steps: Microbatches consumed per optimizer update.
+        process_count: Distributed processes contributing distinct microbatches.
+
+    Returns:
+        The number of padded student-input token slots consumed through
+        ``global_step``. ``PrefixKLTrainer.log()`` reports this cumulative value
+        as ``num_padded_input_tokens_seen``. The calculation assumes the
+        trainer's fixed-size, batch-aligned iterable dataset contract; unlike
+        ``num_input_tokens_seen``, it deliberately includes padding and does not
+        count the separate adapter-disabled teacher forward pass.
+    """
+    return global_step * max_length * local_batch_size * gradient_accumulation_steps * process_count
+
+
 def prefix_bits_encoding_text_collator(
     examples: list[dict[str, object]],
     tokenizer,
@@ -205,6 +234,26 @@ class PrefixKLTrainer(SFTTrainer):
         ):
             gathered_value = self.accelerator.gather_for_metrics(value).mean().item()
             self._metrics[mode][name].append(gathered_value)
+
+    @override
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        """Add a cumulative padded-token count before normal SFT logging.
+
+        The parent implementation logs the native ``num_input_tokens_seen``
+        counter according to ``include_num_input_tokens_seen`` and merges the
+        buffered loss metrics. This override additionally reports fixed-width
+        student input slots as ``num_padded_input_tokens_seen``. It derives that
+        count from completed optimizer steps, so checkpoint-restored
+        ``global_step`` keeps it cumulative across resumed training.
+        """
+        logs["num_padded_input_tokens_seen"] = padded_input_tokens_seen(
+            global_step=self.state.global_step,
+            max_length=self.args.max_length,
+            local_batch_size=self.args.train_batch_size,
+            gradient_accumulation_steps=self.args.gradient_accumulation_steps,
+            process_count=self.accelerator.num_processes,
+        )
+        super().log(logs, start_time)
 
     def _profile_memory(self, stage: str) -> None:
         if not self._profile_this_call or self.accelerator.device.type != "cuda":
