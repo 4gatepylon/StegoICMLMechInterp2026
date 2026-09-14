@@ -485,6 +485,10 @@ from `--global-batch-size`, which defaults to 32 for backward compatibility.
 
 ## Experiments
 
+For the short hyperparameter grid, see [sweep planning](experiments/SWEEP_PLANNING.md).
+The planning CLI generates a resolved manifest and estimates sequential runtime
+from archived W&B measurements before any training is launched.
+
 Each experiment keeps the existing objective and model defaults while training
 for 1,024 steps at global batch size 128 and per-device batch size 2. Each run
 writes four retained checkpoints at steps 256, 512, 768, and 1,024.
