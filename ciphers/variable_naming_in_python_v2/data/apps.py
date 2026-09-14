@@ -45,6 +45,7 @@ class AppsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    # TODO(hadriano) in the future support multiple splits (and other options)
     split: Literal["train", "test"] = "train"
     difficulties: tuple[Difficulty, ...] = Field(default=("introductory",), min_length=1)
     min_lines: int = Field(default=20, ge=0, strict=True)
@@ -179,6 +180,8 @@ def filter_apps(rows: Iterable[Mapping[str, object]], config: AppsConfig | None 
             continue
         if len(problem.input_output.inputs) < config.min_tests:
             continue
+        # TODO(hadriano) this is basically an OR (if at least one solution meets the criteria, then we
+        # kep it). I'm not sure this is what we want. Probably it doesn't matter.
         solutions = [code for code in problem.solutions if config.accepts_solution(code)]
         if not solutions:
             continue
