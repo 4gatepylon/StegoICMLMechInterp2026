@@ -22,6 +22,14 @@ from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig, evaluate_on_modal, interpret_verdict
 
 
+@pytest.mark.parametrize("serialized", [False, True])
+def test_dataset_cases_preserve_integers_beyond_machine_width(serialized: bool) -> None:
+    payload = {"inputs": [[10**100]], "outputs": [10**101], "fn_name": "solve"}
+    cases = AppsTestCases.from_dataset_value(json.dumps(payload) if serialized else payload)
+    assert cases.inputs == [[10**100]]
+    assert cases.outputs == [10**101]
+
+
 @pytest.mark.parametrize(
     "results,num_tests,status,passed",
     [
