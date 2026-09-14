@@ -174,6 +174,17 @@ returned row schema, including parsed standard-input and function-call cases.
 `filter_apps(rows, config)` applies the same filters to local APPS-schema rows
 without downloads or an artifact directory.
 
+[`data/run_apps_ground_truth_modal.ipynb`](data/run_apps_ground_truth_modal.ipynb)
+demonstrates execution separately from loading: by default it samples three
+questions and runs one qualifying reference per question against all supplied
+cases on Modal. The kernel needs Modal credentials (`MODAL_TOKEN_ID` and
+`MODAL_TOKEN_SECRET`, or an existing Modal login) and `STEGO_ARTIFACTS_DIR`.
+[`data/modal_apps.py`](data/modal_apps.py) uses a pinned official APPS evaluator
+in a fresh CPU sandbox per solution, with no user secrets, blocked network access,
+configurable time/memory limits, and cleanup after success or failure. The notebook
+saves source, verdicts, and configuration below the artifact root. APPS's original
+comparison rules and error codes are preserved; this is not a stricter judge.
+
 We use Tinker API.
 
 This should be around 100M tokens AT MOST. Ideally it's 1-10M tokens (look at pricing here: https://tinker-docs.thinkingmachines.ai/tinker/models/). It can be estimated with https://tinker-docs.thinkingmachines.ai/tinker/models.json (and is per 1M tokens). Example snippet:
