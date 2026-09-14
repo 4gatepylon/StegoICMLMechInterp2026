@@ -138,6 +138,41 @@ For now the scope is going to be ONLY single-file python code. The user would ne
 ### Dataset
 TODO(hadriano) some combination of APPs and real-world requests that I'm confident a ~27b model model can solve.
 
+The APPS loader is in [`data/apps.py`](data/apps.py). Set `STEGO_ARTIFACTS_DIR`
+before downloading; its cache is stored under `datasets/apps` within that artifact
+root. Run Python from the repository root using the `stego` environment and the
+repository requirements (`datasets>=5.0.1` is needed for parsed JSON test data).
+
+```python
+from ciphers.variable_naming_in_python_v2.data.apps import AppsConfig, load_apps
+
+problems = load_apps(AppsConfig(
+    split="train",
+    difficulties=("introductory",),  # APPS's easy tier; also interview/competition
+    min_lines=20,
+    max_lines=None,
+    min_chars=0,
+    max_chars=None,
+    min_tests=10,
+))
+```
+
+All answer-size bounds are inclusive and apply to supplied ground-truth solutions,
+not the question or starter code. Lines include blank/comment lines; characters
+include whitespace. A problem must have at least one qualifying answer, and only
+qualifying answers remain in `solutions`. `min_tests` counts paired supplied
+inputs/outputs, including duplicates, rather than assertions or behavioral coverage.
+Malformed rows are skipped with a warning. Neither reference answers nor tests are
+executed, so their correctness is not independently verified. Source Parquet data
+is pinned to a revision, configurable through `AppsConfig.revision`.
+
+[`data/inspect_apps.ipynb`](data/inspect_apps.ipynb) prints a reproducible sample of
+questions, qualifying reference answers, and supplied input/output cases. Its
+filters and preview counts are editable. The loader's docstrings specify the
+returned row schema, including parsed standard-input and function-call cases.
+`filter_apps(rows, config)` applies the same filters to local APPS-schema rows
+without downloads or an artifact directory.
+
 We use Tinker API.
 
 This should be around 100M tokens AT MOST. Ideally it's 1-10M tokens (look at pricing here: https://tinker-docs.thinkingmachines.ai/tinker/models/). It can be estimated with https://tinker-docs.thinkingmachines.ai/tinker/models.json (and is per 1M tokens). Example snippet:
