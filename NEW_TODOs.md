@@ -7,7 +7,7 @@ Tasks to get to MVP:
 - [x] 1. Define algorithm on a high-level (without harness-level details)
 - [ ] 2. Acquire dataset of aroud ~1-100 good testing tasks with unit tests.
 - [ ] 3. Define the interface for encoding/decoding and other parts of the stack.
-- [ ] 4. Implement decoder and test it on a variety of different secret encoded messages.
+- [x] 4. Implement decoder and test it on a variety of different secret encoded messages.
 - [ ] 5. Support a mock model that can work on special code files with UUID substrings (or something like that) and output canned correct/incorrect responses. This should enable us to run the harness fully (fully integration test). Ideally this mock model can run on an OpenAI API-compatible endpoint. Ideally, I can also support local (tiny) models via Ollama or something like that (even HF is fine; I could copy over my batched HF server from SAE Scoping old code---any agents working on this should ask user for that if needed; but we prefer VLLM or SGLang or Ollama or other local LLM server runtimes).
 - [ ] 6. Implement evaluation setup harness without LLM Judges (only encoder/decoder)
 - [ ] 7. Implement and evalute MVP v1 harness. This harness will just try 1-shot and either fail or succeed. Support both OpenRouter and Codex directly (add a TODO for OpenAI API and/or Anthropic/Claude, mentioning use of max plan; maybe support generic OpenAI API-compatible endpoints).
