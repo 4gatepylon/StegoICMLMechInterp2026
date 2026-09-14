@@ -185,6 +185,19 @@ configurable time/memory limits, and cleanup after success or failure. The noteb
 saves source, verdicts, and configuration below the artifact root. APPS's original
 comparison rules and error codes are preserved; this is not a stricter judge.
 
+[`data/generate_apps_codex_modal.ipynb`](data/generate_apps_codex_modal.ipynb)
+demonstrates the separate generation capability. It selects one standard-input/
+output task by default, asks the official `openai-codex` Python SDK for a complete
+Python program, then grades that answer with the same Modal helper. Codex reuses
+the existing ChatGPT-backed subscription login; API-key accounts are rejected.
+The prompt includes the task's stdin/stdout specification and public examples,
+but excludes reference answers and hidden cases. Generation artifacts are saved
+before remote grading. Model choice, sample count, and timeouts are editable in
+the notebook; `model=None` uses Codex's configured default.
+This notebook explicitly sets `min_tests=1`, because the pinned introductory
+stdin/stdout records each supply one input/output pair (possibly containing
+multiple problem-level cases). The loader's default remains 10.
+
 We use Tinker API.
 
 This should be around 100M tokens AT MOST. Ideally it's 1-10M tokens (look at pricing here: https://tinker-docs.thinkingmachines.ai/tinker/models/). It can be estimated with https://tinker-docs.thinkingmachines.ai/tinker/models.json (and is per 1M tokens). Example snippet:
