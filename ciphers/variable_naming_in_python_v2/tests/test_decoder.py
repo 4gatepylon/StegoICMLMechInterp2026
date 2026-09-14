@@ -91,6 +91,13 @@ def load_expectations(folder: Path) -> dict[str, ExpectedMessage | ExpectedCiphe
 
 
 FIXTURE_FOLDERS = sorted(path.parent for path in FIXTURES.glob("*/cipher.json"))
+assert sorted(map(lambda x: x.resolve(), FIXTURE_FOLDERS)) == sorted(
+    [
+        (Path(__file__).parent / "fixtures/codex_generated_1_group").resolve(),
+        (Path(__file__).parent / "fixtures/codex_generated_2_groups").resolve(),
+        (Path(__file__).parent / "fixtures/codex_generated_2_groups_invalid_cipher").resolve(),
+    ]
+)
 FIXTURE_CASES = [
     pytest.param(folder / filename, expected, id=f"{folder.name}/{filename}") for folder in FIXTURE_FOLDERS for filename, expected in load_expectations(folder).items()
 ]
@@ -171,7 +178,18 @@ def special_bindings(result: DecodedMessage) -> tuple[VariableBinding, ...]:
         {"index": ("", "j")},
         {"index": ("K", "j")},
     ],
-    ids=["no-groups", "empty", "singleton", "non-power-two", "duplicate-within", "duplicate-across", "keyword", "invalid-identifier", "empty-name", "nfkc-alias"],
+    ids=[
+        "no-groups",
+        "empty",
+        "singleton",
+        "non-power-two",
+        "duplicate-within",
+        "duplicate-across",
+        "keyword",
+        "invalid-identifier",
+        "empty-name",
+        "nfkc-alias",
+    ],
 )
 def test_reject_ambiguous_or_invalid_alphabets(groups: dict[str, tuple[str, ...]]) -> None:
     with pytest.raises(ValidationError):
