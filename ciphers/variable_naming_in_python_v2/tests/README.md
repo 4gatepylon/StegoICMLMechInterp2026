@@ -7,6 +7,7 @@ conda run -n stego python -m pytest -q ciphers/variable_naming_in_python_v2/test
 ```
 
 All schema, fixture, decoder, and CLI checks run normally. Source is never executed.
+For a command using real fixture files, see the [CLI example](../README.md#decoder-cli).
 
 ## Fixture partitions
 

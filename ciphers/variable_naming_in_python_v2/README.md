@@ -30,12 +30,20 @@ decoding. Source columns are zero-based UTF-8 byte offsets. See model and functi
 docstrings for the exact contracts, scope rules, and exceptions. No source is
 executed, and attributes/dynamically created names are outside lexical decoding.
 
-Run the Click CLI from the repository root with a JSON `CipherConfig`:
+### Decoder CLI
+
+From the repository root, decode the two-group maximum-length test fixture:
 
 ```bash
+fixture_dir=ciphers/variable_naming_in_python_v2/tests/fixtures/codex_generated_2_groups
 conda run -n stego python -m ciphers.variable_naming_in_python_v2.cli \
-    --cipher path/to/cipher.json --verbose --expect 010 path/to/program.py
+    --cipher "$fixture_dir/cipher.json" --verbose --expect 001 \
+    "$fixture_dir/04_maximum.py"
 ```
+
+This exits successfully with `is_encoding: true`, `length: 3`, and
+`message_bits: "001"` in the JSON result, matching the `04_maximum.py` entry in
+the folder's `expected_decodes.json`.
 
 JSON is written to stdout. `--verbose` writes every binding, source occurrence,
 symbol/bit role, and frame result to stderr; `--expect` checks the intended
