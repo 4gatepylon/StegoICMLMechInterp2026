@@ -1,4 +1,4 @@
-"""SFT-train Qwen3-4B-Base on FineWeb with no-encoding prefixes.
+"""SFT-train Qwen3-0.6B-Base on FineWeb with no-encoding prefixes.
 
 It holds out validation documents and lazily prepends fresh random fixed-width bits.
 LoRA minimizes next-token NLL on prefix and text so loss is low with
@@ -33,13 +33,13 @@ def main() -> None:
     train_dataset = dataset.skip(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
     validation_dataset = dataset.take(N_VALIDATION_SAMPLES).map(add_prefix, batched=True)
     trainer = SFTTrainer(
-        model="Qwen/Qwen3-4B-Base",
+        model="Qwen/Qwen3-0.6B-Base",
         train_dataset=train_dataset,
         eval_dataset=validation_dataset,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=32, lora_alpha=16, lora_dropout=0.05, target_modules="all-linear"),
         args=SFTConfig(
-            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-4b-fineweb-no-encoding-prefix-pretrain-lora"),
-            run_name="qwen3-4b-fineweb-no-encoding-prefix-pretrain-lora",
+            output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], "qwen3-0.6b-fineweb-no-encoding-prefix-pretrain-lora"),
+            run_name="qwen3-0.6b-fineweb-no-encoding-prefix-pretrain-lora",
             report_to="wandb",
             max_steps=10_000,
             # Qwen3 S1 uses length 4,096 (Technical Report, p. 4): https://arxiv.org/pdf/2505.09388
