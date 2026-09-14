@@ -97,9 +97,10 @@ class SourceSpan(BaseModel):
 class BindingOccurrence(BaseModel):
     """One identifier token associated with a lexical binding.
 
-    ``kind`` is binding for parameters/import aliases/definition names/pattern
-    captures, write for assignment or loop targets, read for loads, read_write
-    for augmented assignment, delete for del, and declaration for global/nonlocal.
+    ``kind`` is binding for parameters/import aliases/definition names/exception
+    targets/pattern captures, write for assignment/with/loop targets, read for
+    loads, read_write for augmented assignment, delete for del, and declaration
+    for global/nonlocal.
     A token appears once even when it both reads and writes. ``span`` identifies
     its location; occurrences from nested scopes still reference the owning
     binding, unless shadowing creates a different binding.
