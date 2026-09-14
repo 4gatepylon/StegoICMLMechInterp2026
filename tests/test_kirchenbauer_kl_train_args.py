@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
     PrefixKLTrainingConfig,
+    build_sft_config,
     configure_wandb_environment,
     gradient_accumulation_steps,
     load_training_config,
@@ -58,11 +61,52 @@ def test_eight_bit_training_config_splits_global_batch_across_world_size(world_s
 
 def test_command_line_overrides_eight_bit_config() -> None:
     """Cover precedence for representative numeric fields; other field types are omitted."""
-    config = parse_args(["--config", EIGHT_BIT_CONFIG_PATH, "--lr", "0.001", "--save-steps", "128"])
+    config = parse_args(
+        [
+            "--config",
+            EIGHT_BIT_CONFIG_PATH,
+            "--lr",
+            "0.001",
+            "--save-steps",
+            "128",
+            "--include-num-input-tokens-seen",
+            "all",
+        ]
+    )
 
     assert config.learning_rate == 0.001
     assert config.save_steps == 128
     assert config.max_steps == 1024
+    assert config.include_num_input_tokens_seen == "all"
+
+
+@pytest.mark.parametrize("token_count_mode", ["all", "non_padding", "no"])
+def test_command_line_accepts_transformers_token_count_modes(token_count_mode: str) -> None:
+    """Cover every supported native counting mode; Trainer execution and W&B delivery are omitted."""
+    config = parse_args(["--include-num-input-tokens-seen", token_count_mode])
+
+    assert config.include_num_input_tokens_seen == token_count_mode
+
+
+def test_command_line_rejects_unknown_token_count_mode() -> None:
+    """Cover invalid CLI input at the parser boundary; equivalent malformed YAML is omitted."""
+    with pytest.raises(SystemExit):
+        parse_args(["--include-num-input-tokens-seen", "sometimes"])
+
+
+def test_token_count_mode_reaches_sft_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Cover configuration-to-Trainer wiring; model execution and W&B delivery are omitted."""
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
+    config = PrefixKLTrainingConfig(include_num_input_tokens_seen="all", report_to="none")
+
+    training_arguments = build_sft_config(config, grad_accumulation_steps=8)
+
+    assert training_arguments.include_num_input_tokens_seen == "all"
+
+
+def test_official_configs_enable_non_padding_token_counting() -> None:
+    """Cover token-count configuration in every launcher YAML; training and W&B delivery are omitted."""
+    assert all(load_training_config(config_path).include_num_input_tokens_seen == "non_padding" for config_path in OFFICIAL_CONFIG_PATHS)
 
 
 def test_prefix_kl_training_config_rejects_unknown_fields() -> None:

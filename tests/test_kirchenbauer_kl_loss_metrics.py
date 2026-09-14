@@ -1,15 +1,18 @@
 from collections import defaultdict
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
+from trl import SFTTrainer
 
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import (
     LossInformation,
     PrefixKLTrainer,
     free_token_kl,
+    padded_input_tokens_seen,
     prefix_nll,
 )
 
@@ -103,3 +106,32 @@ def test_loss_information_is_detached_without_detaching_training_loss() -> None:
     assert not loss_information.data_loss.requires_grad
     assert student_logprobs.grad is not None
     assert torch.isfinite(student_logprobs.grad).all()
+
+
+def test_padded_token_count_covers_steps_accumulation_and_processes() -> None:
+    """Cover the full fixed-batch formula; partial batches and changing resume settings are omitted."""
+    assert (
+        padded_input_tokens_seen(
+            global_step=3,
+            max_length=4096,
+            local_batch_size=2,
+            gradient_accumulation_steps=4,
+            process_count=8,
+        )
+        == 3 * 4096 * 2 * 4 * 8
+    )
+
+
+def test_trainer_log_adds_resume_safe_padded_token_count() -> None:
+    """Cover log injection from restored step state; callbacks and external W&B delivery are omitted."""
+    trainer = object.__new__(PrefixKLTrainer)
+    trainer.state = SimpleNamespace(global_step=11)
+    trainer.args = SimpleNamespace(max_length=128, train_batch_size=2, gradient_accumulation_steps=3)
+    trainer.accelerator = SimpleNamespace(num_processes=4)
+    logs = {"loss": 0.5}
+
+    with patch.object(SFTTrainer, "log") as parent_log:
+        PrefixKLTrainer.log(trainer, logs)
+
+    assert logs["num_padded_input_tokens_seen"] == 11 * 128 * 2 * 3 * 4
+    parent_log.assert_called_once_with(logs, None)
