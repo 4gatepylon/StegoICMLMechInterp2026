@@ -1,11 +1,13 @@
-"""Public contracts for the V2 binding-based decoder; extraction is not implemented.
+"""Public models and static decoder for the V2 binding-based variable-name cipher.
 
 Import ``CipherConfig``, ``DecodedMessage``, and ``decode`` from this module.
-The models are usable now so callers and a future decoder can develop against
-the same schema. ``decode`` deliberately raises ``NotImplementedError``.
+Debug logging describes the complete binding/occurrence trace and parsed frame.
+Source is compiled for validation but never executed.
 """
 
+import ast
 import keyword
+import logging
 import unicodedata
 from typing import Annotated, Literal, Self
 
@@ -14,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 BinaryBits = Annotated[str, Field(pattern=r"^[01]*$")]
 BitRole = Literal["control", "length", "message", "ignored"]
 OccurrenceKind = Literal["binding", "read", "write", "read_write", "delete", "declaration"]
+logger = logging.getLogger(__name__)
 
 
 class CipherConfig(BaseModel):
@@ -74,9 +77,29 @@ class CipherConfig(BaseModel):
 class SourceSpan(BaseModel):
     """Half-open identifier span in the original input source, matching AST units.
 
-    Lines are one-based; columns are zero-based UTF-8 byte offsets, not Unicode
-    character indices. End coordinates are exclusive. Occurrence spans cover
-    identifier tokens, not their containing statements or expressions.
+    ``line``/``end_line`` are one-based physical source line numbers;
+    ``column``/``end_column`` are zero-based UTF-8 byte offsets within those lines.
+    End coordinates are exclusive. For ``i = 1`` on line 3, the identifier span
+    is SourceSpan(line=3, column=0, end_line=3, end_column=1).
+
+    These units come from ast.AST's lineno/col_offset/end_lineno/end_col_offset
+    convention. tokenize uses Unicode character columns instead; the extractor
+    converts them to UTF-8 bytes. For ``é = 0; i = 1``, i starts at byte column 8,
+    although its Unicode character index is 7. Use the original line's UTF-8
+    bytes for slicing, not the normalized identifier or a reformatted source.
+
+    This general span model permits multiple lines provided end follows start.
+    BindingOccurrence imposes the stronger single-line invariant below. The
+    decoder extracts an identifier's span, not a containing AST statement span;
+    a multiline function/assignment AST node is not an occurrence span.
+
+    Physical line endings follow Python's universal-newline convention: LF,
+    CRLF, and CR each delimit one line. A Unicode separator inside a string is
+    not a new source line. A caller must keep the original source alongside the
+    result if it wants to display spans; the model does not carry source text.
+    Schema validation checks positive line numbers, nonnegative columns, and
+    nonempty forward ranges, but cannot check source bounds without that text.
+    See https://docs.python.org/3.12/library/ast.html#ast.AST for offset units.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -104,6 +127,26 @@ class BindingOccurrence(BaseModel):
     A token appears once even when it both reads and writes. ``span`` identifies
     its location; occurrences from nested scopes still reference the owning
     binding, unless shadowing creates a different binding.
+
+    Examples for ``kind``: ``def f(i): ...`` makes parameter i a binding;
+    ``i = 1`` writes i; ``print(i)`` reads i; ``i += 1`` reads/writes i once;
+    ``del i`` deletes i; and ``global i`` declares i. Import ``as i``, exception
+    ``as i``, and pattern captures also use binding, while ``with x as i`` uses
+    write. The operation kind does not create a fresh binding on each assignment.
+
+    ``span`` always covers exactly one identifier token on one physical line:
+    line == end_line and column < end_column. Python identifiers cannot contain
+    newlines. In ``result = (\n    i\n)``, the read of i spans only line 2,
+    columns 4:5, even though the expression spans three lines. This model rejects
+    multiline spans; SourceSpan itself remains usable for general source ranges.
+
+    Preconditions enforced by the extractor, not this standalone model: the
+    span must lie within the original source, begin/end on UTF-8 boundaries, and
+    cover an identifier that resolves to its parent VariableBinding. Normalized
+    identifiers can differ from their source spelling: source K occupies three
+    UTF-8 bytes although its normalized name is K. Do not compute span width
+    from len(binding.name). Attribute labels (the i in ``obj.i``), strings,
+    comments, and call keyword labels are not identifier occurrences here.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -111,30 +154,84 @@ class BindingOccurrence(BaseModel):
     kind: OccurrenceKind
     span: SourceSpan
 
+    @model_validator(mode="after")
+    def validate_single_line(self) -> Self:
+        """Reject multiline identifier occurrences; return this validated token."""
+        if self.span.line != self.span.end_line:
+            raise ValueError("An identifier occurrence must span exactly one physical line")
+        return self
+
 
 class VariableBinding(BaseModel):
     """One lexical binding and its contribution to the complete decoded stream.
 
-    ``binding_id`` and ``scope_id`` are opaque deterministic IDs for the same
-    source. The producer must distinguish scopes by source structure/position,
-    not merely function names. ``name`` is the normalized source identifier,
-    before class-private name mangling. Reassignments keep the same binding ID.
+    For source ``def f(i):\n    return i\n`` and alphabet {"index": ("i", "j")},
+    the parameter contributes the following record. It emits zero control, so
+    the overall result represents absence, even though this is a special binding.
 
-    ``occurrences`` contains all associated identifier tokens in source order,
-    including declarations and reads before assignments. Its first occurrence
-    determines this binding's position in the stream. Import paths, attribute
-    names, keyword argument labels, comments, and strings are not occurrences.
+        VariableBinding(
+            binding_id="module/FunctionDef@1:0:i",
+            scope_id="module/FunctionDef@1:0",
+            name="i",
+            occurrences=(
+                BindingOccurrence(kind="binding", span=SourceSpan(
+                    line=1, column=6, end_line=1, end_column=7)),
+                BindingOccurrence(kind="read", span=SourceSpan(
+                    line=2, column=11, end_line=2, end_column=12)),
+            ),
+            synonym_group="index",
+            bits="0",
+            bit_start=0,
+            bit_roles=("control",),
+        )
 
-    Ordinary bindings have ``synonym_group=None``, ``bits=""``,
-    ``bit_start=None``, and ``bit_roles=()``. Special bindings name their cipher
-    group, emit ``bits`` once, and start at zero-based ``bit_start`` in the full
-    stream, before truncating the frame. Each emitted bit has a matching role:
-    control, length, message, or ignored. A multi-bit symbol can straddle fields.
-    Ignored includes every bit after zero control or after the framed payload.
+    Fields and examples:
+        binding_id: Opaque identity of one name in one owning scope. The example
+            above differs from ``module:i`` or an i parameter in another def.
+            Reassigning i in the same function keeps its ID. IDs are deterministic
+            for the same source, not stable across edits; callers must not parse
+            their current string format. Private names use a mangled internal key.
+        scope_id: Opaque owning lexical scope, not the scope of every read.
+            ``module`` owns top-level names; ``module/FunctionDef@1:0`` identifies
+            the example function by source location. A nested closure's read of
+            i attaches to this owner. A shadowing inner i has a different scope.
+        name: First occurrence's NFKC-normalized source identifier, such as
+            ``i``. It is recorded before private-name mangling, so a source
+            ``__item`` is reported as ``__item`` although resolution uses the
+            class-specific compiler name. Original source K is reported as K.
+        occurrences: Nonempty source-ordered tuple of identifier tokens. The
+            example contains the parameter and its return reference. A later
+            ``i += 1`` adds one read_write occurrence, not another binding or bit.
+            The earliest occurrence orders this binding in the stream, including
+            reads before assignments and global/nonlocal declaration tokens.
+            Attribute labels, import-path components that do not bind a name,
+            call keyword labels, comments, and strings are excluded.
+        synonym_group: Matching CipherConfig group label, such as ``index``;
+            None for ordinary bindings such as f in the example. It records why
+            the binding emits bits and is not inferred from the variable's role.
+        bits: The fixed-width synonym index emitted once for the whole binding.
+            With (i, j), i emits "0" and j emits "1". With (idle, ready, busy,
+            done), busy emits "10". Ordinary bindings emit "", not "0".
+        bit_start: Zero-based start in the complete concatenated symbol stream,
+            including header and trailing symbols. A two-bit symbol at offset 5
+            occupies bit positions 5 and 6. None means no contribution; 0 is a
+            real offset. Source columns and binding-list indices are unrelated.
+        bit_roles: One role per emitted bit: control selects presence; length
+            belongs to the length header; message belongs to the payload; ignored
+            follows zero control or the completed payload. For example,
+            ("length", "message") describes a two-bit symbol crossing that
+            field boundary. Ordinary bindings use (); trailing special bindings
+            retain their bits/offsets but use only ignored roles.
 
-    This model checks local consistency. The decoder must verify group/index
-    correctness, binding resolution, and globally contiguous bit offsets against
-    its CipherConfig. Filtering ordinary bindings never changes these offsets.
+    Preconditions and guarantees: the schema enforces unique source-ordered
+    occurrences and locally consistent contribution metadata. Each occurrence
+    enforces the single-line token constraint described in BindingOccurrence.
+    The decoder additionally resolves owners, verifies cipher indices, and
+    assigns globally contiguous symbol offsets and frame roles. The standalone
+    model cannot verify source/cipher correspondence without those inputs.
+    Filtering ordinary bindings occurs last; it never changes IDs, occurrence
+    lists, offsets, or roles of retained bindings. Runtime dataflow and dynamic
+    class-local fallback are not encoded by this static ownership record.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -175,9 +272,9 @@ class DecodedMessage(BaseModel):
     encoded empty message is True, 0, "". Bit strings preserve leading zeros.
 
     ``bindings`` contains all source bindings in first-occurrence order, or only
-    special bindings if the caller requested filtering. The future decoder must
-    include ordinary bindings, parameters, imports, definition names, and class
-    body bindings, and resolve closures, comprehensions, and global/nonlocal.
+    special bindings if the caller requested filtering. The decoder includes
+    ordinary bindings, parameters, imports, definition names, and class body
+    bindings, and resolves closures, comprehensions, and global/nonlocal.
     Unresolved external names and implicit compiler temporaries are not source
     bindings. Attribute lookup is excluded; dynamically created names are not
     inferred. This is static lexical resolution, not a runtime execution trace.
@@ -226,11 +323,11 @@ class IncompleteMessageError(DecodeError):
 
 
 def decode(code: str, cipher: CipherConfig, *, keep_only_stego_bindings: bool = False) -> DecodedMessage:
-    """Decode one Python source string under a shared cipher (interface stub).
+    """Decode one Python source string under a shared cipher without executing it.
 
     Args:
-        code: Complete, single-file Python source. The implementation must parse
-            and compile it under the running Python version without executing
+        code: Complete, single-file Python source. Parse and compile it under
+            the running Python version without executing
             code, evaluating annotations, or importing its dependencies.
         cipher: Validated alphabet and framing widths. Every special binding
             emits its fixed-width synonym index once, ordered by its earliest
@@ -250,17 +347,94 @@ def decode(code: str, cipher: CipherConfig, *, keep_only_stego_bindings: bool = 
         unused ones and bindings in code that would not execute.
 
     Raises:
-        NotImplementedError: Always in this interface-only version. Replace the
-            stub with extraction/framing logic in the implementation PR.
-        InvalidCodeError: Future implementation: malformed or non-compiling
+        InvalidCodeError: Malformed or non-compiling
             source, including compiler scope errors; chain the original error.
-        UnsupportedSyntaxError: Future implementation: a construct cannot be
-            resolved faithfully, rather than returning silently incomplete data.
-        IncompleteMessageError: Future implementation: missing control or fewer
+        UnsupportedSyntaxError: A construct cannot be resolved faithfully,
+            including wildcard imports and PEP 695 type-parameter/alias scopes.
+            Fail instead of returning silently incomplete binding data.
+        IncompleteMessageError: Missing control or fewer
             length/payload bits than required by the frame.
 
     Invalid cipher data raises pydantic.ValidationError when constructing
-    CipherConfig, before calling this function. Successful compilation does not
-    establish runtime correctness or that imports/dependencies are available.
+    CipherConfig or revalidating its snapshot on entry. Successful compilation
+    does not establish runtime correctness or dependency availability. Resolution
+    is lexical: it does not simulate class-local runtime fallback or dynamic name
+    creation. Enable DEBUG on this module's logger to inspect bindings and frames.
     """
-    raise NotImplementedError("The V2 decoder interface is defined; binding extraction and decoding are not implemented yet")
+    # Extraction consumes the public record types in this module; defer the
+    # import so they are available before bindings imports them.
+    from ciphers.variable_naming_in_python_v2.bindings import collect_bindings
+
+    cipher = CipherConfig.model_validate(cipher.model_dump())
+    try:
+        tree = ast.parse(code, filename="<stego-source>", mode="exec")
+        compile(tree, "<stego-source>", "exec", dont_inherit=True)
+    except (SyntaxError, ValueError, RecursionError) as error:
+        logger.debug("Source validation failed: %s", error)
+        raise InvalidCodeError(f"Python source cannot compile: {error}") from error
+    bindings = collect_bindings(code, tree)
+    alphabet = {name: (group, format(index, f"0{(len(names) - 1).bit_length()}b")) for group, names in cipher.special_variables.items() for index, name in enumerate(names)}
+    stream = "".join(alphabet[binding.name][1] for binding in bindings if binding.name in alphabet)
+    # Log collection before framing so truncated inputs still have a useful trace.
+    if logger.isEnabledFor(logging.DEBUG):
+        lines = code.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        for binding in bindings:
+            logger.debug("Binding name=%r id=%s scope=%s symbol=%r", binding.name, binding.binding_id, binding.scope_id, alphabet.get(binding.name))
+            for occurrence in binding.occurrences:
+                span = occurrence.span
+                logger.debug("  %s line=%d utf8_columns=%d:%d source=%r", occurrence.kind, span.line, span.column, span.end_column, lines[span.line - 1])
+    length, message_bits, roles = _parse_frame(stream, cipher.length_bits)
+    enriched = []
+    offset = 0
+    for binding in bindings:
+        if binding.name in alphabet:
+            group, bits = alphabet[binding.name]
+            contribution_roles = roles[offset : offset + len(bits)]
+            binding = VariableBinding(
+                binding_id=binding.binding_id,
+                scope_id=binding.scope_id,
+                name=binding.name,
+                occurrences=binding.occurrences,
+                synonym_group=group,
+                bits=bits,
+                bit_start=offset,
+                bit_roles=contribution_roles,
+            )
+            logger.debug("Symbol id=%s bits=%s offset=%d roles=%s", binding.binding_id, bits, offset, ",".join(contribution_roles))
+            offset += len(bits)
+        enriched.append(binding)
+    return DecodedMessage(
+        is_encoding=length is not None,
+        length=length,
+        message_bits=message_bits,
+        bindings=tuple(binding for binding in enriched if not keep_only_stego_bindings or binding.synonym_group is not None),
+    )
+
+
+def _parse_frame(stream: str, length_bits: int) -> tuple[int | None, str | None, tuple[BitRole, ...]]:
+    """Parse a collected bit stream; return length, exact payload, and per-bit roles.
+
+    ``stream`` contains only binary digits from the validated alphabet;
+    ``length_bits`` is a positive validated header width. Roles cover the entire
+    stream, including ignored trailing bits, so callers can slice a multi-bit
+    symbol across field boundaries. Absent frames return None/None. Raise
+    IncompleteMessageError with the field and available/required counts when a
+    control, length, or payload field is truncated. Never allocate by a declared
+    payload length until checking that those bits are actually available.
+    """
+    if not stream:
+        raise IncompleteMessageError("Missing control: need 1 bit, found 0")
+    if stream[0] == "0":
+        logger.debug("Frame valid: control=0 encoding=False length=None message=None ignored_bits=%s", stream[1:])
+        return None, None, ("control",) + ("ignored",) * (len(stream) - 1)
+    header_end = 1 + length_bits
+    if len(stream) < header_end:
+        raise IncompleteMessageError(f"Truncated length: need {length_bits} bits, found {len(stream) - 1}")
+    length = int(stream[1:header_end], 2)
+    if len(stream) - header_end < length:
+        raise IncompleteMessageError(f"Truncated payload: declared {length} bits, found {len(stream) - header_end}")
+    payload_end = header_end + length
+    payload = stream[header_end:payload_end]
+    roles: tuple[BitRole, ...] = ("control",) + ("length",) * length_bits + ("message",) * length + ("ignored",) * (len(stream) - payload_end)
+    logger.debug("Frame valid: control=1 length_bits=%s length=%d message=%s ignored_bits=%s", stream[1:header_end], length, payload, stream[payload_end:])
+    return length, payload, roles

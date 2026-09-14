@@ -1,8 +1,5 @@
-"""Executable V2 contracts, partitioned between schemas and future decoding.
+"""Executable V2 schema and static decoding contracts.
 
-Schema tests run now. Decoder tests are strict xfails only for the interface
-stub's NotImplementedError; wrong results and other exceptions still fail.
-Use --runxfail while implementing, then remove @needs_decoder when complete.
 Fixtures are read as source, never imported or executed. Tests cover static
 binding/framing behavior, not runtime semantics, dynamic exec-created names,
 model quality, steganalysis, or exhaustive coverage of every Python grammar form.
@@ -28,7 +25,6 @@ from ciphers.variable_naming_in_python_v2.decoder import (
 
 FIXTURES = Path("ciphers/variable_naming_in_python_v2/tests/fixtures")
 ONE_GROUP = FIXTURES / "codex_generated_1_group"
-needs_decoder = pytest.mark.xfail(raises=NotImplementedError, strict=True, reason="Interface-only decode() stub; remove this mark when implemented")
 
 
 class ExpectedCipherError(BaseModel):
@@ -124,7 +120,6 @@ def test_fixture_cipher_validation(path: Path, expected: DecodedMessage | Expect
         load_cipher(path.parent / "cipher.json")
 
 
-@needs_decoder
 @pytest.mark.parametrize(("path", "expected"), FIXTURE_CASES)
 def test_fixture_decode(path: Path, expected: DecodedMessage | ExpectedCipherError) -> None:
     """Compare every field to JSON, then verify determinism and final filtering.
@@ -244,7 +239,6 @@ def test_binding_schema_rejects_partial_contributions_and_bad_occurrence_order()
     assert VariableBinding.model_validate_json(symbol.model_dump_json()) == symbol
 
 
-@needs_decoder
 def test_multibit_symbols_can_cross_every_frame_boundary() -> None:
     result = decode("d = 0\nb = 0\nc = 0\n", load_cipher(FIXTURES / "multibit_cipher.json"))
     assert result.message_bits == "11"
@@ -253,7 +247,6 @@ def test_multibit_symbols_can_cross_every_frame_boundary() -> None:
     assert [binding.bit_start for binding in result.bindings] == [0, 2, 4]
 
 
-@needs_decoder
 def test_four_length_bits_accept_fifteen_payload_bits() -> None:
     message = "001010101010101"
     result = decode(source_for_bits("1" + "1111" + message), load_cipher(FIXTURES / "four_length_bits_cipher.json"))
@@ -261,7 +254,6 @@ def test_four_length_bits_accept_fifteen_payload_bits() -> None:
     assert result.length == 15
 
 
-@needs_decoder
 @pytest.mark.parametrize(
     ("bits", "field"),
     [("", "control"), ("1", "length"), ("100", "length"), ("10010", "payload"), ("100100", "payload")],
@@ -275,7 +267,6 @@ def test_incomplete_frames_raise_descriptive_exceptions(bits: str, field: str) -
     assert any(character.isdigit() for character in text)
 
 
-@needs_decoder
 @pytest.mark.parametrize("code", ["def broken(:", "return 1", "nonlocal missing", "def f():\n    nonlocal missing\n", "x = '\x00'"])
 def test_parse_and_compile_errors_are_wrapped_without_executing(code: str) -> None:
     with pytest.raises(InvalidCodeError) as error:
@@ -284,20 +275,17 @@ def test_parse_and_compile_errors_are_wrapped_without_executing(code: str) -> No
     assert isinstance(error.value.__cause__, (SyntaxError, ValueError))
 
 
-@needs_decoder
 def test_wildcard_import_fails_explicitly_instead_of_dropping_bindings() -> None:
     with pytest.raises(UnsupportedSyntaxError) as error:
         decode("from unavailable_dependency import *\n" + source_for_bits("1010"), load_cipher())
     assert str(error.value)
 
 
-@needs_decoder
 def test_no_execution_or_dependency_import_is_needed() -> None:
     code = "import unavailable_dependency\nraise RuntimeError('must not execute')\n" + source_for_bits("1010")
     assert decode(code, load_cipher()).message_bits == "0"
 
 
-@needs_decoder
 def test_first_occurrence_can_precede_the_binding_assignment() -> None:
     code = "def first():\n    print(j)\n    j = 1\n\ndef size(i): pass\ndef second(j): pass\ndef third(i): pass\n"
     bindings = special_bindings(decode(code, load_cipher()))
@@ -305,7 +293,6 @@ def test_first_occurrence_can_precede_the_binding_assignment() -> None:
     assert bindings[0].occurrences[0].span.line == 2
 
 
-@needs_decoder
 def test_unicode_columns_are_utf8_bytes_and_strings_are_not_occurrences() -> None:
     code = 'é = "i j"; i = 0\n'
     result = decode(code, load_cipher())

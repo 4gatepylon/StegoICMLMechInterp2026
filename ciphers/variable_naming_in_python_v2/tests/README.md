@@ -3,11 +3,10 @@
 Run from the repository root in the `stego` environment:
 
 ```bash
-conda run -n stego python -m pytest -q ciphers/variable_naming_in_python_v2/tests/test_decoder.py
+conda run -n stego python -m pytest -q ciphers/variable_naming_in_python_v2/tests
 ```
 
-Decoder checks expect the stub's `NotImplementedError`; schema checks run now.
-Use `--runxfail` during implementation, then remove `@needs_decoder`.
+All schema, fixture, decoder, and CLI checks run normally. Source is never executed.
 
 ## Fixture partitions
 
@@ -74,10 +73,15 @@ Shared checks
 │   (opaque IDs normalized to first-seen binding_N / scope_N labels)
 ├── Additional source cases: reads before assignment, UTF-8 byte columns,
 │   strings excluded, no source execution or dependency imports
+├── Runtime contracts: normalized identifiers; LF/CRLF/CR; all comprehension
+│   forms; async targets; private names; global barriers; repeated definitions;
+│   deletion; explicit rejection of type-parameter/annotation scopes
+├── CLI: JSON output, verbose traces, expected-payload match/mismatch,
+│   empty vs. absent, invalid inputs, logging-state restoration
 └── Result schemas: absence vs. empty, leading-zero round trips, inconsistent
     payloads, invalid spans, incomplete contributions, occurrence ordering
 
 Outside coverage: runtime correctness, dynamic exec-created names,
-steganographic detectability, exhaustive Python grammar (including async,
-type-parameter/annotation scopes, and private-name mangling).
+steganographic detectability, exhaustive Python grammar, and decoding inside
+PEP 695 type-parameter/annotation scopes (explicitly rejected).
 ```
