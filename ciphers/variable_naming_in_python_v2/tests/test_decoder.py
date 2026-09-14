@@ -9,9 +9,10 @@ model quality, steganalysis, or exhaustive coverage of every Python grammar form
 """
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, RootModel, ValidationError
 
 from ciphers.variable_naming_in_python_v2.decoder import (
     BindingOccurrence,
@@ -25,30 +26,126 @@ from ciphers.variable_naming_in_python_v2.decoder import (
     decode,
 )
 
-FIXTURES = Path("ciphers/variable_naming_in_python_v2/tests/fixtures/codex_generated")
+FIXTURES = Path("ciphers/variable_naming_in_python_v2/tests/fixtures")
+ONE_GROUP = FIXTURES / "codex_generated_1_group"
 needs_decoder = pytest.mark.xfail(raises=NotImplementedError, strict=True, reason="Interface-only decode() stub; remove this mark when implemented")
-CASES = [
-    pytest.param("01_basic.py", 1, "0", "110", id="positive"),
-    pytest.param("02_absent.py", 4, None, "01", id="absent"),
-    pytest.param("03_empty.py", 1, "", "10", id="encoded-empty"),
-    pytest.param("04_maximum.py", 2, "001", "1110011", id="maximum-leading-zero-trailing"),
-    pytest.param("05_reassignment.py", 1, "0", "110", id="reassignment-and-loops"),
-    pytest.param("06_closures.py", 1, "0", "110", id="closures-and-shadowing"),
-    pytest.param("07_parameters.py", 1, "0", "110", id="parameters-defaults-lambda"),
-    pytest.param("08_namespaces.py", 1, "0", "110", id="imports-classes-definitions"),
-    pytest.param("09_comprehensions.py", 1, "0", "1101", id="comprehension-walrus-global-nonlocal"),
-    pytest.param("10_targets.py", 1, "0", "110", id="unpack-with-exception-match"),
+
+
+class ExpectedCipherError(BaseModel):
+    """Expected config rejection plus a positive control for the same source.
+
+    ``error`` names the Pydantic exception; ``match`` is its expected diagnostic
+    substring. ``valid_cipher_folder`` is relative to this fixture folder and
+    supplies a valid cipher for ``decoded``, a complete DecodedMessage result.
+    This companion check distinguishes a bad cipher from a bad encoding.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    error: Literal["ValidationError"]
+    match: str
+    valid_cipher_folder: str
+    decoded: DecodedMessage
+
+
+class ExpectedDecodes(RootModel[dict[str, DecodedMessage | ExpectedCipherError]]):
+    """Map each sibling Python filename to its expected decode or cipher error.
+
+    Successful results use the decoder's public schema, including all ordinary
+    and special bindings. IDs are canonicalized in first-binding order:
+    binding_0, binding_1, ... and scope_0, scope_1, ... for distinct scopes.
+    Repeated scope IDs express shared lexical ownership. Occurrence spans and
+    all other metadata retain their original values.
+    """
+
+
+def load_cipher(path: Path = ONE_GROUP / "cipher.json") -> CipherConfig:
+    """Validate a repo-relative JSON file as the exact cipher passed to decode."""
+    return CipherConfig.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def load_expectations(folder: Path) -> dict[str, DecodedMessage | ExpectedCipherError]:
+    """Read a repo-relative fixture folder's manifest using ExpectedDecodes.
+
+    Return Python-filename keys mapped to complete DecodedMessage expectations
+    or ExpectedCipherError records. Discovery uses each key to find source and
+    each value to select the decoding or validation-error contract.
+    """
+    return ExpectedDecodes.model_validate_json((folder / "expected_decodes.json").read_text(encoding="utf-8")).root
+
+
+FIXTURE_FOLDERS = sorted(path.parent for path in FIXTURES.glob("*/cipher.json"))
+FIXTURE_CASES = [
+    pytest.param(folder / filename, expected, id=f"{folder.name}/{filename}")
+    for folder in FIXTURE_FOLDERS
+    for filename, expected in load_expectations(folder).items()
 ]
 
 
-def source(filename: str) -> str:
-    """Read one repo-relative fixture as UTF-8 source for decode; execute nothing."""
-    return (FIXTURES / filename).read_text(encoding="utf-8")
+def canonicalize_ids(result: DecodedMessage) -> DecodedMessage:
+    """Replace opaque IDs with first-seen labels for comparison to JSON results.
+
+    ``result`` is a decoder response in first-occurrence order. Return the same
+    DecodedMessage structure with only binding_id and scope_id relabeled. Shared
+    IDs remain shared so duplicate bindings and wrong scope ownership still
+    fail comparison; no source positions, contributions, or ordering change.
+    """
+    binding_ids: dict[str, str] = {}
+    scope_ids: dict[str, str] = {}
+    return result.model_copy(update={"bindings": tuple(
+        binding.model_copy(update={
+            "binding_id": binding_ids.setdefault(binding.binding_id, f"binding_{len(binding_ids)}"),
+            "scope_id": scope_ids.setdefault(binding.scope_id, f"scope_{len(scope_ids)}"),
+        })
+        for binding in result.bindings
+    )})
 
 
-def starter_cipher(length_bits: int = 1) -> CipherConfig:
-    """Return i=0/j=1 framing with the supplied length-field width for test calls."""
-    return CipherConfig(special_variables={"index": ("i", "j")}, length_bits=length_bits)
+@pytest.mark.parametrize("folder", FIXTURE_FOLDERS, ids=lambda folder: folder.name)
+def test_manifest_covers_exactly_the_compilable_source_files(folder: Path) -> None:
+    """Every source has one schema-validated expectation; compile without running."""
+    expected = load_expectations(folder)
+    assert expected
+    assert set(expected) == {path.name for path in folder.glob("*.py")}
+    for filename in expected:
+        path = folder / filename
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+
+@pytest.mark.parametrize(("path", "expected"), FIXTURE_CASES)
+def test_fixture_cipher_validation(path: Path, expected: DecodedMessage | ExpectedCipherError) -> None:
+    """Partition valid configs and explicit validation errors before decoding."""
+    if isinstance(expected, ExpectedCipherError):
+        with pytest.raises(ValidationError) as error:
+            load_cipher(path.parent / "cipher.json")
+        assert expected.match in str(error.value)
+        load_cipher(path.parent / expected.valid_cipher_folder / "cipher.json")
+    else:
+        load_cipher(path.parent / "cipher.json")
+
+
+@needs_decoder
+@pytest.mark.parametrize(("path", "expected"), FIXTURE_CASES)
+def test_fixture_decode(path: Path, expected: DecodedMessage | ExpectedCipherError) -> None:
+    """Compare every field to JSON, then verify determinism and final filtering.
+
+    ``path`` identifies a source file, never executed. ``expected`` comes from
+    its folder's manifest. Error records select their valid companion cipher
+    and positive-control decoded result; rejection is checked separately above.
+    Exact comparisons cover frames, all bindings/occurrences, ownership, offsets,
+    and roles. Runtime behavior and unsupported grammar partitions are omitted.
+    """
+    cipher_folder = path.parent
+    if isinstance(expected, ExpectedCipherError):
+        cipher_folder /= expected.valid_cipher_folder
+        expected = expected.decoded
+    cipher = load_cipher(cipher_folder / "cipher.json")
+    code = path.read_text(encoding="utf-8")
+    result = decode(code, cipher)
+    assert canonicalize_ids(result) == expected
+    assert decode(code, cipher) == result
+    filtered = decode(code, cipher, keep_only_stego_bindings=True)
+    assert filtered == result.model_copy(update={"bindings": special_bindings(result)})
 
 
 def source_for_bits(bits: str) -> str:
@@ -148,102 +245,8 @@ def test_binding_schema_rejects_partial_contributions_and_bad_occurrence_order()
 
 
 @needs_decoder
-@pytest.mark.parametrize(("filename", "width", "message", "stream"), CASES)
-def test_fixture_frames_occurrences_roles_and_final_filter(filename: str, width: int, message: str | None, stream: str) -> None:
-    code = source(filename)
-    result = decode(code, starter_cipher(width))
-    assert result.is_encoding is (message is not None)
-    assert result.message_bits == message
-    assert result.length == (None if message is None else len(message))
-    special = special_bindings(result)
-    assert "".join(binding.bits for binding in special) == stream
-    assert [binding.name for binding in special] == ["j" if bit == "1" else "i" for bit in stream]
-    assert [binding.bit_start for binding in special] == list(range(len(stream)))
-    roles = ["control"]
-    if message is not None:
-        roles.extend(["length"] * width + ["message"] * len(message))
-    roles.extend(["ignored"] * (len(stream) - len(roles)))
-    assert [role for binding in special for role in binding.bit_roles] == roles
-    assert len({binding.binding_id for binding in result.bindings}) == len(result.bindings)
-    anchors = [(binding.occurrences[0].span.line, binding.occurrences[0].span.column) for binding in result.bindings]
-    assert anchors == sorted(anchors)
-    lines = code.splitlines()
-    for binding in result.bindings:
-        for occurrence in binding.occurrences:
-            span = occurrence.span
-            assert span.line == span.end_line
-            assert lines[span.line - 1].encode("utf-8")[span.column : span.end_column].decode("utf-8") == binding.name
-    filtered = decode(code, starter_cipher(width), keep_only_stego_bindings=True)
-    assert filtered == result.model_copy(update={"bindings": special})
-    assert decode(code, starter_cipher(width)) == result
-
-
-@needs_decoder
-def test_all_ordinary_bindings_remain_in_the_default_result() -> None:
-    result = decode(source("01_basic.py"), starter_cipher())
-    assert [binding.name for binding in result.bindings] == ["control", "j", "size", "j", "solve", "value", "i"]
-    assert [len(binding.occurrences) for binding in result.bindings] == [1, 2, 1, 2, 1, 2, 2]
-    assert result.bindings[-1].occurrences[0].span == SourceSpan(line=15, column=4, end_line=15, end_column=5)
-
-
-@needs_decoder
-def test_repeated_assignments_and_loops_share_the_function_binding() -> None:
-    bindings = special_bindings(decode(source("05_reassignment.py"), starter_cipher()))
-    assert [[occ.kind for occ in binding.occurrences] for binding in bindings] == [
-        ["write", "read_write", "read"],
-        ["write", "write", "read", "read"],
-        ["write", "read_write", "read"],
-    ]
-    assert len({binding.scope_id for binding in bindings}) == 3
-
-
-@needs_decoder
-def test_closure_reads_resolve_to_outer_binding_and_shadowing_stays_separate() -> None:
-    bindings = special_bindings(decode(source("06_closures.py"), starter_cipher()))
-    assert [[occ.span.line for occ in binding.occurrences] for binding in bindings] == [[5, 8], [11, 12], [18, 19]]
-    assert bindings[0].binding_id != bindings[1].binding_id
-    assert bindings[0].scope_id != bindings[1].scope_id
-
-
-@needs_decoder
-def test_defaults_resolve_outside_function_but_lambda_captures_parameter() -> None:
-    bindings = special_bindings(decode(source("07_parameters.py"), starter_cipher()))
-    positions = [[(occ.span.line, occ.span.column) for occ in binding.occurrences] for binding in bindings]
-    assert positions == [[(3, 0), (6, 16)], [(6, 14), (7, 26)], [(7, 19), (7, 22)]]
-    assert len({binding.scope_id for binding in bindings}) == 3
-
-
-@needs_decoder
-def test_class_namespace_does_not_capture_method_globals_or_attribute_names() -> None:
-    result = decode(source("08_namespaces.py"), starter_cipher())
-    bindings = special_bindings(result)
-    assert [[occ.span.line for occ in binding.occurrences] for binding in bindings] == [[3, 12], [8], [15]]
-    assert [binding.occurrences[0].kind for binding in bindings] == ["binding", "write", "binding"]
-    assert {binding.name for binding in result.bindings} == {"j", "os", "Box", "method", "self", "i"}
-
-
-@needs_decoder
-def test_comprehension_walrus_and_scope_declarations_have_correct_owners() -> None:
-    bindings = special_bindings(decode(source("09_comprehensions.py"), starter_cipher()))
-    assert [[occ.span.line for occ in binding.occurrences] for binding in bindings] == [[3, 14, 15], [7, 10, 11, 18], [17, 18], [17, 17]]
-    assert bindings[1].scope_id == bindings[2].scope_id
-    assert bindings[3].scope_id != bindings[1].scope_id
-    assert bindings[0].occurrences[1].kind == "declaration"
-    assert bindings[1].occurrences[1].kind == "declaration"
-
-
-@needs_decoder
-def test_exception_and_match_captures_reuse_the_same_function_local() -> None:
-    result = decode(source("10_targets.py"), starter_cipher())
-    bindings = special_bindings(result)
-    assert [[occ.span.line for occ in binding.occurrences] for binding in bindings] == [[3], [7, 8], [11, 12, 14, 15]]
-    assert [occ.kind for occ in bindings[2].occurrences] == ["binding", "read", "binding", "read"]
-    assert {binding.name for binding in result.bindings} == {"j", "ordinary", "process", "manager", "subject", "result", "i", "rest"}
-
-
-@needs_decoder
 def test_multibit_symbols_can_cross_every_frame_boundary() -> None:
-    result = decode("d = 0\nb = 0\nc = 0\n", CipherConfig(special_variables={"state": ("a", "b", "c", "d")}, length_bits=2))
+    result = decode("d = 0\nb = 0\nc = 0\n", load_cipher(FIXTURES / "multibit_cipher.json"))
     assert result.message_bits == "11"
     assert result.length == 2
     assert [binding.bit_roles for binding in result.bindings] == [("control", "length"), ("length", "message"), ("message", "ignored")]
@@ -253,19 +256,19 @@ def test_multibit_symbols_can_cross_every_frame_boundary() -> None:
 @needs_decoder
 def test_four_length_bits_accept_fifteen_payload_bits() -> None:
     message = "001010101010101"
-    result = decode(source_for_bits("1" + "1111" + message), starter_cipher(4))
+    result = decode(source_for_bits("1" + "1111" + message), load_cipher(FIXTURES / "four_length_bits_cipher.json"))
     assert result.message_bits == message
     assert result.length == 15
 
 
 @needs_decoder
 @pytest.mark.parametrize(
-    ("bits", "width", "field"),
-    [("", 4, "control"), ("1", 4, "length"), ("100", 4, "length"), ("10010", 4, "payload"), ("100100", 4, "payload")],
+    ("bits", "field"),
+    [("", "control"), ("1", "length"), ("100", "length"), ("10010", "payload"), ("100100", "payload")],
 )
-def test_incomplete_frames_raise_descriptive_exceptions(bits: str, width: int, field: str) -> None:
+def test_incomplete_frames_raise_descriptive_exceptions(bits: str, field: str) -> None:
     with pytest.raises(IncompleteMessageError) as error:
-        decode(source_for_bits(bits), starter_cipher(width))
+        decode(source_for_bits(bits), load_cipher(FIXTURES / "four_length_bits_cipher.json"))
     # Exact prose is not a contract; a field name and counts make failures usable.
     text = str(error.value).lower()
     assert field in text or (field == "payload" and "message" in text)
@@ -276,7 +279,7 @@ def test_incomplete_frames_raise_descriptive_exceptions(bits: str, width: int, f
 @pytest.mark.parametrize("code", ["def broken(:", "return 1", "nonlocal missing", "def f():\n    nonlocal missing\n", "x = '\x00'"])
 def test_parse_and_compile_errors_are_wrapped_without_executing(code: str) -> None:
     with pytest.raises(InvalidCodeError) as error:
-        decode(code, starter_cipher())
+        decode(code, load_cipher())
     assert str(error.value)
     assert isinstance(error.value.__cause__, (SyntaxError, ValueError))
 
@@ -284,20 +287,20 @@ def test_parse_and_compile_errors_are_wrapped_without_executing(code: str) -> No
 @needs_decoder
 def test_wildcard_import_fails_explicitly_instead_of_dropping_bindings() -> None:
     with pytest.raises(UnsupportedSyntaxError) as error:
-        decode("from unavailable_dependency import *\n" + source_for_bits("110"), starter_cipher())
+        decode("from unavailable_dependency import *\n" + source_for_bits("1010"), load_cipher())
     assert str(error.value)
 
 
 @needs_decoder
 def test_no_execution_or_dependency_import_is_needed() -> None:
-    code = "import unavailable_dependency\nraise RuntimeError('must not execute')\n" + source_for_bits("110")
-    assert decode(code, starter_cipher()).message_bits == "0"
+    code = "import unavailable_dependency\nraise RuntimeError('must not execute')\n" + source_for_bits("1010")
+    assert decode(code, load_cipher()).message_bits == "0"
 
 
 @needs_decoder
 def test_first_occurrence_can_precede_the_binding_assignment() -> None:
-    code = "def first():\n    print(j)\n    j = 1\n\ndef second(j): pass\ndef third(i): pass\n"
-    bindings = special_bindings(decode(code, starter_cipher()))
+    code = "def first():\n    print(j)\n    j = 1\n\ndef size(i): pass\ndef second(j): pass\ndef third(i): pass\n"
+    bindings = special_bindings(decode(code, load_cipher()))
     assert [occ.kind for occ in bindings[0].occurrences] == ["read", "write"]
     assert bindings[0].occurrences[0].span.line == 2
 
@@ -305,6 +308,6 @@ def test_first_occurrence_can_precede_the_binding_assignment() -> None:
 @needs_decoder
 def test_unicode_columns_are_utf8_bytes_and_strings_are_not_occurrences() -> None:
     code = 'é = "i j"; i = 0\n'
-    result = decode(code, starter_cipher())
+    result = decode(code, load_cipher())
     assert [binding.name for binding in result.bindings] == ["é", "i"]
     assert result.bindings[1].occurrences[0].span == SourceSpan(line=1, column=12, end_line=1, end_column=13)

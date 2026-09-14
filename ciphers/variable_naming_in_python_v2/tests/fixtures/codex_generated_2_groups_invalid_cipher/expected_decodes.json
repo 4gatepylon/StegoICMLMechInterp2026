@@ -1,0 +1,227 @@
+{
+  "01_basic.py": {
+    "error": "ValidationError",
+    "match": "Variable name occurs more than once: 'j'",
+    "valid_cipher_folder": "../codex_generated_2_groups",
+    "decoded": {
+      "is_encoding": true,
+      "length": 1,
+      "message_bits": "0",
+      "bindings": [
+        {
+          "binding_id": "binding_0",
+          "scope_id": "scope_0",
+          "name": "control",
+          "occurrences": [
+            {
+              "kind": "binding",
+              "span": {
+                "line": 4,
+                "column": 4,
+                "end_line": 4,
+                "end_column": 11
+              }
+            }
+          ],
+          "synonym_group": null,
+          "bits": "",
+          "bit_start": null,
+          "bit_roles": []
+        },
+        {
+          "binding_id": "binding_1",
+          "scope_id": "scope_1",
+          "name": "j",
+          "occurrences": [
+            {
+              "kind": "binding",
+              "span": {
+                "line": 4,
+                "column": 12,
+                "end_line": 4,
+                "end_column": 13
+              }
+            },
+            {
+              "kind": "read",
+              "span": {
+                "line": 5,
+                "column": 11,
+                "end_line": 5,
+                "end_column": 12
+              }
+            }
+          ],
+          "synonym_group": "index",
+          "bits": "1",
+          "bit_start": 0,
+          "bit_roles": [
+            "control"
+          ]
+        },
+        {
+          "binding_id": "binding_2",
+          "scope_id": "scope_0",
+          "name": "size",
+          "occurrences": [
+            {
+              "kind": "binding",
+              "span": {
+                "line": 8,
+                "column": 4,
+                "end_line": 8,
+                "end_column": 8
+              }
+            }
+          ],
+          "synonym_group": null,
+          "bits": "",
+          "bit_start": null,
+          "bit_roles": []
+        },
+        {
+          "binding_id": "binding_3",
+          "scope_id": "scope_2",
+          "name": "a",
+          "occurrences": [
+            {
+              "kind": "binding",
+              "span": {
+                "line": 8,
+                "column": 9,
+                "end_line": 8,
+                "end_column": 10
+              }
+            },
+            {
+              "kind": "read",
+              "span": {
+                "line": 9,
+                "column": 11,
+                "end_line": 9,
+                "end_column": 12
+              }
+            }
+          ],
+          "synonym_group": "state",
+          "bits": "0",
+          "bit_start": 1,
+          "bit_roles": [
+            "length"
+          ]
+        },
+        {
+          "binding_id": "binding_4",
+          "scope_id": "scope_2",
+          "name": "b",
+          "occurrences": [
+            {
+              "kind": "binding",
+              "span": {
+                "line": 8,
+                "column": 12,
+                "end_line": 8,
+                "end_column": 13
+              }
+            },
+            {
+              "kind": "read",
+              "span": {
+                "line": 9,
+                "column": 15,
+                "end_line": 9,
+                "end_column": 16
+              }
+            }
+          ],
+          "synonym_group": "state",
+          "bits": "1",
+          "bit_start": 2,
+          "bit_roles": [
+            "length"
+          ]
+        },
+        {
+          "binding_id": "binding_5",
+          "scope_id": "scope_0",
+          "name": "solve",
+          "occurrences": [
+            {
+              "kind": "binding",
+              "span": {
+                "line": 12,
+                "column": 4,
+                "end_line": 12,
+                "end_column": 9
+              }
+            }
+          ],
+          "synonym_group": null,
+          "bits": "",
+          "bit_start": null,
+          "bit_roles": []
+        },
+        {
+          "binding_id": "binding_6",
+          "scope_id": "scope_3",
+          "name": "value",
+          "occurrences": [
+            {
+              "kind": "binding",
+              "span": {
+                "line": 12,
+                "column": 10,
+                "end_line": 12,
+                "end_column": 15
+              }
+            },
+            {
+              "kind": "read",
+              "span": {
+                "line": 13,
+                "column": 8,
+                "end_line": 13,
+                "end_column": 13
+              }
+            }
+          ],
+          "synonym_group": null,
+          "bits": "",
+          "bit_start": null,
+          "bit_roles": []
+        },
+        {
+          "binding_id": "binding_7",
+          "scope_id": "scope_3",
+          "name": "i",
+          "occurrences": [
+            {
+              "kind": "write",
+              "span": {
+                "line": 13,
+                "column": 4,
+                "end_line": 13,
+                "end_column": 5
+              }
+            },
+            {
+              "kind": "read",
+              "span": {
+                "line": 14,
+                "column": 11,
+                "end_line": 14,
+                "end_column": 12
+              }
+            }
+          ],
+          "synonym_group": "index",
+          "bits": "0",
+          "bit_start": 3,
+          "bit_roles": [
+            "message"
+          ]
+        }
+      ]
+    }
+  }
+}

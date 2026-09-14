@@ -1,6 +1,6 @@
-"""Unpacked module j, with-local j, and exception/pattern-local i emit 110."""
+"""Unpacked j/i, with-local j, exception/pattern-local i emit 1 | 01 | 0."""
 
-j, ordinary = (1, 2)
+j, i, ordinary = (1, 0, 2)
 
 
 def process(manager, subject):
