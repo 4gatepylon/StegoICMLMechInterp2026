@@ -6,20 +6,14 @@ Run from the repository root in the `stego` environment:
 conda run -n stego python -m pytest -q ciphers/variable_naming_in_python_v2/tests/test_decoder.py
 ```
 
-This suite accompanies the interface-only decoder. Schema tests execute now;
-the decoder tests are marked `xfail(raises=NotImplementedError, strict=True)`.
-Only the explicit stub exception is expected: incorrect output and other
-exceptions fail normally. A successful decode test becomes a strict XPASS
-failure, making the marker's removal an explicit implementation step.
-
-During implementation, disable those expectations to see ordinary test failures:
+To include the CLI and additional scope/span regression tests:
 
 ```bash
-conda run -n stego python -m pytest --runxfail -q ciphers/variable_naming_in_python_v2/tests/test_decoder.py
+conda run -n stego python -m pytest -q ciphers/variable_naming_in_python_v2/tests
 ```
 
-Remove the `@needs_decoder` decorators and marker definition when the decoder is
-implemented. Do not interpret expected failures as tested decoding functionality.
+All schema, decoder, and CLI tests now run normally; no expected-failure markers
+remain. `conda run -n stego make test` runs these with the rest of the repository.
 
 ## Fixture partitions
 
@@ -55,7 +49,13 @@ Schema tests partition invalid alphabets, identifier normalization, header
 widths, inconsistent payloads, and incomplete binding metadata. JSON round trips
 must preserve ordered alphabets, leading zeros, and absence versus empty payload.
 
+Additional runtime tests cover async targets, private-name mangling, all four
+comprehension forms, Unicode normalization and physical line endings, single-line
+identifier spans in multiline expressions, repeated definitions, and explicit
+rejection of unsupported annotation scopes. CLI tests check verbose traces,
+expected-message success/failure, clean JSON stdout, and logging cleanup.
+
 The suite does not test runtime program correctness, external dependencies,
 dynamic names created by `exec`, or steganographic detectability. It is not
-exhaustive for Python grammar: async forms, generic type-parameter/annotation
-scopes, and private-name mangling need further partitions during implementation.
+exhaustive for Python grammar; generic type-parameter/type-alias scopes are
+explicitly unsupported, and class-local runtime fallback is not simulated.
