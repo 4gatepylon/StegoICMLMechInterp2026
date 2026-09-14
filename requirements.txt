@@ -9,6 +9,7 @@ ipython
 jaxtyping
 jinja2>=3.1
 notebook
+openai-codex==0.154.0
 peft
 pydantic>=2.12
 pydantic-yaml>=1.6
