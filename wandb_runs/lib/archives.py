@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from zipfile import ZipFile
 from typing import Any
+from zipfile import ZipFile
 
 import pandas as pd
 

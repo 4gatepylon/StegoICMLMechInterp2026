@@ -22,3 +22,8 @@ projects in each selected entity, downloads only runs carrying the exact archive
 tag, skips runs that are still active, and never replaces an existing archive.
 Downloads are staged under the ignored `.staging/` directory and atomically
 published only after a complete Git-safe ZIP has been built.
+
+`lib/` holds archive loading and the power-law / log-log-sigmoid final-loss
+fits used by `inspect_loss_curves.ipynb`. The notebook remains the viewer;
+import helpers from `wandb_runs.lib` rather than copying them into other
+scripts.
