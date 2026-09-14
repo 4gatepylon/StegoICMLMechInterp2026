@@ -191,6 +191,7 @@ def test_cli_prints_separator_before_handled_error(artifacts_directory: Path) ->
     ("minimum", "maximum", "accepted_indices"),
     [(0, None, [-1, 0, 1, 2, 3]), (2, None, [1, 2, 3]), (0, 2, [-1, 0, 1]), (1, 3, [0, 1, 2]), (0, 0, [-1])],
 )
+# TODO(hadriano) this does not properly test cascading filters (load filtering != build filtering)
 def test_document_token_filters_at_build_and_load(
     artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch, minimum: int, maximum: int | None, accepted_indices: list[int]
 ) -> None:
