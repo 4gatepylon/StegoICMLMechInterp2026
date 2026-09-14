@@ -2,10 +2,9 @@
 
 ## Decoder interface
 
-The public Pydantic schemas and exception types live in
-[`decoder.py`](decoder.py). The `decode()` entry point is currently an explicit
-`NotImplementedError` stub; the interface can be used independently of the
-forthcoming binding extraction and decoding implementation.
+The public Pydantic schemas, exception types, and working `decode()` entry point
+live in [`decoder.py`](decoder.py). Binding extraction is implemented in
+[`bindings.py`](bindings.py); it parses/compiles source without executing it.
 
 ```python
 from ciphers.variable_naming_in_python_v2.decoder import CipherConfig, decode
@@ -14,8 +13,7 @@ cipher = CipherConfig(
     special_variables={"loop_index": ("i", "j")},
     length_bits=4,
 )
-# Once implemented:
-# result = decode(code, cipher, keep_only_stego_bindings=False)
+result = decode(code, cipher, keep_only_stego_bindings=False)
 ```
 
 Ordered synonyms emit their fixed-width binary index. With this alphabet,
@@ -31,6 +29,26 @@ Ordinary bindings are included by default; the optional filter runs after
 decoding. Source columns are zero-based UTF-8 byte offsets. See model and function
 docstrings for the exact contracts, scope rules, and exceptions. No source is
 executed, and attributes/dynamically created names are outside lexical decoding.
+
+Run the Click CLI from the repository root with a JSON `CipherConfig`:
+
+```bash
+conda run -n stego python -m ciphers.variable_naming_in_python_v2.cli \
+    --cipher path/to/cipher.json --verbose --expect 010 path/to/program.py
+```
+
+JSON is written to stdout. `--verbose` writes every binding, source occurrence,
+symbol/bit role, and frame result to stderr; `--expect` checks the intended
+payload and exits nonzero on a mismatch. Without `--expect`, successful framing
+does not establish that the decoded bits equal the intended secret. Python
+callers can enable DEBUG logging for `ciphers.variable_naming_in_python_v2.decoder`.
+
+The implementation supports ordinary lexical scopes, closures, parameters,
+imports, class namespaces, comprehensions, walrus assignments, and pattern
+captures. Wildcard imports and PEP 695 type-parameter/type-alias scopes raise
+`UnsupportedSyntaxError`. Class-local runtime fallback and dynamic namespaces
+are not simulated. Both `make test` and the focused command in
+[`tests/README.md`](tests/README.md) discover the decoder tests.
 
 The following sections describe the broader harness proposal; the decoder
 docstrings are the agreed interface for implementation.

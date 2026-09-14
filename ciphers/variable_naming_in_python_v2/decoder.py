@@ -1,11 +1,13 @@
-"""Public contracts for the V2 binding-based decoder; extraction is not implemented.
+"""Public models and static decoder for the V2 binding-based variable-name cipher.
 
 Import ``CipherConfig``, ``DecodedMessage``, and ``decode`` from this module.
-The models are usable now so callers and a future decoder can develop against
-the same schema. ``decode`` deliberately raises ``NotImplementedError``.
+Debug logging describes the complete binding/occurrence trace and parsed frame.
+Source is compiled for validation but never executed.
 """
 
+import ast
 import keyword
+import logging
 import unicodedata
 from typing import Annotated, Literal, Self
 
@@ -14,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 BinaryBits = Annotated[str, Field(pattern=r"^[01]*$")]
 BitRole = Literal["control", "length", "message", "ignored"]
 OccurrenceKind = Literal["binding", "read", "write", "read_write", "delete", "declaration"]
+logger = logging.getLogger(__name__)
 
 
 class CipherConfig(BaseModel):
@@ -111,6 +114,13 @@ class BindingOccurrence(BaseModel):
     kind: OccurrenceKind
     span: SourceSpan
 
+    @model_validator(mode="after")
+    def validate_single_line(self) -> Self:
+        """Reject multiline identifier occurrences; return this validated token."""
+        if self.span.line != self.span.end_line:
+            raise ValueError("An identifier occurrence must span exactly one physical line")
+        return self
+
 
 class VariableBinding(BaseModel):
     """One lexical binding and its contribution to the complete decoded stream.
@@ -175,9 +185,9 @@ class DecodedMessage(BaseModel):
     encoded empty message is True, 0, "". Bit strings preserve leading zeros.
 
     ``bindings`` contains all source bindings in first-occurrence order, or only
-    special bindings if the caller requested filtering. The future decoder must
-    include ordinary bindings, parameters, imports, definition names, and class
-    body bindings, and resolve closures, comprehensions, and global/nonlocal.
+    special bindings if the caller requested filtering. The decoder includes
+    ordinary bindings, parameters, imports, definition names, and class body
+    bindings, and resolves closures, comprehensions, and global/nonlocal.
     Unresolved external names and implicit compiler temporaries are not source
     bindings. Attribute lookup is excluded; dynamically created names are not
     inferred. This is static lexical resolution, not a runtime execution trace.
@@ -226,11 +236,11 @@ class IncompleteMessageError(DecodeError):
 
 
 def decode(code: str, cipher: CipherConfig, *, keep_only_stego_bindings: bool = False) -> DecodedMessage:
-    """Decode one Python source string under a shared cipher (interface stub).
+    """Decode one Python source string under a shared cipher without executing it.
 
     Args:
-        code: Complete, single-file Python source. The implementation must parse
-            and compile it under the running Python version without executing
+        code: Complete, single-file Python source. Parse and compile it under
+            the running Python version without executing
             code, evaluating annotations, or importing its dependencies.
         cipher: Validated alphabet and framing widths. Every special binding
             emits its fixed-width synonym index once, ordered by its earliest
@@ -250,17 +260,94 @@ def decode(code: str, cipher: CipherConfig, *, keep_only_stego_bindings: bool = 
         unused ones and bindings in code that would not execute.
 
     Raises:
-        NotImplementedError: Always in this interface-only version. Replace the
-            stub with extraction/framing logic in the implementation PR.
-        InvalidCodeError: Future implementation: malformed or non-compiling
+        InvalidCodeError: Malformed or non-compiling
             source, including compiler scope errors; chain the original error.
-        UnsupportedSyntaxError: Future implementation: a construct cannot be
-            resolved faithfully, rather than returning silently incomplete data.
-        IncompleteMessageError: Future implementation: missing control or fewer
+        UnsupportedSyntaxError: A construct cannot be resolved faithfully,
+            including wildcard imports and PEP 695 type-parameter/alias scopes.
+            Fail instead of returning silently incomplete binding data.
+        IncompleteMessageError: Missing control or fewer
             length/payload bits than required by the frame.
 
     Invalid cipher data raises pydantic.ValidationError when constructing
-    CipherConfig, before calling this function. Successful compilation does not
-    establish runtime correctness or that imports/dependencies are available.
+    CipherConfig or revalidating its snapshot on entry. Successful compilation
+    does not establish runtime correctness or dependency availability. Resolution
+    is lexical: it does not simulate class-local runtime fallback or dynamic name
+    creation. Enable DEBUG on this module's logger to inspect bindings and frames.
     """
-    raise NotImplementedError("The V2 decoder interface is defined; binding extraction and decoding are not implemented yet")
+    # Extraction consumes the public record types in this module; defer the
+    # import so they are available before bindings imports them.
+    from ciphers.variable_naming_in_python_v2.bindings import collect_bindings
+
+    cipher = CipherConfig.model_validate(cipher.model_dump())
+    try:
+        tree = ast.parse(code, filename="<stego-source>", mode="exec")
+        compile(tree, "<stego-source>", "exec", dont_inherit=True)
+    except (SyntaxError, ValueError, RecursionError) as error:
+        logger.debug("Source validation failed: %s", error)
+        raise InvalidCodeError(f"Python source cannot compile: {error}") from error
+    bindings = collect_bindings(code, tree)
+    alphabet = {name: (group, format(index, f"0{(len(names) - 1).bit_length()}b")) for group, names in cipher.special_variables.items() for index, name in enumerate(names)}
+    stream = "".join(alphabet[binding.name][1] for binding in bindings if binding.name in alphabet)
+    # Log collection before framing so truncated inputs still have a useful trace.
+    if logger.isEnabledFor(logging.DEBUG):
+        lines = code.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        for binding in bindings:
+            logger.debug("Binding name=%r id=%s scope=%s symbol=%r", binding.name, binding.binding_id, binding.scope_id, alphabet.get(binding.name))
+            for occurrence in binding.occurrences:
+                span = occurrence.span
+                logger.debug("  %s line=%d utf8_columns=%d:%d source=%r", occurrence.kind, span.line, span.column, span.end_column, lines[span.line - 1])
+    length, message_bits, roles = _parse_frame(stream, cipher.length_bits)
+    enriched = []
+    offset = 0
+    for binding in bindings:
+        if binding.name in alphabet:
+            group, bits = alphabet[binding.name]
+            contribution_roles = roles[offset : offset + len(bits)]
+            binding = VariableBinding(
+                binding_id=binding.binding_id,
+                scope_id=binding.scope_id,
+                name=binding.name,
+                occurrences=binding.occurrences,
+                synonym_group=group,
+                bits=bits,
+                bit_start=offset,
+                bit_roles=contribution_roles,
+            )
+            logger.debug("Symbol id=%s bits=%s offset=%d roles=%s", binding.binding_id, bits, offset, ",".join(contribution_roles))
+            offset += len(bits)
+        enriched.append(binding)
+    return DecodedMessage(
+        is_encoding=length is not None,
+        length=length,
+        message_bits=message_bits,
+        bindings=tuple(binding for binding in enriched if not keep_only_stego_bindings or binding.synonym_group is not None),
+    )
+
+
+def _parse_frame(stream: str, length_bits: int) -> tuple[int | None, str | None, tuple[BitRole, ...]]:
+    """Parse a collected bit stream; return length, exact payload, and per-bit roles.
+
+    ``stream`` contains only binary digits from the validated alphabet;
+    ``length_bits`` is a positive validated header width. Roles cover the entire
+    stream, including ignored trailing bits, so callers can slice a multi-bit
+    symbol across field boundaries. Absent frames return None/None. Raise
+    IncompleteMessageError with the field and available/required counts when a
+    control, length, or payload field is truncated. Never allocate by a declared
+    payload length until checking that those bits are actually available.
+    """
+    if not stream:
+        raise IncompleteMessageError("Missing control: need 1 bit, found 0")
+    if stream[0] == "0":
+        logger.debug("Frame valid: control=0 encoding=False length=None message=None ignored_bits=%s", stream[1:])
+        return None, None, ("control",) + ("ignored",) * (len(stream) - 1)
+    header_end = 1 + length_bits
+    if len(stream) < header_end:
+        raise IncompleteMessageError(f"Truncated length: need {length_bits} bits, found {len(stream) - 1}")
+    length = int(stream[1:header_end], 2)
+    if len(stream) - header_end < length:
+        raise IncompleteMessageError(f"Truncated payload: declared {length} bits, found {len(stream) - header_end}")
+    payload_end = header_end + length
+    payload = stream[header_end:payload_end]
+    roles: tuple[BitRole, ...] = ("control",) + ("length",) * length_bits + ("message",) * length + ("ignored",) * (len(stream) - payload_end)
+    logger.debug("Frame valid: control=1 length_bits=%s length=%d message=%s ignored_bits=%s", stream[1:header_end], length, payload, stream[payload_end:])
+    return length, payload, roles
