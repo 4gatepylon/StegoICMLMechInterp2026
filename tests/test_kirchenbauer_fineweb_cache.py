@@ -9,6 +9,10 @@ FineWeb, measure shuffle quality, benchmark large caches, reproduce native
 PyArrow shutdown crashes, execute the inspection notebook, or exercise shared
 multi-node filesystems.
 
+Token filtering covers unbounded, one-sided, inclusive two-sided, and zero-only
+ranges, invalid bounds, filtered exhaustion, old manifests, and deterministic
+splits. Remote source reads are mocked; local Parquet IO is real.
+
 TODO(hadriano) this Codex-written test suite often looks for specific substrings in arguments, which might brittle.
 """
 
@@ -153,11 +157,11 @@ def test_cache_name_cannot_escape_artifacts_directory(cache_name: str) -> None:
 
 
 def test_cli_verifies_and_previews_cached_metadata(artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_source(monkeypatch, [_source_document(0), _source_document(1)])
+    _install_source(monkeypatch, [_source_document(-1), _source_document(0), _source_document(1), _source_document(2)])
 
     result = CliRunner().invoke(
         cache_fineweb.main,
-        ["--cache-name", "cli-cache", "--documents", "2"],
+        ["--cache-name", "cli-cache", "--documents", "2", "--min-document-tokens", "1", "--max-document-tokens", "2"],
     )
 
     assert result.exit_code == 0, result.output
@@ -169,6 +173,8 @@ def test_cli_verifies_and_previews_cached_metadata(artifacts_directory: Path, mo
     assert "url: https://example.com/0" in result.output
     assert "text: 'document 0'" in result.output
     assert result.output.count("=" * 100) == 3
+    # _source_document(index) defines token_count = index + 1, so the inclusive [1, 2] bounds retain indices 0 and 1.
+    assert list(load_fineweb_cache("cli-cache", shuffle=False)) == [_cached_document(0), _cached_document(1)]
 
 
 def test_cli_prints_separator_before_handled_error(artifacts_directory: Path) -> None:
@@ -179,3 +185,58 @@ def test_cli_prints_separator_before_handled_error(artifacts_directory: Path) ->
 
     assert result.exit_code != 0
     assert result.output.index("=" * 100) < result.output.index("Error: FineWeb cache already exists")
+
+
+@pytest.mark.parametrize(
+    ("minimum", "maximum", "accepted_indices"),
+    [(0, None, [-1, 0, 1, 2, 3]), (2, None, [1, 2, 3]), (0, 2, [-1, 0, 1]), (1, 3, [0, 1, 2]), (0, 0, [-1])],
+)
+# TODO(hadriano) this does not properly test cascading filters (load filtering != build filtering)
+def test_document_token_filters_at_build_and_load(
+    artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch, minimum: int, maximum: int | None, accepted_indices: list[int]
+) -> None:
+    """Cover range partitions with mocked source rows and real multipart caches."""
+    del artifacts_directory
+    _install_source(monkeypatch, [_source_document(index) for index in range(-1, 4)])
+    bounds = {"min_document_tokens": minimum, "max_document_tokens": maximum}
+    filtered_directory = build_fineweb_cache("filtered", documents=len(accepted_indices), part_documents=2, **bounds)
+    unfiltered_directory = build_fineweb_cache("unfiltered", documents=5, part_documents=2)
+    expected = [_cached_document(index) for index in accepted_indices]
+
+    assert list(load_fineweb_cache("filtered", shuffle=False)) == expected
+    assert list(load_fineweb_cache("unfiltered", shuffle=False, minimum_documents=len(expected), **bounds)) == expected
+    manifest = json.loads((filtered_directory / "manifest.json").read_text())
+    assert (manifest["min_document_tokens"], manifest["max_document_tokens"]) == (minimum, maximum)
+
+    # Version-2 caches created before filtering have neither bounds field.
+    legacy_manifest = json.loads((unfiltered_directory / "manifest.json").read_text())
+    legacy_manifest.pop("min_document_tokens")
+    legacy_manifest.pop("max_document_tokens")
+    (unfiltered_directory / "manifest.json").write_text(json.dumps(legacy_manifest))
+    dataset = load_fineweb_cache("unfiltered", **bounds)
+    shuffled = list(dataset)
+    assert sorted(row["id"] for row in shuffled) == sorted(row["id"] for row in expected)
+    assert list(dataset.take(1)) + list(dataset.skip(1)) == shuffled
+
+
+def test_filtering_rejects_insufficient_accepted_documents(artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cover some and no matches; failed builds must leave no partial cache."""
+    _install_source(monkeypatch, [_source_document(index) for index in range(3)])
+    build_fineweb_cache("all", documents=3)
+    for minimum, accepted_count in [(2, 2), (4, 0)]:
+        with pytest.raises(RuntimeError, match=f"{accepted_count} of 3 requested documents"):
+            build_fineweb_cache("exhausted", documents=3, part_documents=1, min_document_tokens=minimum)
+        assert sorted(path.name for path in (artifacts_directory / "datasets" / "fineweb").iterdir()) == ["all"]
+        with pytest.raises(RuntimeError, match=f"{accepted_count} documents after token filtering"):
+            load_fineweb_cache("all", minimum_documents=3, min_document_tokens=minimum)
+
+
+@pytest.mark.parametrize("bounds", [{"min_document_tokens": -1}, {"max_document_tokens": -1}, {"min_document_tokens": 3, "max_document_tokens": 2}])
+def test_invalid_token_bounds_fail_before_io(bounds: dict[str, int], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cover negative and reversed ranges without filesystem or remote access."""
+    from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import PrefixKLTrainingConfig
+
+    monkeypatch.delenv("STEGO_ARTIFACTS_DIR", raising=False)
+    for entry_point in (build_fineweb_cache, load_fineweb_cache, PrefixKLTrainingConfig):
+        with pytest.raises(ValueError):
+            entry_point(**bounds)
