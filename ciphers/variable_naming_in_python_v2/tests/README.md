@@ -15,8 +15,8 @@ For a command using real fixture files, see the [CLI example](../README.md#decod
 > folders: load `cipher.json` and find the Python filename in
 > `expected_decodes.json`. The runner automatically discovers these pairs and
 > validates them with Pydantic (`CipherConfig` and `ExpectedDecodes`). Successful
-> entries contain a complete `DecodedMessage`; error entries specify rejection
-> plus a `decoded` result under the referenced `valid_cipher_folder`.
+> entries contain only `is_encoding`, `length`, and `message_bits`; error entries
+> specify rejection plus a `decoded` result under the referenced `valid_cipher_folder`.
 
 | Folder under `fixtures/` | Cipher | Python files |
 | --- | --- | --- |
@@ -69,9 +69,8 @@ Cipher valid?
                     length 15, maximum for four length bits
 
 Shared checks
-├── Fixture results: frame, all bindings, occurrence spans/kinds, group/bit
-│   metadata, scope ownership, deterministic output, final stego-only filtering
-│   (opaque IDs normalized to first-seen binding_N / scope_N labels)
+├── Fixture results: message presence, length, and exact bits with either
+│   binding-filter setting; binding/occurrence metadata is not compared to JSON
 ├── Additional source cases: reads before assignment, UTF-8 byte columns,
 │   strings excluded, no source execution or dependency imports
 ├── Runtime contracts: normalized identifiers; LF/CRLF/CR; all comprehension

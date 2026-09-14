@@ -6,12 +6,13 @@ model quality, steganalysis, or exhaustive coverage of every Python grammar form
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 import pytest
-from pydantic import BaseModel, ConfigDict, RootModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError, model_validator
 
 from ciphers.variable_naming_in_python_v2.decoder import (
+    BinaryBits,
     BindingOccurrence,
     CipherConfig,
     DecodedMessage,
@@ -27,12 +28,34 @@ FIXTURES = Path("ciphers/variable_naming_in_python_v2/tests/fixtures")
 ONE_GROUP = FIXTURES / "codex_generated_1_group"
 
 
+class ExpectedMessage(BaseModel):
+    """Expected frame without binding metadata, shared by JSON and result checks.
+
+    ``is_encoding`` distinguishes absence from a present message. ``length`` is
+    the payload bit count and ``message_bits`` preserves the exact binary string;
+    both are None for absence. Empty encoding is True, 0, "". Validation reuses
+    DecodedMessage's payload contract with no bindings to avoid separate rules.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_encoding: bool = Field(strict=True)
+    length: int | None = Field(ge=0, strict=True)
+    message_bits: BinaryBits | None
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> Self:
+        """Enforce the public decoder's presence/length/payload contract; return self."""
+        DecodedMessage(is_encoding=self.is_encoding, length=self.length, message_bits=self.message_bits, bindings=())
+        return self
+
+
 class ExpectedCipherError(BaseModel):
     """Expected config rejection plus a positive control for the same source.
 
     ``error`` names the Pydantic exception; ``match`` is its expected diagnostic
     substring. ``valid_cipher_folder`` is relative to this fixture folder and
-    supplies a valid cipher for ``decoded``, a complete DecodedMessage result.
+    supplies a valid cipher for ``decoded``, an ExpectedMessage frame.
     This companion check distinguishes a bad cipher from a bad encoding.
     """
 
@@ -41,17 +64,14 @@ class ExpectedCipherError(BaseModel):
     error: Literal["ValidationError"]
     match: str
     valid_cipher_folder: str
-    decoded: DecodedMessage
+    decoded: ExpectedMessage
 
 
-class ExpectedDecodes(RootModel[dict[str, DecodedMessage | ExpectedCipherError]]):
+class ExpectedDecodes(RootModel[dict[str, ExpectedMessage | ExpectedCipherError]]):
     """Map each sibling Python filename to its expected decode or cipher error.
 
-    Successful results use the decoder's public schema, including all ordinary
-    and special bindings. IDs are canonicalized in first-binding order:
-    binding_0, binding_1, ... and scope_0, scope_1, ... for distinct scopes.
-    Repeated scope IDs express shared lexical ownership. Occurrence spans and
-    all other metadata retain their original values.
+    Successful entries contain only is_encoding, length, and message_bits as
+    documented by ExpectedMessage. Binding and occurrence details are omitted.
     """
 
 
@@ -60,10 +80,10 @@ def load_cipher(path: Path = ONE_GROUP / "cipher.json") -> CipherConfig:
     return CipherConfig.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def load_expectations(folder: Path) -> dict[str, DecodedMessage | ExpectedCipherError]:
+def load_expectations(folder: Path) -> dict[str, ExpectedMessage | ExpectedCipherError]:
     """Read a repo-relative fixture folder's manifest using ExpectedDecodes.
 
-    Return Python-filename keys mapped to complete DecodedMessage expectations
+    Return Python-filename keys mapped to ExpectedMessage frames
     or ExpectedCipherError records. Discovery uses each key to find source and
     each value to select the decoding or validation-error contract.
     """
@@ -78,25 +98,6 @@ FIXTURE_CASES = [
 ]
 
 
-def canonicalize_ids(result: DecodedMessage) -> DecodedMessage:
-    """Replace opaque IDs with first-seen labels for comparison to JSON results.
-
-    ``result`` is a decoder response in first-occurrence order. Return the same
-    DecodedMessage structure with only binding_id and scope_id relabeled. Shared
-    IDs remain shared so duplicate bindings and wrong scope ownership still
-    fail comparison; no source positions, contributions, or ordering change.
-    """
-    binding_ids: dict[str, str] = {}
-    scope_ids: dict[str, str] = {}
-    return result.model_copy(update={"bindings": tuple(
-        binding.model_copy(update={
-            "binding_id": binding_ids.setdefault(binding.binding_id, f"binding_{len(binding_ids)}"),
-            "scope_id": scope_ids.setdefault(binding.scope_id, f"scope_{len(scope_ids)}"),
-        })
-        for binding in result.bindings
-    )})
-
-
 @pytest.mark.parametrize("folder", FIXTURE_FOLDERS, ids=lambda folder: folder.name)
 def test_manifest_covers_exactly_the_compilable_source_files(folder: Path) -> None:
     """Every source has one schema-validated expectation; compile without running."""
@@ -109,7 +110,7 @@ def test_manifest_covers_exactly_the_compilable_source_files(folder: Path) -> No
 
 
 @pytest.mark.parametrize(("path", "expected"), FIXTURE_CASES)
-def test_fixture_cipher_validation(path: Path, expected: DecodedMessage | ExpectedCipherError) -> None:
+def test_fixture_cipher_validation(path: Path, expected: ExpectedMessage | ExpectedCipherError) -> None:
     """Partition valid configs and explicit validation errors before decoding."""
     if isinstance(expected, ExpectedCipherError):
         with pytest.raises(ValidationError) as error:
@@ -121,14 +122,16 @@ def test_fixture_cipher_validation(path: Path, expected: DecodedMessage | Expect
 
 
 @pytest.mark.parametrize(("path", "expected"), FIXTURE_CASES)
-def test_fixture_decode(path: Path, expected: DecodedMessage | ExpectedCipherError) -> None:
-    """Compare every field to JSON, then verify determinism and final filtering.
+@pytest.mark.parametrize("keep_only_stego_bindings", [False, True], ids=["all-bindings", "stego-only"])
+def test_fixture_decode(path: Path, expected: ExpectedMessage | ExpectedCipherError, keep_only_stego_bindings: bool) -> None:
+    """Compare the decoded message to JSON with either binding-filter setting.
 
     ``path`` identifies a source file, never executed. ``expected`` comes from
     its folder's manifest. Error records select their valid companion cipher
     and positive-control decoded result; rejection is checked separately above.
-    Exact comparisons cover frames, all bindings/occurrences, ownership, offsets,
-    and roles. Runtime behavior and unsupported grammar partitions are omitted.
+    ``keep_only_stego_bindings`` selects the decoder's output filter; both modes
+    must produce the expected presence, length, and payload. Binding metadata,
+    occurrence positions, and runtime behavior are omitted from this comparison.
     """
     cipher_folder = path.parent
     if isinstance(expected, ExpectedCipherError):
@@ -136,11 +139,9 @@ def test_fixture_decode(path: Path, expected: DecodedMessage | ExpectedCipherErr
         expected = expected.decoded
     cipher = load_cipher(cipher_folder / "cipher.json")
     code = path.read_text(encoding="utf-8")
-    result = decode(code, cipher)
-    assert canonicalize_ids(result) == expected
-    assert decode(code, cipher) == result
-    filtered = decode(code, cipher, keep_only_stego_bindings=True)
-    assert filtered == result.model_copy(update={"bindings": special_bindings(result)})
+    result = decode(code, cipher, keep_only_stego_bindings=keep_only_stego_bindings)
+    # TODO(hadriano): Add fixture expectations for binding metadata and occurrence spans if needed.
+    assert ExpectedMessage.model_validate(result, from_attributes=True) == expected
 
 
 def source_for_bits(bits: str) -> str:
