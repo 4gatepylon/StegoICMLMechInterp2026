@@ -1,4 +1,42 @@
 # Variable Renaming V2 (Agentic + Synthetic Data Harness Distillation)
+
+## Decoder interface
+
+The public Pydantic schemas and exception types live in
+[`decoder.py`](decoder.py). The `decode()` entry point is currently an explicit
+`NotImplementedError` stub; the interface can be used independently of the
+forthcoming binding extraction and decoding implementation.
+
+```python
+from ciphers.variable_naming_in_python_v2.decoder import CipherConfig, decode
+
+cipher = CipherConfig(
+    special_variables={"loop_index": ("i", "j")},
+    length_bits=4,
+)
+# Once implemented:
+# result = decode(code, cipher, keep_only_stego_bindings=False)
+```
+
+Ordered synonyms emit their fixed-width binary index. With this alphabet,
+`i` emits `0` and `j` emits `1`, once per lexical binding. The frame is one
+control bit, an unsigned `length_bits`-wide payload length, then the payload.
+Length must satisfy `0 <= length < 2**length_bits`. Zero control means absent;
+encoded empty messages are distinct from absence. Missing/truncated fields fail.
+
+`DecodedMessage` contains `is_encoding`, nullable `length` and `message_bits`,
+and `bindings`. Each binding reports its name, scope/binding IDs, every identifier
+occurrence, emitted bits, and each bit's control/length/message/ignored role.
+Ordinary bindings are included by default; the optional filter runs after
+decoding. Source columns are zero-based UTF-8 byte offsets. See model and function
+docstrings for the exact contracts, scope rules, and exceptions. No source is
+executed, and attributes/dynamically created names are outside lexical decoding.
+
+The following sections describe the broader harness proposal; the decoder
+docstrings are the agreed interface for implementation.
+
+## Harness proposal
+
 This encodes the same type of variable as `ciphers/variable_naming_in_python_v1` but uses an improved system to produce the trajectories we `SFT` on with the smaller model.
 
 The general mental model is:
