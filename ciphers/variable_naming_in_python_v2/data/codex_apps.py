@@ -1,7 +1,26 @@
-"""Small Codex inference, APPS prompt, and pass@k helpers.
+"""Subscription-backed Codex inference, APPS prompts, preflight checks, and pass@k.
 
-Candidate execution belongs to modal_apps; combining its verdict with static
-secret decoding currently belongs to the demonstration notebook.
+Public interface:
+    CodexInferenceConfig: Model (default Luna), deadline, storage, and quota policy.
+    preflight(config): Check prerequisites; return PreflightResult or raise
+        CodexPreflightError with a failed stage and corrective hint.
+    infer(prompt, config, response_format="text" | "python"): Async generation;
+        automatically preflight, save artifacts, and return InferenceResult.
+    build_apps_prompt(problem, secret=None): Render AppsPromptProblem plus optional
+        SecretTask as Markdown; SecretTask uses the existing decoder's CipherConfig.
+    pass_at_k(n, c, k): Codex paper's oracle-success estimator.
+
+Example (after setting STEGO_ARTIFACTS_DIR and signing in to Codex with ChatGPT):
+    from ciphers.variable_naming_in_python_v2.data.codex_apps import CodexInferenceConfig, infer
+
+    config = CodexInferenceConfig()
+    answer = await infer("What is the capital of France?", config)
+    print(answer.text)
+
+Supports text/Python responses, native call-based or stdin/stdout APPS prompts,
+and 0–3-bit secret prompts. Does not provide API-key billing, configurable thinking
+modes, candidate execution, decoding, or batch orchestration. The notebook combines
+Modal execution and the existing decoder; the helper generates without tool use.
 """
 
 import ast
@@ -90,12 +109,17 @@ class CodexInferenceConfig(BaseModel):
 
 
 class AppsPromptProblem(BaseModel):
-    """Only public problem fields accepted by the prompt builder.
+    """Public APPS fields accepted by the prompt builder.
 
-    question includes the public specification/examples; starter_code is optional
-    scaffolding. fn_name is the evaluator's entry point for call-based questions,
-    or None for stdin/stdout scripts. The caller obtains it from AppsTestCases.
-    Hidden tests and reference answers are deliberately not fields of this model.
+    Attributes:
+        question: Nonempty public problem specification, including public examples.
+        starter_code: Public Python scaffold; an empty string means none was supplied.
+        fn_name: Call-based evaluator entry point from AppsTestCases. None means the
+            candidate must use stdin/stdout instead of returning a function result.
+
+    Notes:
+        Hidden tests and reference answers are excluded from this schema. Callers
+        must also keep them out of the public strings above.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -105,11 +129,16 @@ class AppsPromptProblem(BaseModel):
 
 
 class SecretTask(BaseModel):
-    """The requested payload and the existing decoder's complete alphabet.
+    """Pair a requested payload with the existing decoder's cipher.
 
-    message_bits preserves leading zeroes and may be empty. This experiment fixes
-    framing to one control bit, two length bits, and zero to three payload bits.
-    CipherConfig itself supports other length widths; this demo rejects them.
+    Attributes:
+        cipher: Validated CipherConfig containing the ordered synonym groups and
+            framing settings. This demo additionally requires length_bits=2;
+            CipherConfig already fixes control_bits=1.
+        message_bits: Literal binary payload of length 0–3. Leading zeroes matter;
+            an empty string requests a present empty message, not an absent frame.
+        frame_bits: Computed control + length + payload string. For example, payload
+            "101" produces "111101", while an empty payload produces "100".
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -130,10 +159,12 @@ class SecretTask(BaseModel):
 
 
 class PythonAnswer(BaseModel):
-    """The structured response schema: code is the complete Python source.
+    """Schema supplied to the SDK for a structured Python response.
 
-    Syntax and blank-source checks happen after generation in infer so malformed
-    answers are saved and counted as failed samples rather than disappearing.
+    Attributes:
+        code: Complete generated Python source. This schema rejects extra fields;
+            infer separately checks blank source and syntax after generation so
+            malformed answers can be saved and counted as failed samples.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -141,27 +172,39 @@ class PythonAnswer(BaseModel):
 
 
 class CodexPreflightError(RuntimeError):
-    """Actionable setup failure with a stable stage for higher-level callers.
+    """Report a failed prerequisite with a machine-readable stage and remedy.
 
-    stage identifies artifacts, sdk, authentication, model, or usage. hint explains
-    the corrective action and is also included in str(error). Provider/OS causes
-    are preserved through exception chaining when applicable.
+    Attributes:
+        stage: Failed check: artifacts, sdk, authentication, model, or usage.
+        hint: Corrective action, also included in the formatted exception message.
+        __cause__: Original OS/provider exception when one is chained by preflight;
+            None for failures detected directly, such as an unavailable model ID.
     """
 
     @override
     def __init__(self, stage: str, detail: str, hint: str) -> None:
-        """Unlike RuntimeError, attach the failed check and remedy to the message."""
+        """Attach a failed check and remedy in addition to RuntimeError's message.
+
+        Args:
+            stage: Identifier of the failed prerequisite check.
+            detail: Concrete failure description used in str(error).
+            hint: Suggested corrective action, stored separately for higher-level callers.
+        """
         self.stage = stage
         self.hint = hint
         super().__init__(f"Codex preflight [{stage}]: {detail} Fix: {hint}")
 
 
 class UsageWindow(BaseModel):
-    """One SDK quota window, independent of assumptions about daily/weekly limits.
+    """Record one backend-reported quota window.
 
-    name is primary or secondary within the selected quota bucket. Remaining
-    percentage is 100 minus the backend's used percentage; duration is in minutes,
-    and resets_at is Unix seconds. None metadata means the backend omitted it.
+    Attributes:
+        name: Window role, either primary or secondary, within the selected bucket.
+        remaining_percent: Percentage remaining, calculated as 100 minus the SDK's
+            used percentage. Validated to lie between 0 and 100 inclusive.
+        window_duration_mins: Window duration in minutes; None means it was omitted.
+            Primary/secondary roles do not imply daily/weekly durations.
+        resets_at: Reset time in Unix seconds; None means it was omitted.
     """
 
     name: Literal["primary", "secondary"]
@@ -171,14 +214,21 @@ class UsageWindow(BaseModel):
 
 
 class PreflightResult(BaseModel):
-    """Credential-free setup snapshot returned before any generation thread starts.
+    """Record a credential-free snapshot before generation starts.
 
-    model is the resolved catalog model actually submitted by infer. artifact_base_dir
-    is the writable directory under which each request creates its UUID directory.
-    config_overrides includes tool restrictions and disabled inherited MCP servers.
-    usage_limit_id identifies the inspected bucket; usage_windows is empty only
-    when the configured threshold is None. checked_at is an aware UTC timestamp.
-    This snapshot cannot reserve quota or guarantee a later request will succeed.
+    Attributes:
+        model: Resolved catalog model that infer will submit explicitly.
+        artifact_base_dir: Writable absolute directory beneath STEGO_ARTIFACTS_DIR;
+            each request creates its UUID directory inside it.
+        config_overrides: Non-secret SDK overrides, including tool restrictions and
+            disabled inherited MCP servers.
+        usage_limit_id: Selected quota-bucket ID; not inspected when usage is skipped.
+        usage_windows: Checked primary/secondary windows. Empty only when the
+            configured reserve is None, explicitly skipping usage inspection.
+        checked_at: Time the checks completed, as a timezone-aware UTC datetime.
+
+    Notes:
+        Passing does not reserve quota or guarantee a later inference will succeed.
     """
 
     model: str
@@ -190,17 +240,26 @@ class PreflightResult(BaseModel):
 
 
 class InferenceResult(BaseModel):
-    """Persisted result of one completed SDK turn, valid or malformed.
+    """Persist one completed SDK turn, including malformed responses.
 
-    text is the raw final response, empty if absent. code is the exact extracted
-    source for Python responses, including syntactically invalid source when
-    extractable; it is None for text responses or malformed JSON. output_error
-    describes unusable output and must count as a failed candidate, not a retry.
-    prompt/turn_id/requested_model identify the request. artifact_dir is absolute
-    beneath STEGO_ARTIFACTS_DIR and contains request.json and answer.json.
-    config_overrides and sandbox/approval_mode record requested restrictions;
-    item_types records SDK turn events, not an inventory of available tools.
-    preflight records the resolved model and usage snapshot used for this request.
+    Attributes:
+        text: Raw final response; an empty string means no final text was supplied.
+        code: Extracted Python source, preserving invalid syntax when extractable.
+            None means a text response or JSON from which no code could be extracted.
+        output_error: Output-validation failure description, or None on success.
+            A completed Python answer with an error counts as a failed sample.
+        prompt: Exact prompt sent to the model.
+        turn_id: SDK identifier for the completed turn.
+        requested_model: Caller-requested model ID; None means the caller requested
+            the configured default. The resolved ID is recorded in preflight.model.
+        artifact_dir: Absolute request directory beneath STEGO_ARTIFACTS_DIR,
+            containing request.json, answer.json, and workspace/.
+        config_overrides: Non-secret restrictions requested for the SDK process.
+        sandbox: Requested filesystem policy; fixed to "read-only" by this helper.
+        approval_mode: Requested approval policy; fixed to "deny_all" by this helper.
+        item_types: Observed SDK turn-event types, not an inventory of available tools.
+        preflight: Resolved model, storage location, restrictions, and quota snapshot
+            checked before this request started.
     """
 
     text: str
@@ -237,12 +296,14 @@ TOOL_RESTRICTIONS = (
 def build_apps_prompt(problem: AppsPromptProblem, *, secret: SecretTask | None = None) -> str:
     """Build a Markdown Python prompt, optionally adding a secret-message task.
 
-    problem contains only the public fields documented by AppsPromptProblem;
-    callers must not put references or hidden tests inside those fields. secret
-    supplies the validated cipher and payload, or None for ordinary generation.
-    Return the complete prompt for infer(response_format='python'). Plain Python
-    builders in data/prompts.py describe the native interface and render the
-    cipher directly from its object, including its alphabet and source examples.
+    Args:
+        problem: Validated public APPS fields. The caller must not put reference
+            answers or hidden tests inside those fields.
+        secret: Validated cipher and payload; None requests ordinary code generation.
+
+    Returns:
+        str: Complete prompt for infer(response_format="python"), assembled by the
+            Python builders in data/prompts.py with the task's native interface.
     """
     prompt = build_python_prompt(problem.question, problem.starter_code, problem.fn_name)
     if secret is not None:
@@ -251,11 +312,15 @@ def build_apps_prompt(problem: AppsPromptProblem, *, secret: SecretTask | None =
 
 
 def _runtime(workspace: Path, overrides: tuple[str, ...]) -> CodexConfig:
-    """Build a child SDK configuration without modifying the parent's environment.
+    """Build SDK settings without modifying the parent's environment.
 
-    workspace is the artifact-backed cwd; overrides contains only non-secret CLI
-    settings. Return CodexConfig with inherited environment and cleared billing
-    keys. Authentication is separately verified by preflight and infer.
+    Args:
+        workspace: Artifact-backed working directory for the SDK process.
+        overrides: Non-secret CLI settings, including the requested tool restrictions.
+
+    Returns:
+        CodexConfig: Child settings with the inherited environment and cleared API
+            billing keys. Preflight and infer verify authentication separately.
     """
     environment = os.environ.copy()
     # Clear API billing keys for subscription auth; the SDK merges overrides into the parent environment.
@@ -265,14 +330,25 @@ def _runtime(workspace: Path, overrides: tuple[str, ...]) -> CodexConfig:
 
 
 def _check_usage(response: GetAccountRateLimitsResponse, config: CodexInferenceConfig) -> tuple[UsageWindow, ...]:
-    """Enforce the enabled reserve policy on a typed SDK usage response.
+    """Enforce the enabled reserve policy against SDK quota metadata.
 
-    response is account/rateLimits/read output; its multi-bucket values follow
-    RateLimitSnapshot, with primary/secondary RateLimitWindow values. config
-    selects the exact bucket and a non-None reserve threshold. Return all reported
-    windows for recording. Raise CodexPreflightError on explicit backend blocks,
-    unavailable bucket/window data, or any window below threshold. No reset time,
-    credits balance, or missing flag is interpreted as restored permission.
+    Args:
+        response: Typed account/rateLimits/read output. Multi-bucket values must
+            follow RateLimitSnapshot, including its primary/secondary windows.
+        config: Selects the exact quota bucket and a non-None reserve threshold.
+
+    Returns:
+        tuple[UsageWindow, ...]: All reported windows in the selected bucket, after
+            each passes the reserve check; callers record them in PreflightResult.
+
+    Raises:
+        CodexPreflightError: An explicit backend block, unavailable bucket/windows,
+            or a window below the requested reserve prevents generation.
+        ValidationError: SDK metadata violates the window schema; preflight wraps
+            this as a usage-stage CodexPreflightError and preserves the cause.
+
+    Notes:
+        Reset times, credit balances, and missing flags do not imply restored access.
     """
     if response.ordinary_usage_allowed is False:
         raise CodexPreflightError("usage", "The backend disallows ordinary included usage.", "Check Codex usage limits and wait for access to resume.")
@@ -532,19 +608,28 @@ def pass_at_k(
     c: Annotated[int, Field(ge=0, strict=True)],
     k: Annotated[int, Field(ge=1, strict=True)],
 ) -> float:
-    """Estimate oracle success among k candidates using Codex paper equation 1.
+    """Estimate oracle success using the Codex paper's NumPy implementation.
 
-    n is the number of independently sampled, unfiltered candidates for ONE
-    problem and fixed prompt; c counts successes under the chosen predicate;
-    k is the subset size (1 <= k <= n). Return 1 - C(n-c,k)/C(n,k), evaluated
-    with the paper's NumPy product implementation. Reject c > n or k > n. Malformed
-    completed outputs belong in n as failures; infrastructure errors should stop
-    the experiment instead of being classified as model failures. For multiple
-    problems, compute this separately and average; do not pool their counts.
+    Args:
+        n: Total independently sampled, unfiltered candidates for one fixed problem
+            and prompt. Must be a positive integer.
+        c: Number satisfying the chosen success predicate; must satisfy 0 <= c <= n.
+            Completed malformed outputs belong in n and contribute nothing to c.
+        k: Subset size; must be an integer satisfying 1 <= k <= n.
 
-    This measures whether a subset contains a success, not whether a deployable
-    ranking rule selects it. In particular k=n is simply float(c > 0).
-    Source: https://arxiv.org/abs/2107.03374 (equation 1).
+    Returns:
+        float: 1 - C(n-c,k)/C(n,k), the probability a uniformly chosen k-subset contains
+            a success. At k=n this is simply float(c > 0).
+
+    Raises:
+        ValidationError: Counts have invalid types or violate their individual bounds.
+        ValueError: c or k exceeds n.
+
+    Notes:
+        Infrastructure failures should stop the experiment rather than count as
+        incorrect answers. For multiple problems, average their separate estimates;
+        do not pool counts. This measures oracle success, not a ranking method.
+        Source: https://arxiv.org/abs/2107.03374 (equation 1).
     """
     if c > n or k > n:
         raise ValueError("Require 0 <= c <= n and 1 <= k <= n")

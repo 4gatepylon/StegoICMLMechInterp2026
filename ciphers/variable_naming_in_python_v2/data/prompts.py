@@ -8,12 +8,20 @@ from ciphers.variable_naming_in_python_v2.decoder import CipherConfig
 def build_python_prompt(question: str, starter_code: str = "", fn_name: str | None = None) -> str:
     """Describe an APPS problem using its native invocation interface.
 
-    question is the public specification, including public examples; starter_code
-    is optional public scaffolding. fn_name is the evaluator's call-based entry
-    point, or None for a stdin/stdout script. Callers must exclude hidden tests and
-    reference answers from these strings. Return a Markdown prompt requesting a
-    complete Python program in the JSON code field consumed by infer's Python
-    response schema. No program is executed while constructing the prompt.
+    Args:
+        question: Public specification, including any public examples.
+        starter_code: Public Python scaffold; an empty string means none was supplied.
+        fn_name: Call-based evaluator entry point; None requests a stdin/stdout script.
+
+    Returns:
+        str: Markdown prompt requesting complete Python source in the JSON code field
+            consumed by infer's Python response schema.
+
+    Preconditions:
+        References and hidden tests must be excluded from the supplied public strings.
+
+    Postconditions:
+        Only prompt text is constructed; no candidate program is executed.
     """
     if fn_name is not None:
         interface = dedent(f"""\
@@ -48,19 +56,23 @@ def build_python_prompt(question: str, starter_code: str = "", fn_name: str | No
 
 
 def build_secret_prompt(cipher: CipherConfig, message_bits: str) -> str:
-    """Describe a cipher, its requested payload, and two binding-order examples.
+    """Describe a cipher, the target payload, and binding-order examples.
 
-    cipher is the existing decoder's validated alphabet and framing configuration.
-    message_bits is a binary payload that fits its length field; the companion
-    SecretTask model validates the demo's stricter 0–3-bit/two-length-bit contract
-    before this builder is called. Return Markdown to append to build_python_prompt.
+    Args:
+        cipher: Existing decoder's validated alphabet and framing configuration.
+        message_bits: Binary payload that fits cipher.length_bits. SecretTask validates
+            the demo's stricter two-length-bit/0–3-payload-bit contract before calling
+            this builder; callers using it directly must supply a valid payload.
 
-    The alphabet table includes every group and its fixed-width binary indices.
-    Examples encode the empty payload and the requested payload (or one zero bit
-    when the request is empty). They use the first synonym group and independent
-    lambda scopes so repeated names create distinct bindings. Any final symbol
-    padding occurs after the payload and is ignored by the existing decoder.
-    These are source illustrations, not solutions or locally executed programs.
+    Returns:
+        str: Markdown instructions to append to build_python_prompt, containing an
+            alphabet table, the required frame, binding rules, and two source examples.
+
+    Notes:
+        Examples encode the empty payload and the requested payload, or a zero bit
+        when the request is empty. They use the first synonym group and independent
+        lambda scopes so repeated names emit again. Padding follows the payload and
+        is ignored by the decoder. Examples are illustrations, not executed solutions.
     """
     length_field = format(len(message_bits), f"0{cipher.length_bits}b")
     required_frame = "1" + length_field + message_bits
