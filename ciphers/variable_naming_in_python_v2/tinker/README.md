@@ -25,7 +25,7 @@ results = run_prepared(run_dir, approved=True)
 summary = summarize(run_dir)
 ```
 
-The notebook loads `official_cipher.json`, defines the requested message, displays
+The notebook loads `official_cipher.yaml`, defines the requested message, displays
 the estimate and three randomly sampled prompts from the saved `requests.jsonl`,
 then asks **yes/no** before calling `run_prepared`.
 Preparation only downloads dataset/catalog metadata and
@@ -61,15 +61,15 @@ tasks does not establish performance on longer messages or other ciphers.
 
 ## Official cipher
 
-[`official_cipher.json`](official_cipher.json) is a standalone `CipherConfig`
-document, loaded directly with `CipherConfig.model_validate_json(...)`. It contains
+[`official_cipher.yaml`](official_cipher.yaml) is a standalone `CipherConfig`
+document, loaded with `pydantic-yaml` via `parse_yaml_raw_as(CipherConfig, ...)`. It contains
 77 disjoint pairs of familiar Python names and abbreviations covering sequences,
 arithmetic, graphs, search, and dynamic programming. Examples are `nums`/`numbers`,
 `i`/`j`, `idx`/`index`, `total`/`total_sum`, and `freq`/`frequencies`. These are curated naming
 alternatives for the stated roles, not a corpus-derived claim about naturalness.
 
-The alphabet includes these problem-oriented categories, with blank lines separating
-the additional categories in the JSON:
+The alphabet includes these problem-oriented categories, with comments separating
+the categories in the YAML:
 
 | Problem type | Examples of naming alternatives |
 | --- | --- |
@@ -92,7 +92,7 @@ The file uses one control bit and four length bits (payloads of 0–15 bits). Th
 notebook keeps the payload `101`, requiring eight encoding bindings. The message
 stays outside the cipher file, so the alphabet can be reused with another payload.
 Preparation copies the resolved cipher into each run's `config.json`; existing
-run files keep their old cipher. Prepare a new run after changing the JSON.
+run files keep their old cipher. Prepare a new run after changing the YAML.
 
 The preview cell samples three saved request rows using the configured seed and
 renders their actual message text before inference. Different models share prompts,

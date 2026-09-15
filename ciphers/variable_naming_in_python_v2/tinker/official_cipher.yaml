@@ -1,0 +1,95 @@
+# Each ordered pair maps to bits [0, 1]. Keep the order of names unchanged.
+special_variables:
+  # General-purpose names, iteration, arithmetic, graphs, and search
+  numeric_sequence: ["nums", "numbers"]
+  general_sequence: ["items", "elements"]
+  numeric_value: ["num", "number"]
+  sequence_element: ["item", "element"]
+  sequence_index: ["idx", "index"]
+  loop_index: ["i", "j"]
+  sequence_position: ["pos", "position"]
+  sequence_length: ["n", "length"]
+  item_count: ["count", "item_count"]
+  sum_accumulator: ["total", "total_sum"]
+  running_sum: ["running_sum", "cumulative_sum"]
+  minimum_value: ["min_value", "minimum"]
+  maximum_value: ["max_value", "maximum"]
+  average_value: ["avg", "average"]
+  scalar_result: ["result", "answer"]
+  result_sequence: ["results", "answers"]
+  frequency_map: ["freq", "frequencies"]
+  count_map: ["cnt", "counts"]
+  visited_set: ["seen", "visited"]
+  adjacency_map: ["adj", "adjacency"]
+  distance_map: ["dist", "distances"]
+  graph_vertex: ["node", "vertex"]
+  neighbor_sequence: ["neighbors", "neighbours"]
+  source_vertex: ["src", "source"]
+  destination_vertex: ["dst", "destination"]
+  search_queue: ["q", "queue"]
+  lower_boundary: ["lo", "left"]
+  upper_boundary: ["hi", "right"]
+  midpoint: ["mid", "middle"]
+  row_index: ["r", "row"]
+  column_index: ["c", "col"]
+  memoization_table: ["memo", "cache"]
+  dynamic_programming_table: ["dp", "dp_table"]
+  current_value: ["cur", "current"]
+  previous_value: ["prev", "previous"]
+  best_value: ["best", "best_value"]
+  validity_flag: ["valid", "is_valid"]
+
+  # Strings and parsing
+  input_text: ["text", "input_text"]
+  input_line: ["line", "input_line"]
+  input_tokens: ["tokens", "input_tokens"]
+  character: ["ch", "char"]
+  character_index: ["char_idx", "char_index"]
+  substring: ["substr", "substring"]
+  string_length: ["text_len", "text_length"]
+  pattern_length: ["pattern_len", "pattern_length"]
+
+  # Arrays, prefix sums, and sliding windows
+  array: ["arr", "array"]
+  array_length: ["arr_len", "array_length"]
+  prefix_sums: ["prefix", "prefix_sums"]
+  suffix_sums: ["suffix", "suffix_sums"]
+  sorted_sequence: ["sorted_nums", "sorted_numbers"]
+  left_index: ["left_idx", "left_index"]
+  right_index: ["right_idx", "right_index"]
+  window_size: ["window_size", "window_length"]
+
+  # Number theory and combinatorics
+  divisor: ["d", "divisor"]
+  remainder: ["rem", "remainder"]
+  modulus: ["mod", "modulus"]
+  exponent: ["exp", "exponent"]
+  prime_factors: ["factors", "prime_factors"]
+  greatest_common_divisor: ["g", "gcd_value"]
+  least_common_multiple: ["lcm_val", "lcm_value"]
+  factorial_value: ["fact", "factorial_value"]
+
+  # Graphs and trees
+  edge_list: ["edges", "edge_list"]
+  edge_count: ["m", "num_edges"]
+  vertex_count: ["num_nodes", "num_vertices"]
+  edge_weight: ["weight", "edge_weight"]
+  parent_map: ["parent", "parents"]
+  in_degree: ["indeg", "in_degree"]
+  connected_components: ["components", "connected_components"]
+  search_depth: ["depth", "search_depth"]
+
+  # Grids, subsets, and dynamic programming
+  row_count: ["rows", "num_rows"]
+  column_count: ["cols", "num_cols"]
+  bit_mask: ["mask", "bitmask"]
+  subset_size: ["subset_size", "subset_len"]
+  capacity: ["cap", "capacity"]
+  transition_cost: ["cost", "transition_cost"]
+
+  # Multiple test cases
+  test_case_count: ["t", "num_cases"]
+  test_case_index: ["tc", "case_idx"]
+
+control_bits: 1
+length_bits: 4
