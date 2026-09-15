@@ -1,6 +1,7 @@
 # Variable Renaming V2 (Agentic + Synthetic Data Harness Distillation)
 
 ## Decoder interface
+> WARNING: this code is heavily tested, but only minimally reviewed. No human _really_ understands what is going on here in detail. It's not complicated, but just FYI.
 
 The public Pydantic schemas, exception types, and working `decode()` entry point
 live in [`decoder.py`](decoder.py). Binding extraction is implemented in

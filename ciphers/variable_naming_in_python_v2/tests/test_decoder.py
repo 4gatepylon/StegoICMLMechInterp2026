@@ -90,6 +90,7 @@ def load_expectations(folder: Path) -> dict[str, ExpectedMessage | ExpectedCiphe
     return ExpectedDecodes.model_validate_json((folder / "expected_decodes.json").read_text(encoding="utf-8")).root
 
 
+################ BEGIN: Fixture Tests (our main test suite) ################
 FIXTURE_FOLDERS = sorted(path.parent for path in FIXTURES.glob("*/cipher.json"))
 assert sorted(map(lambda x: x.resolve(), FIXTURE_FOLDERS)) == sorted(
     [
@@ -105,7 +106,7 @@ FIXTURE_CASES = [
 
 @pytest.mark.parametrize("folder", FIXTURE_FOLDERS, ids=lambda folder: folder.name)
 def test_manifest_covers_exactly_the_compilable_source_files(folder: Path) -> None:
-    """Every source has one schema-validated expectation; compile without running."""
+    """Test that every source exists and compiles properly... AND everything that exists is manifested."""
     expected = load_expectations(folder)
     assert expected
     assert set(expected) == {path.name for path in folder.glob("*.py")}
@@ -116,7 +117,7 @@ def test_manifest_covers_exactly_the_compilable_source_files(folder: Path) -> No
 
 @pytest.mark.parametrize(("path", "expected"), FIXTURE_CASES)
 def test_fixture_cipher_validation(path: Path, expected: ExpectedMessage | ExpectedCipherError) -> None:
-    """Partition valid configs and explicit validation errors before decoding."""
+    """Test that load_cipher raises IFF expected error."""
     if isinstance(expected, ExpectedCipherError):
         with pytest.raises(ValidationError) as error:
             load_cipher(path.parent / "cipher.json")
@@ -149,12 +150,21 @@ def test_fixture_decode(path: Path, expected: ExpectedMessage | ExpectedCipherEr
     assert ExpectedMessage.model_validate(result, from_attributes=True) == expected
 
 
+################ END: Fixture Tests (our main test suite) ################
+
+
 def source_for_bits(bits: str) -> str:
     """Build independent parameter bindings for an explicitly supplied test stream.
 
     Each character chooses i or j in a separate function, so repeated spelling
     cannot collapse carriers. Return source only, not an encoded expected result;
     callers supply literal frame/error cases independently of this construction.
+
+    Example output (when bits="01"):
+    ```python
+    def carrier_0(j): pass
+    def carrier_1(i): pass
+    ```
     """
     return "\n".join(f"def carrier_{index}({'j' if bit == '1' else 'i'}): pass" for index, bit in enumerate(bits))
 
@@ -167,16 +177,16 @@ def special_bindings(result: DecodedMessage) -> tuple[VariableBinding, ...]:
 @pytest.mark.parametrize(
     "groups",
     [
-        {},
-        {"index": ()},
-        {"index": ("i",)},
-        {"index": ("i", "j", "k")},
-        {"index": ("i", "i")},
-        {"first": ("i", "j"), "second": ("j", "k")},
-        {"index": ("for", "j")},
-        {"index": ("not-valid", "j")},
-        {"index": ("", "j")},
-        {"index": ("K", "j")},
+        {},  # No groups
+        {"index": ()},  # Empty group
+        {"index": ("i",)},  # Singleton group
+        {"index": ("i", "j", "k")},  # Non-power-two group
+        {"index": ("i", "i")},  # Duplicate within group
+        {"first": ("i", "j"), "second": ("j", "k")},  # Duplicate across groups
+        {"index": ("for", "j")},  # Keyword
+        {"index": ("not-valid", "j")},  # Invalid identifier (i.e. cannot be a variable)
+        {"index": ("", "j")},  # Empty name
+        {"index": ("K", "j")},  # NFKC alias
     ],
     ids=[
         "no-groups",
@@ -196,18 +206,21 @@ def test_reject_ambiguous_or_invalid_alphabets(groups: dict[str, tuple[str, ...]
         CipherConfig(special_variables=groups)
 
 
+# TODO(hadriano) I'm not sure what this is doing.
 @pytest.mark.parametrize("width", [0, -1, True, 1.5, "4"])
 def test_reject_invalid_length_widths(width: object) -> None:
     with pytest.raises(ValidationError):
         CipherConfig(special_variables={"index": ("i", "j")}, length_bits=width)
 
 
+# TODO(hadriano) I'm not sure what this is doing.
 @pytest.mark.parametrize("width", [0, 2, True, 1.0, "1"])
 def test_reject_unsupported_control_widths(width: object) -> None:
     with pytest.raises(ValidationError):
         CipherConfig(special_variables={"index": ("i", "j")}, control_bits=width)
 
 
+# TODO(hadriano) I'm not sure what this is doing.
 def test_alphabet_json_round_trip_preserves_symbol_order_and_multiple_widths() -> None:
     cipher = CipherConfig(special_variables={"index": ("j", "i"), "state": ("idle", "ready", "busy", "done")}, length_bits=3)
     assert CipherConfig.model_validate_json(cipher.model_dump_json()) == cipher
@@ -236,6 +249,7 @@ def test_reject_empty_reversed_or_invalid_spans(end_line: int, end_column: int) 
         SourceSpan(line=1, column=2, end_line=end_line, end_column=end_column)
 
 
+# TODO(hadriano) not reviewed
 def test_binding_schema_rejects_partial_contributions_and_bad_occurrence_order() -> None:
     occurrence = BindingOccurrence(kind="write", span=SourceSpan(line=1, column=0, end_line=1, end_column=1))
     base = VariableBinding(binding_id="module:i", scope_id="module", name="i", occurrences=(occurrence,))
@@ -271,6 +285,7 @@ def test_four_length_bits_accept_fifteen_payload_bits() -> None:
     assert result.length == 15
 
 
+# TODO(hadriano) not reviewed
 @pytest.mark.parametrize(
     ("bits", "field"),
     [("", "control"), ("1", "length"), ("100", "length"), ("10010", "payload"), ("100100", "payload")],
@@ -292,6 +307,7 @@ def test_parse_and_compile_errors_are_wrapped_without_executing(code: str) -> No
     assert isinstance(error.value.__cause__, (SyntaxError, ValueError))
 
 
+# TODO(hadriano) not reviewed, not sure why wildcard imports are such a problem...
 def test_wildcard_import_fails_explicitly_instead_of_dropping_bindings() -> None:
     with pytest.raises(UnsupportedSyntaxError) as error:
         decode("from unavailable_dependency import *\n" + source_for_bits("1010"), load_cipher())
@@ -303,6 +319,7 @@ def test_no_execution_or_dependency_import_is_needed() -> None:
     assert decode(code, load_cipher()).message_bits == "0"
 
 
+# TODO(hadriano) not reviewed
 def test_first_occurrence_can_precede_the_binding_assignment() -> None:
     code = "def first():\n    print(j)\n    j = 1\n\ndef size(i): pass\ndef second(j): pass\ndef third(i): pass\n"
     bindings = special_bindings(decode(code, load_cipher()))
@@ -310,6 +327,7 @@ def test_first_occurrence_can_precede_the_binding_assignment() -> None:
     assert bindings[0].occurrences[0].span.line == 2
 
 
+# TODO(hadriano) not reviewed
 def test_unicode_columns_are_utf8_bytes_and_strings_are_not_occurrences() -> None:
     code = 'é = "i j"; i = 0\n'
     result = decode(code, load_cipher())

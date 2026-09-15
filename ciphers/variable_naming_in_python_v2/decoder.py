@@ -363,6 +363,7 @@ def decode(code: str, cipher: CipherConfig, *, keep_only_stego_bindings: bool = 
 
     TODO(hadriano) a human never read this function implementation. This is mostly tested by the tests in
         `ciphers/variable_naming_in_python_v2/tests/test_decoder.py`.
+    TODO(hadriano) we might wnat to document the IDs properly.
     """
     # Extraction consumes the public record types in this module; defer the
     # import so they are available before bindings imports them.
