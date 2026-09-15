@@ -39,8 +39,7 @@ def _describe_stream(debug_lines: list[str], name: str, stream: object) -> None:
     except Exception as exc:
         _dbg(
             debug_lines,
-            f"{name}: type={type(stream).__name__} module={type(stream).__module__} "
-            f"fileno raised {type(exc).__name__}: {exc}",
+            f"{name}: type={type(stream).__name__} module={type(stream).__module__} fileno raised {type(exc).__name__}: {exc}",
         )
 
 
@@ -81,11 +80,7 @@ def _record_evaluator_source_hints(debug_lines: list[str], source: str) -> None:
 
 
 def _format_error(exception: BaseException, debug_lines: list[str]) -> str:
-    return (
-        f"{type(exception).__name__}: {exception}\n"
-        f"{traceback.format_exc()}\n"
-        f"--- driver debug ---\n" + "\n".join(debug_lines)
-    )
+    return f"{type(exception).__name__}: {exception}\n{traceback.format_exc()}\n--- driver debug ---\n" + "\n".join(debug_lines)
 
 
 def _run_with_log_capture(
