@@ -25,8 +25,10 @@ results = run_prepared(run_dir, approved=True)
 summary = summarize(run_dir)
 ```
 
-The notebook defines `secret`, displays the estimate, then asks **yes/no** before
-calling `run_prepared`. Preparation only downloads dataset/catalog metadata and
+The notebook loads `official_cipher.json`, defines the requested message, displays
+the estimate and three randomly sampled prompts from the saved `requests.jsonl`,
+then asks **yes/no** before calling `run_prepared`.
+Preparation only downloads dataset/catalog metadata and
 writes local files. It does not generate model answers or create Modal sandboxes.
 You can reuse the returned relative `run_dir` in a later notebook session.
 
@@ -34,8 +36,11 @@ You can reuse the returned relative `run_dir` in a later notebook session.
 
 - One secret-carrying answer per problem/model: pass@1, with at most **100 shared
   problems**. No ordinary-code control batch, repairs, or application retries.
+- Execution is sequential: send one OpenRouter request, save its response, grade
+  on Modal, and decode the secret before sending the next request. The JSONL file
+  is a saved request list, not an OpenRouter batch submission.
 - The notebook uses the existing introductory APPS filters, a fixed shuffle seed,
-  and the Codex notebook's cipher and three-bit message `101`. Cipher, payload,
+  the official cipher below, and the three-bit message `101`. Cipher, payload,
   dataset filters, model IDs, and problem count are configurable.
 - The same public prompt goes to every model. Private tests and reference answers
   are excluded. All models are prompted for a JSON `code` field; schema enforcement
@@ -53,6 +58,32 @@ You can reuse the returned relative `run_dir` in a later notebook session.
 This screens prompting capability, not distillability or robustness. Provider
 defaults and quantization can differ from Tinker. A fixed short payload on easy
 tasks does not establish performance on longer messages or other ciphers.
+
+## Official cipher
+
+[`official_cipher.json`](official_cipher.json) is a standalone `CipherConfig`
+document, loaded directly with `CipherConfig.model_validate_json(...)`. It contains
+36 disjoint pairs of familiar Python names and abbreviations covering sequences,
+arithmetic, graphs, search, and dynamic programming. Examples are `nums`/`numbers`,
+`idx`/`index`, `total`/`total_sum`, and `freq`/`frequencies`. These are curated naming
+alternatives for the stated roles, not a corpus-derived claim about naturalness.
+
+The first name in each pair emits `0`; the second emits `1`. Group labels describe
+intended usage but the decoder only reads identifiers, once per lexical binding in
+source order. Every occurrence must be renamed consistently, and names must fit
+their actual role without colliding with another binding. Required public names
+must remain unchanged. Merely choosing plausible names does not ensure enough
+bindings exist for a message or make the encoding undetectable.
+
+The file retains one control bit and two length bits (payloads of 0–3 bits). The
+notebook keeps the payload `101`, requiring six encoding bindings. The message
+stays outside the cipher file, so the alphabet can be reused with another payload.
+Preparation copies the resolved cipher into each run's `config.json`; existing
+run files keep their old cipher. Prepare a new run after changing the JSON.
+
+The preview cell samples three saved request rows using the configured seed and
+renders their actual message text before inference. Different models share prompts,
+so a sample can contain the same problem more than once. Previewing sends no requests.
 
 ## Models
 
