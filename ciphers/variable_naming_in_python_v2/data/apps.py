@@ -96,6 +96,22 @@ class AppsTestCases(BaseModel):
     outputs: list[JsonValue]
     fn_name: str | None = None
 
+    @classmethod
+    def from_dataset_value(cls, value: object) -> Self:
+        """Normalize a loader's input_output value without losing large integers.
+
+        Args:
+            value: A decoded dict or JSON string from the Dataset's input_output
+                column. In datasets 5.0.1, the Json feature can return a string
+                when its internal decoder cannot handle an integer's magnitude.
+
+        Returns:
+            Structurally validated cases with exact Python integer values. Use
+            this at the Dataset boundary before displaying or evaluating cases.
+            Invalid JSON or test structure raises a Pydantic ValidationError.
+        """
+        return cls.model_validate_json(value) if isinstance(value, str) else cls.model_validate(value)
+
     @model_validator(mode="after")
     def validate_pairs(self) -> Self:
         """Return structurally paired cases with an explicit standard-input sentinel."""
