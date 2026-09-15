@@ -1,4 +1,26 @@
-# Variable Renaming V2 (Agentic + Synthetic Data Harness Distillation)
+# Variable Renaming V2 (Prompted Code Generation and Decoding)
+
+## Current generation approach
+
+The older agentic-harness proposal below is outdated: its assumption that we need
+an iterative agentic harness to produce these examples was incorrect. The simple
+APPS experiments in [`data/`](data/README.md) have produced secret-carrying Python
+solutions with a single well-specified prompt, including with GPT-5.6 Luna. This is
+evidence for those examples, not a guarantee of success on every task or payload.
+The reusable prompt builders live in [`data/prompts.py`](data/prompts.py).
+
+[`trajectory_generation/`](trajectory_generation/README.md) defines the interface
+for scaling those experiments: sample payload lengths/bits and control bits, save
+requests, generate Codex answers concurrently, and grade code on Modal with static
+message decoding. It also defines ordinary-prompt generations from the same model
+for comparing detectability. Ordinary prompts contain no steganographic objective;
+they are distinct from explicit control-bit-0 cipher requests.
+
+Its master configuration controls all APPS difficulty tiers and answer-size/test
+filters, sampling distributions/counts, model settings, cipher, and worker/resource
+limits. Stable Pydantic records let separate tools analyze outcomes or present code
+for blinded human review. **Currently only the schemas, API contracts, example
+configuration, and CLI help are implemented; pipeline execution remains stubbed.**
 
 ## Decoder interface
 > WARNING: this code is heavily tested, but only minimally reviewed. No human _really_ understands what is going on here in detail. It's not complicated, but just FYI.
@@ -59,10 +81,11 @@ captures. Wildcard imports and PEP 695 type-parameter/type-alias scopes raise
 are not simulated. Both `make test` and the focused command in
 [`tests/README.md`](tests/README.md) discover the decoder tests.
 
-The following sections describe the broader harness proposal; the decoder
-docstrings are the agreed interface for implementation.
+The following sections retain the historical harness proposal. They are not the
+current trajectory-generation specification; use the linked pipeline contracts and
+decoder docstrings for the current interfaces.
 
-## Harness proposal
+## Historical harness proposal (superseded for trajectory generation)
 
 This encodes the same type of variable as `ciphers/variable_naming_in_python_v1` but uses an improved system to produce the trajectories we `SFT` on with the smaller model.
 
