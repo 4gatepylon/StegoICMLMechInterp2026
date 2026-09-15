@@ -2,7 +2,7 @@
 
 click>=8.1
 claude-agent-sdk
-datasets
+datasets>=5.0.1
 fastapi>=0.110
 huggingface-hub
 ipython
