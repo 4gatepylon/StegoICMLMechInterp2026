@@ -220,7 +220,7 @@ and read-only permissions. It then generates N ordinary and N secret-carrying
 solutions for one APPS task, grades them on Modal, and reports functional, exact
 message, and joint pass@k. Secret decoding uses the existing V2 decoder with one
 control bit, two length bits, and 0–3 payload bits. The notebook's small evaluation
-wrapper stays local to the notebook; reusable inference, Jinja2 prompts, and pass@k
+wrapper stays local to the notebook; reusable inference, Python prompt builders, and pass@k
 live in `data/codex_apps.py`. See the [data README](data/README.md#codex-generation-and-secret-message-experiment)
 for interfaces, credentials, failure accounting, and saved artifacts.
 

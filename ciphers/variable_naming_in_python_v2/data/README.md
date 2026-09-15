@@ -153,17 +153,26 @@ with no feedback, repair, deduplication, or application-level retries.
 
 The reusable interface in `codex_apps.py` is deliberately small:
 
+- `await preflight(CodexInferenceConfig(...))` checks artifact storage, ChatGPT
+  authentication, the exact model ID, and the configured usage reserve without
+  starting a generation thread. It returns the resolved model, writable artifact
+  base, safe tool overrides, quota windows, and check time. `infer` automatically
+  runs this for every candidate; callers can also use it to diagnose setup early.
+
 - `infer(prompt, CodexInferenceConfig(...), response_format="text" | "python")`
   is async and returns `InferenceResult`: raw text, extracted source when present,
   output-validation error, request identifiers, restrictions, and artifact path.
-  A completed malformed response is returned as a failed sample. Authentication,
+  Its `preflight` field preserves the setup/usage snapshot. A completed malformed
+  response is returned as a failed sample. Authentication,
   transport, timeout, and failed-turn errors raise and stop the experiment.
-- `build_apps_prompt(AppsPromptProblem(...), secret=None)` renders the Jinja2
-  templates in `prompts/`. The public problem model takes only `question`,
+- `build_apps_prompt(AppsPromptProblem(...), secret=None)` calls the plain Python
+  Markdown builders in `prompts.py`. The public problem model takes only `question`,
   `starter_code`, and nullable `fn_name`; references and private tests are excluded.
   A `SecretTask(cipher=CipherConfig(...), message_bits="101")` adds the supplied
-  alphabet, framing rules, and examples. This demo requires one control bit, two
-  length bits, and a 0–3-bit payload; leading zeroes and an explicitly present
+  alphabet, framing rules, and examples. `build_secret_prompt(cipher, message_bits)`
+  renders the cipher directly, using explicit loops for its Markdown table and
+  source examples. This demo requires one control bit, two length bits, and a
+  0–3-bit payload; leading zeroes and an explicitly present
   empty message are preserved.
 - `pass_at_k(n, c, k)` implements [Chen et al., equation
   1](https://arxiv.org/abs/2107.03374): `1 - C(n-c,k)/C(n,k)`. Compute it for one
@@ -184,15 +193,16 @@ predicates. Partial batches are saved but never summarized as completed experime
 
 Install the requirements in `stego`; `openai-codex==0.154.0` includes its CLI runtime.
 Use an existing **ChatGPT-backed Codex login**. The helper checks that account type,
-omits `OPENAI_API_KEY`/`CODEX_API_KEY` from its child environment, and provides no
+clears `OPENAI_API_KEY`/`CODEX_API_KEY` in its child environment, and provides no
 API-key billing fallback. Subscription/model access remains account-dependent.
-`model=None` uses the user's configured default; set an explicit model for a more
-repeatable experiment. The SDK's sampling defaults are used, with no temperature
-or random-seed control exposed by this helper.
+The default model is **`gpt-5.6-luna`**, also set explicitly in the notebook.
+Passing `model=None` instead uses the user's configured Codex default. The SDK's
+sampling defaults are used, with no temperature or random-seed control exposed
+by this helper.
 
 Every inference uses read-only filesystem permissions and denied approvals.
 Separately, config overrides disable shell/exec, local image viewing, web search,
-plugins, hooks, apps, multi-agent, and code-mode features. A preliminary SDK client
+plugins, hooks, apps, multi-agent, and code-mode features. The preflight metadata client
 reads effective configuration without creating a model thread so every inherited
 MCP server can be disabled for the inference process. It never writes the user's
 configuration or saves its credential-bearing contents. Requested overrides and
@@ -202,11 +212,46 @@ inventory. Read-only alone does not disable tools; these settings target this pi
 SDK, not an arbitrary future version. See the official [SDK documentation](https://learn.chatgpt.com/docs/codex-sdk)
 and [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 
+### Preflight policy and actionable failures
+
+`STEGO_ARTIFACTS_DIR` is required because each experiment needs persistent request,
+source, and verdict records outside the repository's source files. Preflight
+creates the configured artifact base if needed and verifies an actual write using
+a temporary file that it removes. It does not just assume that a path is writable.
+A later disk failure still raises normally; no preflight can reserve disk space.
+
+`CodexInferenceConfig` defaults to `min_remaining_usage_percent=10.0` and
+`usage_limit_id="codex"`. Every reported primary/secondary window in that bucket
+must have at least 10% remaining. Reports preserve the SDK's duration in minutes
+and reset timestamp; there is no assumption that the limits are daily or weekly.
+The policy checks the selected bucket, not unrelated product buckets or an inferred
+model-to-quota mapping. Set `usage_limit_id` explicitly for a different bucket.
+
+When usage inspection is enabled, explicit backend usage/spend blocks, a missing
+bucket, malformed quota data, or no reported windows stop the run. Error messages
+identify the failed window, remaining/required percentage, and reset time when
+available. Set `min_remaining_usage_percent=None` only when intentionally skipping
+usage inspection; authentication/model/storage checks still run. The helper never
+buys credits, consumes reset credits, or switches to a reserve model automatically.
+
+`CodexPreflightError` provides a stable `.stage` (`artifacts`, `sdk`,
+`authentication`, `model`, or `usage`) and a corrective `.hint`; the formatted
+exception includes both. OS/provider causes are chained for debugging. For example,
+`gpt-5.5-luna` fails before generation with suggestions including `gpt-5.6-luna`.
+Model validation reads the whole paginated SDK catalog. With `model=None`, it
+resolves and validates the configured default before submitting that exact ID.
+
+Checks are fresh for each call and do not reserve quota or establish eventual
+model access. Another client can consume the remaining budget; providers, disks,
+and networks can fail after validation. Those later errors propagate rather than
+being reclassified as incorrect model answers. The notebook displays a standalone
+preflight result, then each recorded inference includes its own newer snapshot.
+
 Additional local artifacts beneath `$STEGO_ARTIFACTS_DIR`:
 
 - `datasets/apps/codex-generation/<uuid>/request.json` records the prompt and
-  generation configuration before the SDK request; `answer.json` records each
-  completed response before grading. `workspace/` is an initially empty SDK cwd,
+  generation configuration and preflight snapshot before generation; `answer.json` records each
+  completed response before grading. Preflight failures create no candidate request. `workspace/` is an initially empty SDK cwd,
   without a copy of the dataset/repository. Artifacts persist until manually removed.
 - `datasets/apps/codex-evaluation/<group>-<uuid>.json` records the problem ID,
   supplied cases, configurations, optional secret, generated answers, Modal

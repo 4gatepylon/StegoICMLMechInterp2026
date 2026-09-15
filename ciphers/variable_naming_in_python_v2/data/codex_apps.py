@@ -7,36 +7,45 @@ secret decoding currently belongs to the demonstration notebook.
 import ast
 import asyncio
 import json
-import math
 import os
+from datetime import datetime, timezone
+from difflib import get_close_matches
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from tempfile import TemporaryFile
+from typing import Annotated, Literal, Self, override
 from uuid import uuid4
 
 import numpy as np
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
-from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, Sandbox
+from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, CodexError, Sandbox
 from openai_codex.async_client import AsyncCodexClient
-from openai_codex.generated.v2_all import ConfigReadResponse
+from openai_codex.generated.v2_all import ConfigReadResponse, GetAccountRateLimitsResponse, ModelListResponse, RateLimitSnapshot
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator, validate_call
 
 from ciphers.variable_naming_in_python_v2.data.apps import REPO_ROOT
+from ciphers.variable_naming_in_python_v2.data.prompts import build_python_prompt, build_secret_prompt
 from ciphers.variable_naming_in_python_v2.decoder import CipherConfig
 
 
 class CodexInferenceConfig(BaseModel):
     """Model, end-to-end SDK deadline, and storage for a fresh inference thread.
 
-    None model uses the configured Codex default. Artifacts live beneath
-    STEGO_ARTIFACTS_DIR/artifact_subdir/<uuid>; each request has an empty workspace.
+    Defaults to gpt-5.6-luna; model=None uses the configured Codex default. Artifacts
+    live beneath STEGO_ARTIFACTS_DIR/artifact_subdir/<uuid>; each request has an empty
+    workspace.
     Subscription authentication, read-only sandboxing, denied approvals, and the
     tool restrictions below are fixed for this demonstration, not tunable here.
+    min_remaining_usage_percent requires that reserve in every reported window of
+    usage_limit_id (default: the general codex bucket). None explicitly skips usage
+    inspection; model and authentication checks still run. SDK quota IDs are not
+    inferred from model names; select a different bucket explicitly if needed.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    model: str | None = None
+    model: str | None = "gpt-5.6-luna"
     timeout_s: int = Field(default=180, ge=1, le=1800, strict=True)
     artifact_subdir: Path = Path("datasets/apps/codex-generation")
+    min_remaining_usage_percent: float | None = Field(default=10.0, ge=0, le=100, allow_inf_nan=False)
+    usage_limit_id: str = Field(default="codex", min_length=1)
 
     @model_validator(mode="after")
     def validate_settings(self) -> Self:
@@ -99,6 +108,55 @@ class PythonAnswer(BaseModel):
     code: str
 
 
+class CodexPreflightError(RuntimeError):
+    """Actionable setup failure with a stable stage for higher-level callers.
+
+    stage identifies artifacts, sdk, authentication, model, or usage. hint explains
+    the corrective action and is also included in str(error). Provider/OS causes
+    are preserved through exception chaining when applicable.
+    """
+
+    @override
+    def __init__(self, stage: str, detail: str, hint: str) -> None:
+        """Unlike RuntimeError, attach the failed check and remedy to the message."""
+        self.stage = stage
+        self.hint = hint
+        super().__init__(f"Codex preflight [{stage}]: {detail} Fix: {hint}")
+
+
+class UsageWindow(BaseModel):
+    """One SDK quota window, independent of assumptions about daily/weekly limits.
+
+    name is primary or secondary within the selected quota bucket. Remaining
+    percentage is 100 minus the backend's used percentage; duration is in minutes,
+    and resets_at is Unix seconds. None metadata means the backend omitted it.
+    """
+
+    name: Literal["primary", "secondary"]
+    remaining_percent: float = Field(ge=0, le=100)
+    window_duration_mins: int | None
+    resets_at: int | None
+
+
+class PreflightResult(BaseModel):
+    """Credential-free setup snapshot returned before any generation thread starts.
+
+    model is the resolved catalog model actually submitted by infer. artifact_base_dir
+    is the writable directory under which each request creates its UUID directory.
+    config_overrides includes tool restrictions and disabled inherited MCP servers.
+    usage_limit_id identifies the inspected bucket; usage_windows is empty only
+    when the configured threshold is None. checked_at is an aware UTC timestamp.
+    This snapshot cannot reserve quota or guarantee a later request will succeed.
+    """
+
+    model: str
+    artifact_base_dir: Path
+    config_overrides: tuple[str, ...]
+    usage_limit_id: str
+    usage_windows: tuple[UsageWindow, ...]
+    checked_at: datetime
+
+
 class InferenceResult(BaseModel):
     """Persisted result of one completed SDK turn, valid or malformed.
 
@@ -110,6 +168,7 @@ class InferenceResult(BaseModel):
     beneath STEGO_ARTIFACTS_DIR and contains request.json and answer.json.
     config_overrides and sandbox/approval_mode record requested restrictions;
     item_types records SDK turn events, not an inventory of available tools.
+    preflight records the resolved model and usage snapshot used for this request.
     """
 
     text: str
@@ -123,6 +182,7 @@ class InferenceResult(BaseModel):
     sandbox: Literal["read-only"] = "read-only"
     approval_mode: Literal["deny_all"] = "deny_all"
     item_types: tuple[str, ...]
+    preflight: PreflightResult
 
 
 # Read-only permissions do not disable tools. These overrides separately remove
@@ -142,107 +202,257 @@ TOOL_RESTRICTIONS = (
 )
 
 
-def _frame_example(secret: SecretTask, payload: str) -> str:
-    """Illustrate framing with independent lambda-parameter bindings.
-
-    secret supplies the alphabet; payload is a valid example bit string. Return
-    source text, never executed. Separate lambda scopes allow repeated symbols
-    to emit again even with a single synonym group. Any last symbol is padded
-    with zeroes; the decoder ignores those bits after the framed payload.
-    """
-    names = next(iter(secret.cipher.special_variables.values()))
-    width = (len(names) - 1).bit_length()
-    frame = f"1{len(payload):02b}{payload}"
-    padded = frame.ljust(math.ceil(len(frame) / width) * width, "0")
-    return "\n".join(f"(lambda {names[int(padded[i : i + width], 2)]}: {names[int(padded[i : i + width], 2)]})(0)" for i in range(0, len(padded), width))
-
-
 def build_apps_prompt(problem: AppsPromptProblem, *, secret: SecretTask | None = None) -> str:
-    """Render a native-interface Python prompt, optionally with a secret task.
+    """Build a Markdown Python prompt, optionally adding a secret-message task.
 
-    problem contains only the three public fields documented by AppsPromptProblem;
-    callers must not place references or private tests inside those fields.
-    secret supplies the exact cipher and target payload; None requests ordinary
-    code. Return the complete prompt for infer(response_format='python'). Jinja
-    templates live beside this module; alphabet mappings and two static examples
-    are generated from the supplied cipher, including multi-bit synonym groups.
+    problem contains only the public fields documented by AppsPromptProblem;
+    callers must not put references or hidden tests inside those fields. secret
+    supplies the validated cipher and payload, or None for ordinary generation.
+    Return the complete prompt for infer(response_format='python'). Plain Python
+    builders in data/prompts.py describe the native interface and render the
+    cipher directly from its object, including its alphabet and source examples.
     """
-    templates = Environment(
-        loader=FileSystemLoader(REPO_ROOT / "ciphers/variable_naming_in_python_v2/data/prompts"),
-        undefined=StrictUndefined,
-        autoescape=False,
-        keep_trailing_newline=True,
-    )
-    alphabet = []
-    examples = []
+    prompt = build_python_prompt(problem.question, problem.starter_code, problem.fn_name)
     if secret is not None:
-        for group, names in secret.cipher.special_variables.items():
-            width = (len(names) - 1).bit_length()
-            alphabet.append((group, [(name, f"{index:0{width}b}") for index, name in enumerate(names)]))
-        examples = [(payload, _frame_example(secret, payload)) for payload in ("", secret.message_bits or "01")]
-    template = "apps_python.jinja2" if secret is None else "apps_secret.jinja2"
-    return templates.get_template(template).render(problem=problem, secret=secret, alphabet=alphabet, examples=examples)
+        prompt += "\n\n" + build_secret_prompt(secret.cipher, secret.message_bits)
+    return prompt
 
 
-async def _disabled_mcp_overrides(runtime: CodexConfig) -> tuple[str, ...]:
-    """Read effective configuration without creating a model thread.
+def _runtime(workspace: Path, overrides: tuple[str, ...]) -> CodexConfig:
+    """Build a child SDK configuration without modifying the parent's environment.
 
-    runtime uses the same cwd/environment as inference. Return only TOML overrides
-    disabling each inherited MCP server; never persist or log the rest of the
-    configuration, which may contain credentials. A separate short-lived public
-    low-level SDK client is needed because AsyncCodex has no config-read method.
-    No configuration is written back to disk.
+    workspace is the artifact-backed cwd; overrides contains only non-secret CLI
+    settings. Return CodexConfig with inherited environment and cleared billing
+    keys. Authentication is separately verified by preflight and infer.
     """
-    async with AsyncCodexClient(runtime) as client:
-        await client.initialize()
-        response = await client.request("config/read", {"cwd": runtime.cwd, "includeLayers": False}, response_model=ConfigReadResponse)
-    servers = (response.config.model_extra or {}).get("mcp_servers", {})
-    # The CLI splits dotted override keys literally; quote server names inside
-    # a TOML table VALUE so punctuation does not create a different server.
-    disabled_servers = ", ".join(json.dumps(name) + "={enabled=false}" for name in sorted(servers))
-    return ("mcp_servers={" + disabled_servers + "}",)
+    environment = os.environ.copy()
+    # Clear API billing keys for subscription auth; the SDK merges overrides into the parent environment.
+    environment["OPENAI_API_KEY"] = ""
+    environment["CODEX_API_KEY"] = ""
+    return CodexConfig(cwd=str(workspace), env=environment, config_overrides=overrides)
+
+
+def _check_usage(response: GetAccountRateLimitsResponse, config: CodexInferenceConfig) -> tuple[UsageWindow, ...]:
+    """Enforce the enabled reserve policy on a typed SDK usage response.
+
+    response is account/rateLimits/read output; its multi-bucket values follow
+    RateLimitSnapshot, with primary/secondary RateLimitWindow values. config
+    selects the exact bucket and a non-None reserve threshold. Return all reported
+    windows for recording. Raise CodexPreflightError on explicit backend blocks,
+    unavailable bucket/window data, or any window below threshold. No reset time,
+    credits balance, or missing flag is interpreted as restored permission.
+    """
+    if response.ordinary_usage_allowed is False:
+        raise CodexPreflightError("usage", "The backend disallows ordinary included usage.", "Check Codex usage limits and wait for access to resume.")
+    buckets = response.rate_limits_by_limit_id or {}
+    if config.usage_limit_id in buckets:
+        bucket = RateLimitSnapshot.model_validate(buckets[config.usage_limit_id])
+    elif response.rate_limits.limit_id == config.usage_limit_id or (response.rate_limits.limit_id is None and config.usage_limit_id == "codex"):
+        bucket = response.rate_limits
+    else:
+        raise CodexPreflightError("usage", f"No quota bucket {config.usage_limit_id!r}; available: {sorted(buckets)}.", "Set usage_limit_id to a reported bucket.")
+    if bucket.spend_control_reached or bucket.rate_limit_reached_type is not None:
+        reason = bucket.rate_limit_reached_type.value if bucket.rate_limit_reached_type else "spend control reached"
+        raise CodexPreflightError("usage", f"Bucket {config.usage_limit_id!r} is blocked: {reason}.", "Check the account/workspace usage settings or wait for the limit to reset.")
+    windows = []
+    for name in ("primary", "secondary"):
+        reported = getattr(bucket, name)
+        if reported is None:
+            continue
+        window = UsageWindow(name=name, remaining_percent=100 - reported.used_percent, window_duration_mins=reported.window_duration_mins, resets_at=reported.resets_at)
+        if window.remaining_percent < config.min_remaining_usage_percent:
+            reset = datetime.fromtimestamp(window.resets_at, timezone.utc).isoformat() if window.resets_at is not None else "unknown"
+            raise CodexPreflightError(
+                "usage",
+                f"{config.usage_limit_id}/{name} ({window.window_duration_mins or 'unknown'} minutes) has "
+                f"{window.remaining_percent:g}% remaining; requires {config.min_remaining_usage_percent:g}%. Reset: {reset}.",
+                "Wait for the reset or explicitly lower min_remaining_usage_percent.",
+            )
+        windows.append(window)
+    if not windows:
+        raise CodexPreflightError(
+            "usage",
+            f"No usage windows reported for {config.usage_limit_id!r}; the reserve cannot be verified.",
+            "Retry later, or set min_remaining_usage_percent=None to explicitly skip usage inspection.",
+        )
+    return tuple(windows)
+
+
+async def preflight(config: CodexInferenceConfig) -> PreflightResult:
+    """Check prerequisites without starting a model turn or consuming inference quota.
+
+    Args:
+        config: Model, SDK deadline, artifact directory, and reserve policy. None
+            model resolves the effective SDK default; None reserve skips quota RPCs.
+
+    Returns:
+        PreflightResult with the resolved model, writable artifact base, safe tool
+        overrides, checked usage windows, and check time. infer repeats this check
+        for every candidate and records it with the answer; callers may also call
+        it separately to diagnose setup before starting a larger experiment.
+
+    Preconditions:
+        STEGO_ARTIFACTS_DIR must name a writable location (relative values resolve
+        against REPO_ROOT). The SDK must be installed, connected, and logged in
+        through ChatGPT. The requested model must occur in the SDK model catalog.
+
+    Postconditions:
+        The artifact base directory exists and a temporary write probe has been
+        removed. No generation thread, candidate directory, or persistent SDK
+        configuration is created. The metadata client is closed. Passing establishes
+        a snapshot of setup/usage, not a quota reservation or a promise of inference
+        access. Thresholds apply to every reported window of the selected bucket;
+        missing duration/reset metadata is preserved, not guessed.
+
+    Raises:
+        CodexPreflightError: A setup, SDK, authentication, model, or usage check
+            fails. Its stage and hint support callers several layers up; underlying
+            OS/SDK causes are chained. Errors include a concrete corrective action.
+    """
+    stage = "artifacts"
+    hints = {
+        "artifacts": "Set STEGO_ARTIFACTS_DIR to a writable directory and check filesystem permissions/free space.",
+        "sdk": "Check the installed openai-codex version, network connection, and Codex configuration.",
+        "authentication": "Sign in to Codex with ChatGPT and retry; API-key accounts are not supported here.",
+        "model": "Choose an exact model ID from the Codex model catalog, such as gpt-5.6-luna.",
+        "usage": "Check Codex usage availability; retry later or explicitly disable the reserve with min_remaining_usage_percent=None.",
+    }
+    try:
+        artifact_root = os.environ.get("STEGO_ARTIFACTS_DIR")
+        if not artifact_root:
+            raise CodexPreflightError(stage, "STEGO_ARTIFACTS_DIR is not set.", hints[stage])
+        base = (REPO_ROOT / artifact_root / config.artifact_subdir).resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        with TemporaryFile(dir=base) as probe:
+            probe.write(b"Codex artifact write check")
+            probe.flush()
+        stage = "sdk"
+        async with asyncio.timeout(config.timeout_s):
+            async with AsyncCodexClient(_runtime(base, TOOL_RESTRICTIONS)) as client:
+                await client.initialize()
+                stage = "authentication"
+                account = (await client.account_read()).account
+                if account is None or account.root.type != "chatgpt":
+                    raise CodexPreflightError(stage, "No ChatGPT-backed Codex login is active.", hints[stage])
+                stage = "sdk"
+                effective = await client.request("config/read", {"cwd": str(base), "includeLayers": False}, response_model=ConfigReadResponse)
+                stage = "model"
+                models = []
+                cursor = None
+                while True:
+                    page = await client.request("model/list", {"includeHidden": True, "cursor": cursor}, response_model=ModelListResponse)
+                    models.extend(page.data)
+                    cursor = page.next_cursor
+                    if cursor is None:
+                        break
+                model = config.model or effective.config.model or next((item.model for item in models if item.is_default), None)
+                available = sorted({item.model for item in models})
+                if model not in available:
+                    suggestions = get_close_matches(model or "", available, n=3) or available[:5]
+                    raise CodexPreflightError(stage, f"Model {model!r} is not in the Codex catalog.", f"Set config.model to an available ID; suggestions: {suggestions}.")
+                servers = (effective.config.model_extra or {}).get("mcp_servers", {})
+                # Dotted CLI keys split literally; put quoted server names inside a TOML value.
+                disabled_servers = ", ".join(json.dumps(name) + "={enabled=false}" for name in sorted(servers))
+                overrides = TOOL_RESTRICTIONS + ("mcp_servers={" + disabled_servers + "}",)
+                windows = ()
+                if config.min_remaining_usage_percent is not None:
+                    stage = "usage"
+                    usage = await client.request("account/rateLimits/read", {"excludeResetCreditDetails": True}, response_model=GetAccountRateLimitsResponse)
+                    windows = _check_usage(usage, config)
+        return PreflightResult(
+            model=model, artifact_base_dir=base, config_overrides=overrides, usage_limit_id=config.usage_limit_id, usage_windows=windows, checked_at=datetime.now(timezone.utc)
+        )
+    except CodexPreflightError:
+        raise
+    except (OSError, CodexError, ValidationError) as error:
+        raise CodexPreflightError(stage, f"{type(error).__name__}: {error}", hints[stage]) from error
 
 
 async def infer(prompt: str, config: CodexInferenceConfig, *, response_format: Literal["text", "python"] = "text") -> InferenceResult:
-    """Run one prompt in a fresh ephemeral Codex thread using the existing login.
+    """Run one prompt in a fresh Codex thread and persist the result for evaluation.
 
-    prompt is sent unchanged; config controls the model, deadline, and artifact
-    location. text format is for basic questions; python requests JSON with a code
-    field. Return an InferenceResult and save it before any subsequent grading.
-    Generated source is only AST-parsed here; execution belongs to Modal.
+    Args:
+        prompt: Nonblank instructions sent unchanged to the model. For APPS code,
+            use build_apps_prompt to supply the public task and optional secret
+            instructions without reference answers or hidden tests.
+        config: CodexInferenceConfig controlling the model, SDK deadline in seconds,
+            and artifact subdirectory. Its default model is gpt-5.6-luna; an explicit
+            None uses the user's configured Codex default. The deadline covers
+            configuration discovery, startup, authentication, and the model turn;
+            subsequent Modal grading has its own limits. The default reserve policy
+            requires 10% remaining in every reported window of the codex quota bucket;
+            min_remaining_usage_percent=None explicitly skips usage inspection.
+        response_format: "text" returns an ordinary answer, useful for basic
+            questions. "python" requests JSON with a single code field, extracts
+            that field, and checks nonblank Python syntax without executing it.
 
-    Requires STEGO_ARTIFACTS_DIR and a ChatGPT-backed Codex login (subscription
-    access depends on the account). API-key accounts are rejected and billing
-    key environment variables are omitted. No application-level retry occurs.
-    Authentication/transport/deadline/failed-turn errors propagate and should stop
-    the experiment. Completed malformed answers instead return output_error so
-    callers retain them in n. Unexpected non-message/reasoning turn items raise
-    after saving the answer: this detects a restriction violation, not a new
-    permission boundary. Settings target the pinned openai-codex SDK version.
+    Returns:
+        InferenceResult containing raw text, extracted code (None for text responses
+        or unextractable JSON), and output_error (None when output validation passes).
+        It also records the prompt, turn ID, requested model, artifact directory,
+        requested restrictions, observed SDK item types, and the preflight snapshot.
+        Callers must count a completed answer with output_error as a failed sample
+        rather than dropping
+        or retrying it. Otherwise, pass code unchanged to the Modal evaluator;
+        successful syntax validation does not imply functional correctness.
+
+    Preconditions:
+        STEGO_ARTIFACTS_DIR must be set to a writable artifact root. Relative values
+        resolve against REPO_ROOT. It separates generated experiment data from
+        repository source and gives every request a durable record for inspection,
+        reproduction, and diagnosing failures before or during subsequent grading.
+        Each request uses <root>/<config.artifact_subdir>/<uuid>/, with an initially
+        empty workspace/ as the SDK working directory; no dataset or repo is copied.
+
+        The pinned openai-codex SDK must be installed and have a ChatGPT-backed
+        login with access to the selected model. This experiment uses subscription
+        capacity: API billing keys are cleared in the child environment and API-key
+        accounts are rejected. Authentication is reused, never created here.
+
+    Postconditions:
+        Preflight runs before any model turn. request.json records the prompt,
+        response_format, config, and preflight snapshot before generation starts.
+        A completed turn's answer.json is saved before returning, including malformed
+        output, so later grading failures cannot erase the generated answer. Failures before a
+        completed turn may leave only request.json; preflight failures create no
+        request. Both files remain for the caller to inspect or remove; the SDK
+        process is closed when its context exits.
+
+        Each request uses a fresh ephemeral thread with read-only permissions,
+        denied approvals, and the tool restrictions for the pinned SDK. Unexpected
+        non-message/reasoning items raise after saving the answer; this activity
+        check is not itself a permission boundary. Candidate source is never run
+        by this helper. There are no application-level retries or Modal submissions.
+
+    Raises:
+        ValueError: The prompt or response format is invalid. Configuration field
+            validation occurs when constructing config.
+        CodexPreflightError: Setup, login, model, or usage checks failed; inspect
+            stage and hint for the cause and corrective action.
+        TimeoutError: The SDK phase exceeds config.timeout_s.
+        RuntimeError: Authentication is not ChatGPT-backed, the turn does not
+            complete, or unexpected SDK item types violate the experiment contract.
+        OSError: Artifact creation or persistence fails. SDK authentication and
+            transport exceptions also propagate unchanged. Such infrastructure
+            failures should stop the experiment, not count as incorrect solutions.
     """
     if not prompt.strip() or response_format not in ("text", "python"):
         raise ValueError("Provide a nonblank prompt and text or python response_format")
-    artifact_root = os.environ.get("STEGO_ARTIFACTS_DIR")
-    if not artifact_root:
-        raise ValueError("Set STEGO_ARTIFACTS_DIR before inference")
-    artifact_dir = (REPO_ROOT / artifact_root / config.artifact_subdir / uuid4().hex).resolve()
-    workspace = artifact_dir / "workspace"
-    workspace.mkdir(parents=True)
-    environment = os.environ.copy()
-    environment.pop("OPENAI_API_KEY", None)
-    environment.pop("CODEX_API_KEY", None)
-    runtime = CodexConfig(cwd=str(workspace), env=environment, config_overrides=TOOL_RESTRICTIONS)
-    (artifact_dir / "request.json").write_text(json.dumps({"prompt": prompt, "response_format": response_format, "config": config.model_dump(mode="json")}, indent=2))
     async with asyncio.timeout(config.timeout_s):
-        overrides = TOOL_RESTRICTIONS + await _disabled_mcp_overrides(runtime)
-        runtime = CodexConfig(cwd=str(workspace), env=environment, config_overrides=overrides)
+        checks = await preflight(config)
+        artifact_dir = checks.artifact_base_dir / uuid4().hex
+        workspace = artifact_dir / "workspace"
+        workspace.mkdir(parents=True)
+        runtime = _runtime(workspace, checks.config_overrides)
+        request = {"prompt": prompt, "response_format": response_format, "config": config.model_dump(mode="json"), "preflight": checks.model_dump(mode="json")}
+        (artifact_dir / "request.json").write_text(json.dumps(request, indent=2))
         async with AsyncCodex(runtime) as codex:
             account = (await codex.account()).account
             if account is None or account.root.type != "chatgpt":
                 raise RuntimeError("Sign in to Codex with ChatGPT; API-key authentication is not used")
             thread = await codex.thread_start(
                 cwd=str(workspace),
-                model=config.model,
+                model=checks.model,
                 model_provider="openai",
                 approval_mode=ApprovalMode.deny_all,
                 sandbox=Sandbox.read_only,
@@ -273,7 +483,8 @@ async def infer(prompt: str, config: CodexInferenceConfig, *, response_format: L
         turn_id=turn.id,
         requested_model=config.model,
         artifact_dir=str(artifact_dir),
-        config_overrides=overrides,
+        config_overrides=checks.config_overrides,
+        preflight=checks,
         item_types=tuple(item.root.type for item in turn.items),
     )
     (artifact_dir / "answer.json").write_text(result.model_dump_json(indent=2))
