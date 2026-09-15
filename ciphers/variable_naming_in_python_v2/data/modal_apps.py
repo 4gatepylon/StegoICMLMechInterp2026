@@ -7,6 +7,7 @@ The upstream runner, including its permissive output comparisons, is unchanged.
 
 import json
 import shlex
+from pathlib import Path
 from typing import Literal
 
 import modal
@@ -18,46 +19,8 @@ EVALUATOR_REVISION = "b45c0ed78517a3a6492eb77b21cffbb79b1096f1"
 EVALUATOR_URL = f"https://raw.githubusercontent.com/hendrycks/apps/{EVALUATOR_REVISION}/eval/testing_util.py"
 # The remote artifact root is independent of the local notebook's artifact root.
 REMOTE_ARTIFACTS_DIR = "/stego-artifacts"
-
-# This program is sent as text to Modal; importing this module never runs it.
-# The upstream reliability guard changes process globals, so one evaluator process
-# and one Sandbox are used per solution and destroyed afterwards.
-REMOTE_DRIVER = r"""
-# request.json requires code (source text), input_output (paired inputs/outputs
-# and nullable fn_name), case_timeout_s (integer alarm limit), max_log_chars
-# (positive diagnostic length). Paths are fixed below STEGO_ARTIFACTS_DIR.
-import contextlib
-import importlib.util
-import json
-import os
-from pathlib import Path
-
-root = Path(os.environ["STEGO_ARTIFACTS_DIR"])
-payload = json.loads((root / "request.json").read_text())
-spec = importlib.util.spec_from_file_location("apps_evaluator", root / "apps_evaluator.py")
-evaluator = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(evaluator)
-evaluator.timeout = payload["case_timeout_s"]
-results = []
-error = None
-# APPS enables faulthandler against sys.stderr; StringIO has no usable fileno.
-# Open the capture file before APPS's reliability guard changes process globals.
-with (root / "evaluator.log").open("w+", encoding="utf-8") as logs:
-    with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
-        try:
-            raw = evaluator.run_test(
-                problem={"input_output": payload["input_output"]},
-                test=payload["code"],
-                debug=False,
-            )
-            results = [value.item() if hasattr(value, "item") else value for value in raw]
-        except BaseException as exception:
-            error = f"{type(exception).__name__}: {exception}"
-    logs.flush()
-    logs.seek(0)
-    diagnostic_tail = logs.read()[-payload["max_log_chars"]:]
-print(json.dumps({"results": results, "logs": diagnostic_tail, "error": error}))
-"""
+REMOTE_DRIVER_PATH = Path(__file__).resolve().parent / "sandbox_remote_drivers" / "modal_remote_driver.py"
+REMOTE_DRIVER_FILENAME = "modal_remote_driver.py"
 
 
 class ModalAppsConfig(BaseModel):
@@ -83,7 +46,7 @@ class ModalAppsConfig(BaseModel):
 
 
 class _WorkerOutput(BaseModel):
-    """Validate the JSON emitted by REMOTE_DRIVER on its stdout channel.
+    """Validate the JSON emitted by the remote driver on its stdout channel.
 
     Required ``results`` contains upstream verdicts: True/False per completed
     case, -1 for a runtime error or case timeout, or a singleton -2 for an
@@ -197,8 +160,11 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
         The Sandbox is always terminated and detached after creation, including
         upload, execution, and result-parsing failures. Authentication, image-build,
         and transport errors propagate; they are not mislabeled as wrong answers.
-        The upstream comparator is permissive (including numeric and unordered
-        fallbacks); this is an APPS-compatibility demo, not a hardened judge.
+        The worker script is uploaded as data next to ``request.json`` and executed
+        with ``python``; it is not baked into the image. The upstream comparator is
+        permissive (including numeric and unordered fallbacks); this is an
+        APPS-compatibility demo, not a hardened judge. TODO(hadriano) what would it mean for this to be
+        a "hardened judge"?
     """
     if not code.strip() or not test_cases.inputs:
         raise ValueError("A nonblank solution and at least one supplied case are required")
@@ -220,7 +186,8 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
             "max_log_chars": config.max_log_chars,
         }
         sandbox.filesystem.write_text(json.dumps(request), f"{REMOTE_ARTIFACTS_DIR}/request.json")
-        process = sandbox.exec("python", "-c", REMOTE_DRIVER, timeout=config.solution_timeout_s)
+        sandbox.filesystem.write_text(REMOTE_DRIVER_PATH.read_text(), f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}")
+        process = sandbox.exec("python", f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}", timeout=config.solution_timeout_s)
         exit_code = process.wait()
         if exit_code == -1:
             # Modal 1.5 returns -1 from ContainerProcess.wait on ExecTimeoutError.

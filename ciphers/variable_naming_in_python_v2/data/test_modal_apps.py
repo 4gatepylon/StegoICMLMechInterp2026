@@ -23,6 +23,25 @@ from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig, evaluate_on_modal, interpret_verdict
 
 
+def _uploaded_paths(fake_sandbox: Mock) -> dict[str, str]:
+    """Map each Sandbox write destination to the uploaded text."""
+    return {call.args[1]: call.args[0] for call in fake_sandbox.filesystem.write_text.call_args_list}
+
+
+def _run_remote_driver(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    """Execute the worker script against a fake evaluator in ``tmp_path``."""
+    environment = os.environ.copy()
+    environment["STEGO_ARTIFACTS_DIR"] = str(tmp_path)
+    return subprocess.run(
+        [sys.executable, str(modal_apps.REMOTE_DRIVER_PATH)],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+
+
 @pytest.mark.parametrize("serialized", [False, True])
 def test_dataset_cases_preserve_integers_beyond_machine_width(serialized: bool) -> None:
     payload = {"inputs": [[10**100]], "outputs": [10**101], "fn_name": "solve"}
@@ -84,9 +103,14 @@ def test_full_cases_and_code_upload_without_local_execution(fake_sandbox: Mock, 
     code = "raise RuntimeError('must never run locally')"
     cases = AppsTestCases(inputs=inputs, outputs=[1], fn_name=fn_name)
     result = evaluate_on_modal(code, cases)
-    payload = json.loads(fake_sandbox.filesystem.write_text.call_args.args[0])
+    uploads = _uploaded_paths(fake_sandbox)
+    request_path = f"{modal_apps.REMOTE_ARTIFACTS_DIR}/request.json"
+    driver_path = f"{modal_apps.REMOTE_ARTIFACTS_DIR}/{modal_apps.REMOTE_DRIVER_FILENAME}"
+    payload = json.loads(uploads[request_path])
     assert payload["code"] == code
     assert payload["input_output"] == cases.model_dump()
+    assert uploads[driver_path] == modal_apps.REMOTE_DRIVER_PATH.read_text()
+    assert fake_sandbox.exec.call_args.args[:2] == ("python", driver_path)
     assert result.status == "passed"
     creation = modal_apps.modal.Sandbox.create.call_args.kwargs
     assert creation["block_network"] is True
@@ -151,9 +175,7 @@ def test_remote_driver_protocol_with_fake_evaluator(tmp_path: Path) -> None:
     )
     request = {"code": "not executable Python", "input_output": {"fn_name": "solve"}, "case_timeout_s": 7, "max_log_chars": 4000}
     (tmp_path / "request.json").write_text(json.dumps(request))
-    environment = os.environ.copy()
-    environment["STEGO_ARTIFACTS_DIR"] = str(tmp_path)
-    process = subprocess.run([sys.executable, "-c", modal_apps.REMOTE_DRIVER], env=environment, text=True, capture_output=True, check=True, timeout=10)
+    process = _run_remote_driver(tmp_path)
     result = interpret_verdict(process.stdout, 3, "sb-fake")
     assert result.raw_results == [True, False, -1]
     assert "fake diagnostic" in result.logs
@@ -170,10 +192,9 @@ def test_remote_driver_preserves_error_and_truncates_unicode_logs(tmp_path: Path
     )
     request = {"code": "not executable Python", "input_output": {}, "case_timeout_s": 7, "max_log_chars": len("retained café\n")}
     (tmp_path / "request.json").write_text(json.dumps(request))
-    environment = os.environ.copy()
-    environment["STEGO_ARTIFACTS_DIR"] = str(tmp_path)
-    process = subprocess.run([sys.executable, "-c", modal_apps.REMOTE_DRIVER], env=environment, text=True, capture_output=True, check=True, timeout=10)
+    process = _run_remote_driver(tmp_path)
     result = interpret_verdict(process.stdout, 1, "sb-fake")
     assert result.status == "runner_error"
-    assert result.error == "RuntimeError: fake evaluator failure"
-    assert result.logs == "retained café\n"
+    assert result.error.startswith("RuntimeError: fake evaluator failure")
+    assert "Traceback (most recent call last)" in result.error
+    assert result.logs.endswith("retained café\n")
