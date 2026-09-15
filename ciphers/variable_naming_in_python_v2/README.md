@@ -64,6 +64,14 @@ docstrings are the agreed interface for implementation.
 
 ## Harness proposal
 
+For the initial two-stage implementation, see
+[`harness/solve_then_encode.py`](harness/solve_then_encode.py) and its
+[plain-language walkthrough](harness/README.md). It retries ordinary solutions
+until tests pass, then gives each independent encoding sample one attempt.
+The [dated experiment notebook](experiments/e20260915_solve_then_encode.ipynb)
+demonstrates three- and four-bit messages with mocked inference/evaluation by
+default, and includes the adapter for live Codex inference and Modal evaluation.
+
 This encodes the same type of variable as `ciphers/variable_naming_in_python_v1` but uses an improved system to produce the trajectories we `SFT` on with the smaller model.
 
 The general mental model is:
