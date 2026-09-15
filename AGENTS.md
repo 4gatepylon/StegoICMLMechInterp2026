@@ -26,6 +26,13 @@
    1. the repo root, for code and other files that live in this repository
    2. `os.environ["STEGO_ARTIFACTS_DIR"]`, for artifacts such as weights, data, outputs, and similar generated files
 
+## Experiments
+
+1. Put all new experiments in the applicable `experiments/` folder. Currently we are working with the V2 Python variable-name cipher, so use `ciphers/variable_naming_in_python_v2/experiments/`.
+2. Name each experiment `e<YYYYMMDD>_<name>.ipynb` for a single Jupyter notebook, or `e<YYYYMMDD>_<name>/` for a folder containing notebooks and supporting code. Use the experiment's creation date and a descriptive snake_case name; when testing a harness, include its name. For example: `e20260915_harness_v1_solve_code_then_encode_message.ipynb`.
+3. If the task moves to a different cipher or project area, it will likely need a different `experiments/` folder. The user is responsible for specifying that location. If they have not, stop and ask which experiments folder to use before creating or moving the experiment; do not assume the V2 folder still applies.
+4. Store generated data, model outputs, and reports under `STEGO_ARTIFACTS_DIR`, as required above. The experiment folder contains the notebooks and supporting source code.
+
 ## Documentation conventions
 
 1. Write for readers who have no prior conversation context.

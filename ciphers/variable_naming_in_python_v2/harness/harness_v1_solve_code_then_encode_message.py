@@ -40,7 +40,7 @@ class HarnessProblem(BaseModel):
         return self
 
 
-class SolveThenEncodeConfig(BaseModel):
+class HarnessV1SolveCodeThenEncodeMessageConfig(BaseModel):
     """One payload/cipher and the two generation budgets.
 
     max_solve_attempts includes the first solution generation. encoding_samples
@@ -122,7 +122,7 @@ class EncodingAttempt(BaseModel):
         return self.attempt.passed and self.message_matches
 
 
-class SolveThenEncodeResult(BaseModel):
+class HarnessV1SolveCodeThenEncodeMessageResult(BaseModel):
     """Complete normal-run record; serialize with model_dump_json for a report.
 
     problem and config make the record self-contained. solve_attempts is ordered
@@ -134,7 +134,7 @@ class SolveThenEncodeResult(BaseModel):
     """
 
     problem: HarnessProblem
-    config: SolveThenEncodeConfig
+    config: HarnessV1SolveCodeThenEncodeMessageConfig
     solve_attempts: list[Attempt] = Field(default_factory=list)
     encodings: list[EncodingAttempt] = Field(default_factory=list)
 
@@ -159,7 +159,7 @@ def _problem_prompt(problem: HarnessProblem) -> str:
     )
 
 
-def _encoding_prompt(problem_prompt: str, code: str, config: SolveThenEncodeConfig) -> str:
+def _encoding_prompt(problem_prompt: str, code: str, config: HarnessV1SolveCodeThenEncodeMessageConfig) -> str:
     """Append the passing baseline and exact static-decoder rules to the task.
 
     problem_prompt is the public prompt from _problem_prompt; code is the first
@@ -211,13 +211,13 @@ async def _attempt(
     return attempt
 
 
-async def solve_then_encode(
+async def harness_v1_solve_code_then_encode_message(
     problem: HarnessProblem,
-    config: SolveThenEncodeConfig,
+    config: HarnessV1SolveCodeThenEncodeMessageConfig,
     *,
     generate: Callable[[str], Awaitable[ModelResponse]],
     evaluate: Callable[[str, AppsTestCases], ModalAppsResult] = evaluate_on_modal,
-) -> SolveThenEncodeResult:
+) -> HarnessV1SolveCodeThenEncodeMessageResult:
     """Retry ordinary code to correctness, then give each encoding sample one try.
 
     Args:
@@ -232,7 +232,7 @@ async def solve_then_encode(
             supply a canned evaluator; see _attempt for its required contract.
 
     Returns:
-        SolveThenEncodeResult containing every completed solution attempt and,
+        HarnessV1SolveCodeThenEncodeMessageResult containing every completed solution attempt and,
         only after a passing baseline, every requested encoding attempt. Failed
         solutions receive only the most recent answer and a status/pass-count
         summary, not private cases or evaluator logs. Encoding samples all see
@@ -240,7 +240,7 @@ async def solve_then_encode(
         correctness and decoding are measured, even when one check fails.
         Ordinary failures return records; infrastructure failures propagate.
     """
-    result = SolveThenEncodeResult(problem=problem, config=config)
+    result = HarnessV1SolveCodeThenEncodeMessageResult(problem=problem, config=config)
     public_prompt = _problem_prompt(problem)
     prompt = public_prompt
     for _ in range(config.max_solve_attempts):

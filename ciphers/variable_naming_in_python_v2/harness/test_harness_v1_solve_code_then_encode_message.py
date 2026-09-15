@@ -19,12 +19,12 @@ from pydantic import ValidationError
 from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsResult
 from ciphers.variable_naming_in_python_v2.decoder import CipherConfig
-from ciphers.variable_naming_in_python_v2.harness.solve_then_encode import (
+from ciphers.variable_naming_in_python_v2.harness.harness_v1_solve_code_then_encode_message import (
     HarnessProblem,
+    HarnessV1SolveCodeThenEncodeMessageConfig,
+    HarnessV1SolveCodeThenEncodeMessageResult,
     ModelResponse,
-    SolveThenEncodeConfig,
-    SolveThenEncodeResult,
-    solve_then_encode,
+    harness_v1_solve_code_then_encode_message,
 )
 
 PASS_ID = "1a76c021-a1a4-4053-a2e9-a0f4c8d9d738"
@@ -74,17 +74,17 @@ def problem() -> HarnessProblem:
     return HarnessProblem(problem_id=1, question="Print zero.", test_cases=AppsTestCases(inputs=[PRIVATE_CASE], outputs=["0"]))
 
 
-def settings(**changes: object) -> SolveThenEncodeConfig:
+def settings(**changes: object) -> HarnessV1SolveCodeThenEncodeMessageConfig:
     """Create the common cipher; keyword fields select behavioral partitions."""
-    return SolveThenEncodeConfig(cipher=CipherConfig(special_variables={"index": ("i", "j")}, length_bits=3), message_bits="101", **changes)
+    return HarnessV1SolveCodeThenEncodeMessageConfig(cipher=CipherConfig(special_variables={"index": ("i", "j")}, length_bits=3), message_bits="101", **changes)
 
 
 def run_responses(
     problem: HarnessProblem,
     responses: list[ModelResponse],
-    config: SolveThenEncodeConfig | None = None,
+    config: HarnessV1SolveCodeThenEncodeMessageConfig | None = None,
     evaluate: Callable[[str, AppsTestCases], ModalAppsResult] = canned_evaluate,
-) -> SolveThenEncodeResult:
+) -> HarnessV1SolveCodeThenEncodeMessageResult:
     """Run canned responses in order and fail on extra or missing model calls.
 
     problem/config configure the real harness. responses is consumed exactly
@@ -98,7 +98,7 @@ def run_responses(
         prompts.append(prompt)
         return next(pending)
 
-    result = asyncio.run(solve_then_encode(problem, config or settings(), generate=generate, evaluate=evaluate))
+    result = asyncio.run(harness_v1_solve_code_then_encode_message(problem, config or settings(), generate=generate, evaluate=evaluate))
     assert len(prompts) == len(responses)
     return result
 
@@ -115,7 +115,7 @@ def test_mock_model_uses_previous_uuid_to_repair_then_encodes(problem: HarnessPr
             return answer(source())
         return answer(source(marker=FAIL_ID))
 
-    result = asyncio.run(solve_then_encode(problem, settings(), generate=generate, evaluate=canned_evaluate))
+    result = asyncio.run(harness_v1_solve_code_then_encode_message(problem, settings(), generate=generate, evaluate=canned_evaluate))
     assert [attempt.passed for attempt in result.solve_attempts] == [False, True]
     assert result.encodings[0].success
     assert len(prompts) == 3
@@ -124,7 +124,7 @@ def test_mock_model_uses_previous_uuid_to_repair_then_encodes(problem: HarnessPr
     assert FAIL_ID not in prompts[2]
     assert source() in prompts[2]
     assert "Read input from stdin" in prompts[0]
-    restored = SolveThenEncodeResult.model_validate_json(result.model_dump_json())
+    restored = HarnessV1SolveCodeThenEncodeMessageResult.model_validate_json(result.model_dump_json())
     assert restored == result
 
 
@@ -171,7 +171,7 @@ def test_unusable_encoding_output_is_retained_without_repair(problem: HarnessPro
 
 @pytest.mark.parametrize("payload", ["", "001", "1010"])
 def test_payload_length_and_leading_zeroes_reach_real_decoder(problem: HarnessProblem, payload: str) -> None:
-    config = SolveThenEncodeConfig(cipher=settings().cipher, message_bits=payload)
+    config = HarnessV1SolveCodeThenEncodeMessageConfig(cipher=settings().cipher, message_bits=payload)
     frame = f"1{len(payload):03b}{payload}"
     result = run_responses(problem, [answer(source()), answer(source(frame))], config)
     assert result.encodings[0].success
@@ -210,7 +210,7 @@ def test_infrastructure_failure_aborts_without_replacement(problem: HarnessProbl
         return canned_evaluate(code, cases)
 
     with pytest.raises((ConnectionError, RuntimeError)):
-        asyncio.run(solve_then_encode(problem, settings(), generate=generate, evaluate=evaluate))
+        asyncio.run(harness_v1_solve_code_then_encode_message(problem, settings(), generate=generate, evaluate=evaluate))
     assert calls == (1 if stage == "solve" else 2)
 
 
@@ -223,7 +223,7 @@ def test_invalid_budgets_are_rejected(changes: dict[str, object]) -> None:
 @pytest.mark.parametrize("payload", ["102", "1" * 8])
 def test_invalid_or_unrepresentable_payload_rejected(payload: str) -> None:
     with pytest.raises(ValidationError):
-        SolveThenEncodeConfig(cipher=settings().cipher, message_bits=payload)
+        HarnessV1SolveCodeThenEncodeMessageConfig(cipher=settings().cipher, message_bits=payload)
 
 
 def test_empty_cases_rejected_before_inference() -> None:

@@ -65,10 +65,10 @@ docstrings are the agreed interface for implementation.
 ## Harness proposal
 
 For the initial two-stage implementation, see
-[`harness/solve_then_encode.py`](harness/solve_then_encode.py) and its
+[`harness/harness_v1_solve_code_then_encode_message.py`](harness/harness_v1_solve_code_then_encode_message.py) and its
 [plain-language walkthrough](harness/README.md). It retries ordinary solutions
 until tests pass, then gives each independent encoding sample one attempt.
-The [dated experiment notebook](experiments/e20260915_solve_then_encode.ipynb)
+The [dated experiment notebook](experiments/e20260915_harness_v1_solve_code_then_encode_message.ipynb)
 demonstrates three- and four-bit messages with mocked inference/evaluation by
 default, and includes the adapter for live Codex inference and Modal evaluation.
 
