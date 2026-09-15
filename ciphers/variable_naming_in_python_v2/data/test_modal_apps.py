@@ -1,7 +1,8 @@
 """Test local Modal orchestration with mocked remote services and a fake evaluator.
 
 Partitions: all-pass/mixed/negative/missing verdicts; normal/crashed/timed-out
-processes; upload failure; empty submissions; and stdio/function-call payloads.
+processes; upload failure; empty submissions; stdio/function-call payloads;
+faulthandler-compatible diagnostic capture and truncated logs on worker errors.
 No actual APPS solution runs locally. Remote credentials, image builds, and
 upstream comparison correctness require a live Modal run and are omitted here.
 No notebook tests are defined.
@@ -137,14 +138,18 @@ def test_invalid_resource_limits_are_rejected(kwargs: dict) -> None:
 def test_remote_driver_protocol_with_fake_evaluator(tmp_path: Path) -> None:
     # Only this hand-written fake runs locally; real upstream/APPS code stays remote.
     (tmp_path / "apps_evaluator.py").write_text(
+        "import faulthandler\n"
         "def run_test(problem, test, debug):\n"
+        "    faulthandler.enable()\n"
+        "    faulthandler.dump_traceback()\n"
+        "    faulthandler.disable()\n"
         "    print('fake diagnostic')\n"
         "    assert problem['input_output']['fn_name'] == 'solve'\n"
         "    assert test == 'not executable Python'\n"
         "    assert timeout == 7\n"
         "    return [True, False, -1]\n"
     )
-    request = {"code": "not executable Python", "input_output": {"fn_name": "solve"}, "case_timeout_s": 7, "max_log_chars": 100}
+    request = {"code": "not executable Python", "input_output": {"fn_name": "solve"}, "case_timeout_s": 7, "max_log_chars": 4000}
     (tmp_path / "request.json").write_text(json.dumps(request))
     environment = os.environ.copy()
     environment["STEGO_ARTIFACTS_DIR"] = str(tmp_path)
@@ -152,3 +157,23 @@ def test_remote_driver_protocol_with_fake_evaluator(tmp_path: Path) -> None:
     result = interpret_verdict(process.stdout, 3, "sb-fake")
     assert result.raw_results == [True, False, -1]
     assert "fake diagnostic" in result.logs
+    assert "apps_evaluator.py" in result.logs
+
+
+def test_remote_driver_preserves_error_and_truncates_unicode_logs(tmp_path: Path) -> None:
+    (tmp_path / "apps_evaluator.py").write_text(
+        "import sys\n"
+        "def run_test(problem, test, debug):\n"
+        "    print('discarded prefix')\n"
+        "    print('retained café', file=sys.stderr)\n"
+        "    raise RuntimeError('fake evaluator failure')\n"
+    )
+    request = {"code": "not executable Python", "input_output": {}, "case_timeout_s": 7, "max_log_chars": len("retained café\n")}
+    (tmp_path / "request.json").write_text(json.dumps(request))
+    environment = os.environ.copy()
+    environment["STEGO_ARTIFACTS_DIR"] = str(tmp_path)
+    process = subprocess.run([sys.executable, "-c", modal_apps.REMOTE_DRIVER], env=environment, text=True, capture_output=True, check=True, timeout=10)
+    result = interpret_verdict(process.stdout, 1, "sb-fake")
+    assert result.status == "runner_error"
+    assert result.error == "RuntimeError: fake evaluator failure"
+    assert result.logs == "retained café\n"

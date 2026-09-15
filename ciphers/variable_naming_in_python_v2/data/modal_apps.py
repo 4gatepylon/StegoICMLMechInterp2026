@@ -28,7 +28,6 @@ REMOTE_DRIVER = r"""
 # (positive diagnostic length). Paths are fixed below STEGO_ARTIFACTS_DIR.
 import contextlib
 import importlib.util
-import io
 import json
 import os
 from pathlib import Path
@@ -39,20 +38,25 @@ spec = importlib.util.spec_from_file_location("apps_evaluator", root / "apps_eva
 evaluator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(evaluator)
 evaluator.timeout = payload["case_timeout_s"]
-logs = io.StringIO()
 results = []
 error = None
-with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
-    try:
-        raw = evaluator.run_test(
-            problem={"input_output": payload["input_output"]},
-            test=payload["code"],
-            debug=False,
-        )
-        results = [value.item() if hasattr(value, "item") else value for value in raw]
-    except BaseException as exception:
-        error = f"{type(exception).__name__}: {exception}"
-print(json.dumps({"results": results, "logs": logs.getvalue()[-payload["max_log_chars"]:], "error": error}))
+# APPS enables faulthandler against sys.stderr; StringIO has no usable fileno.
+# Open the capture file before APPS's reliability guard changes process globals.
+with (root / "evaluator.log").open("w+", encoding="utf-8") as logs:
+    with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
+        try:
+            raw = evaluator.run_test(
+                problem={"input_output": payload["input_output"]},
+                test=payload["code"],
+                debug=False,
+            )
+            results = [value.item() if hasattr(value, "item") else value for value in raw]
+        except BaseException as exception:
+            error = f"{type(exception).__name__}: {exception}"
+    logs.flush()
+    logs.seek(0)
+    diagnostic_tail = logs.read()[-payload["max_log_chars"]:]
+print(json.dumps({"results": results, "logs": diagnostic_tail, "error": error}))
 """
 
 
