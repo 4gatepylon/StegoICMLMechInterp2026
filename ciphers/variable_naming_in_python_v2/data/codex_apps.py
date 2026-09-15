@@ -134,7 +134,8 @@ class SecretTask(BaseModel):
     Attributes:
         cipher: Validated CipherConfig containing the ordered synonym groups and
             framing settings. This demo additionally requires length_bits=2;
-            CipherConfig already fixes control_bits=1.
+            CipherConfig already fixes control_bits=1. Prompt rendering also requires
+            a two-name group to construct an example with exactly the frame's bits.
         message_bits: Literal binary payload of length 0–3. Leading zeroes matter;
             an empty string requests a present empty message, not an absent frame.
         frame_bits: Computed control + length + payload string. For example, payload
@@ -304,6 +305,10 @@ def build_apps_prompt(problem: AppsPromptProblem, *, secret: SecretTask | None =
     Returns:
         str: Complete prompt for infer(response_format="python"), assembled by the
             Python builders in data/prompts.py with the task's native interface.
+
+    Raises:
+        ValueError: A secret cipher has no two-name group for the exact-bit example.
+            Add such a group to cipher.special_variables before rendering the prompt.
     """
     prompt = build_python_prompt(problem.question, problem.starter_code, problem.fn_name)
     if secret is not None:

@@ -175,6 +175,12 @@ The reusable interface in `codex_apps.py` is deliberately small:
   and `i/j` plus one-/two-bit layer-name groups. Each example identifies the
   control, length, and payload bindings; they cover absent/empty messages, real
   computations, one deliberately truncated payload, and a tiny PyTorch model.
+  Four additional, deliberately artificial examples then use the actual cipher:
+  absent, present-empty, non-empty with exactly the required bits, and non-empty
+  with ignored trailing bits. Their tables show the static decoder's binding roles.
+  Prompt rendering raises `ValueError` if no group has exactly two names; the exact
+  example uses that one-bit group, while the other three use the first group.
+  Non-empty examples use the requested payload, or "1" when the target is empty.
   All prompt chunks are top-level string constants in `prompts.py`.
   This demo requires one control bit, two length bits, and a
   0–3-bit payload; leading zeroes and an explicitly present
