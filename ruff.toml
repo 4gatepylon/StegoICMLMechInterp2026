@@ -3,6 +3,8 @@ line-length = 180
 
 [format]
 quote-style = "double"
+# The vendored evaluator must retain its tokens for verified_evaluator_source().
+exclude = ["ciphers/variable_naming_in_python_v2/data/sandbox_remote_drivers/apps_evaluator.py"]
 
 [lint]
 select = ["E", "F", "I", "W"]
