@@ -224,7 +224,17 @@ wrapper stays local to the notebook; reusable inference, Python prompt builders,
 live in `data/codex_apps.py`. See the [data README](data/README.md#codex-generation-and-secret-message-experiment)
 for interfaces, credentials, failure accounting, and saved artifacts.
 
-We use Tinker API.
+### Prompt-only model screening
+
+[`tinker/evaluate_openrouter.ipynb`](tinker/evaluate_openrouter.ipynb) compares
+candidate models through OpenRouter before choosing one for Tinker training.
+It saves every request and a cost estimate before asking whether to run inference,
+then measures functional, exact-message, and joint pass@1 on at most 100 shared
+APPS problems. See [`tinker/README.md`](tinker/README.md) for the small library
+interface, model list, and artifact files. OpenRouter is used only for inference;
+training would happen separately on Tinker.
+
+We use Tinker API for training.
 
 This should be around 100M tokens AT MOST. Ideally it's 1-10M tokens (look at pricing here: https://tinker-docs.thinkingmachines.ai/tinker/models/). It can be estimated with https://tinker-docs.thinkingmachines.ai/tinker/models.json (and is per 1M tokens). Example snippet:
 ```python
