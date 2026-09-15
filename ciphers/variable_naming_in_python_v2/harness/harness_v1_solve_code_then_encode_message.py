@@ -11,13 +11,16 @@ class HarnessV1SolveCodeThenEncodeMessage(BaseHarness):
     async def run(self, request: HarnessRequest) -> HarnessResult:
         """Implement BaseHarness.run with an ordinary solve before encoding.
 
-        Return two messages if solving fails or four after modification; metadata
-        'success' records the final outcome. Prompt requirements are checked before
-        inference. The initial solve sees no secret; neither stage retries.
+        Prepend the requested independent cipherless samples, then return two
+        solve messages or four after modification. metadata['success'] describes
+        this solve/encode outcome only. Validate prompts before inference.
+        Cipherless samples and the solve see no secret; neither stage retries.
         """
         steps: list[HarnessStep] = []
         public_prompt = problem_prompt(request)
         secret_prompt = message_prompt(request)
+        for _ in range(request.num_cipherless_generations):
+            await record_attempt(request, steps, public_prompt, "cipherless", self.inference_config, self.modal_config, check_message=False)
         response, success = await record_attempt(request, steps, public_prompt, "solve", self.inference_config, self.modal_config, check_message=False)
         if success:
             prompt = (

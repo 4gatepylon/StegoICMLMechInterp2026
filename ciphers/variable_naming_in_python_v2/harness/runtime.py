@@ -50,7 +50,7 @@ async def record_attempt(
     """Generate and grade once, append two messages, and return (response, success).
 
     request supplies private tests and the target. steps is the mutable conversation;
-    prompt is sent verbatim; stage labels it 'solve' or 'encode'. Existing Codex and
+    prompt is sent verbatim; stage is 'cipherless', 'solve', or 'encode'. Codex and
     Modal configs control the real services. check_message=False skips decoding.
     The returned InferenceResult supplies source for the next prompt; success means
     every requested check passed. Infrastructure errors propagate without retries.

@@ -5,6 +5,11 @@ Both classes extend `BaseHarness` and expose `await run(HarnessRequest)`.
 messages with IDs and predecessor links, and result. `message_bits=None` requests
 control zero; `""` requests an encoded empty message. Evaluation is optional metadata.
 
+`num_cipherless_generations` (default `0`) adds that many independent plain APPS
+samples to the same result, labeled `cipherless`, with correctness checks only.
+They receive no cipher instructions and are separate from V1's required solve.
+Result `success` describes the stego attempt; plain samples have individual verdicts.
+
 ## Algorithms
 
 ### `harness_v0_single_prompt`
@@ -23,7 +28,8 @@ Otherwise stop. Neither harness retries; small structural edits are allowed.
 Run the [comparison notebook](../experiments/e20260915_harness_v0_single_prompt_vs_harness_v1_solve_code_then_encode_message.ipynb)
 with the `stego` kernel, `STEGO_ARTIFACTS_DIR`, and Codex/Modal credentials.
 It uses one APPS problem and one short message for both harnesses, making at most
-three model calls. [runtime.py](runtime.py) documents the recorded metadata.
+five model calls, including one cipherless sample per harness.
+[runtime.py](runtime.py) documents the recorded metadata.
 
 The code reuses the existing inference, prompts, Modal evaluator, and decoder.
 Present-message prompts require a two-name synonym group, checked before inference.

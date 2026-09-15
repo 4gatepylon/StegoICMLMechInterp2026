@@ -33,10 +33,12 @@ class HarnessProblem(BaseModel):
 
 
 class HarnessRequest(BaseModel):
-    """Task and cipher; None requests control zero, while '' encodes an empty message."""
+    """Task/cipher plus optional plain samples; None requests control zero, '' an empty message."""
 
     model_config = ConfigDict(extra="forbid")
     problem: HarnessProblem
+    num_cipherless_generations: int = Field(default=0, ge=0, strict=True)
+    # Additional independent plain APPS samples, separate from V1's required solve.
 
     cipher: CipherConfig
     # Cipher config includes information like:

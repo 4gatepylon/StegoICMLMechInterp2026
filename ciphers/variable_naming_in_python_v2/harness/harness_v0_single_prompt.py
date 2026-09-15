@@ -11,10 +11,13 @@ class HarnessV0SinglePrompt(BaseHarness):
     async def run(self, request: HarnessRequest) -> HarnessResult:
         """Implement BaseHarness.run with one combined task/message call.
 
-        Return its user/assistant messages and metadata['success'], requiring both
-        programming correctness and message recovery. Failures are not retried.
+        Prepend the requested independent cipherless samples. metadata['success']
+        describes the encoded candidate only; each sample retains its evaluation.
+        Programming correctness and message recovery are required. No retries.
         """
         steps: list[HarnessStep] = []
         prompt = f"{problem_prompt(request)}\n\n{message_prompt(request)}"
+        for _ in range(request.num_cipherless_generations):
+            await record_attempt(request, steps, problem_prompt(request), "cipherless", self.inference_config, self.modal_config, check_message=False)
         _, success = await record_attempt(request, steps, prompt, "encode", self.inference_config, self.modal_config, check_message=True)
         return HarnessResult(harness_name="harness_v0_single_prompt", request=request, steps=steps, metadata={"success": success})
