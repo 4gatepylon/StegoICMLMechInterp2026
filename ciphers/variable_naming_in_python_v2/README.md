@@ -1,11 +1,11 @@
 # Variable Renaming V2 (Agentic + Synthetic Data Harness Distillation)
 
 ## Decoder interface
+> WARNING: this code is heavily tested, but only minimally reviewed. No human _really_ understands what is going on here in detail. It's not complicated, but just FYI.
 
-The public Pydantic schemas and exception types live in
-[`decoder.py`](decoder.py). The `decode()` entry point is currently an explicit
-`NotImplementedError` stub; the interface can be used independently of the
-forthcoming binding extraction and decoding implementation.
+The public Pydantic schemas, exception types, and working `decode()` entry point
+live in [`decoder.py`](decoder.py). Binding extraction is implemented in
+[`bindings.py`](bindings.py); it parses/compiles source without executing it.
 
 ```python
 from ciphers.variable_naming_in_python_v2.decoder import CipherConfig, decode
@@ -14,8 +14,7 @@ cipher = CipherConfig(
     special_variables={"loop_index": ("i", "j")},
     length_bits=4,
 )
-# Once implemented:
-# result = decode(code, cipher, keep_only_stego_bindings=False)
+result = decode(code, cipher, keep_only_stego_bindings=False)
 ```
 
 Ordered synonyms emit their fixed-width binary index. With this alphabet,
@@ -31,6 +30,34 @@ Ordinary bindings are included by default; the optional filter runs after
 decoding. Source columns are zero-based UTF-8 byte offsets. See model and function
 docstrings for the exact contracts, scope rules, and exceptions. No source is
 executed, and attributes/dynamically created names are outside lexical decoding.
+
+### Decoder CLI
+
+From the repository root, decode the two-group maximum-length test fixture:
+
+```bash
+fixture_dir=ciphers/variable_naming_in_python_v2/tests/fixtures/codex_generated_2_groups
+conda run -n stego python -m ciphers.variable_naming_in_python_v2.cli \
+    --cipher "$fixture_dir/cipher.json" --verbose --expect 001 \
+    "$fixture_dir/04_maximum.py"
+```
+
+This exits successfully with `is_encoding: true`, `length: 3`, and
+`message_bits: "001"` in the JSON result, matching the `04_maximum.py` entry in
+the folder's `expected_decodes.json`.
+
+JSON is written to stdout. `--verbose` writes every binding, source occurrence,
+symbol/bit role, and frame result to stderr; `--expect` checks the intended
+payload and exits nonzero on a mismatch. Without `--expect`, successful framing
+does not establish that the decoded bits equal the intended secret. Python
+callers can enable DEBUG logging for `ciphers.variable_naming_in_python_v2.decoder`.
+
+The implementation supports ordinary lexical scopes, closures, parameters,
+imports, class namespaces, comprehensions, walrus assignments, and pattern
+captures. Wildcard imports and PEP 695 type-parameter/type-alias scopes raise
+`UnsupportedSyntaxError`. Class-local runtime fallback and dynamic namespaces
+are not simulated. Both `make test` and the focused command in
+[`tests/README.md`](tests/README.md) discover the decoder tests.
 
 The following sections describe the broader harness proposal; the decoder
 docstrings are the agreed interface for implementation.
@@ -184,6 +211,8 @@ in a fresh CPU sandbox per solution, with no user secrets, blocked network acces
 configurable time/memory limits, and cleanup after success or failure. The notebook
 saves source, verdicts, and configuration below the artifact root. APPS's original
 comparison rules and error codes are preserved; this is not a stricter judge.
+See [`data/README.md`](data/README.md) for the execution flow, uploaded files,
+storage locations, sandbox lifecycle, timeouts, and per-invocation source checks.
 
 [`data/generate_apps_codex_modal.ipynb`](data/generate_apps_codex_modal.ipynb)
 demonstrates the separate generation capability. It selects one standard-input/
