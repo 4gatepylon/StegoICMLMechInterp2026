@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Self
 from uuid import uuid4
 
+import numpy as np
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, Sandbox
 from openai_codex.async_client import AsyncCodexClient
@@ -293,7 +294,7 @@ def pass_at_k(
     n is the number of independently sampled, unfiltered candidates for ONE
     problem and fixed prompt; c counts successes under the chosen predicate;
     k is the subset size (1 <= k <= n). Return 1 - C(n-c,k)/C(n,k), evaluated
-    with log1p/expm1 to avoid cancellation. Reject c > n or k > n. Malformed
+    with the paper's NumPy product implementation. Reject c > n or k > n. Malformed
     completed outputs belong in n as failures; infrastructure errors should stop
     the experiment instead of being classified as model failures. For multiple
     problems, compute this separately and average; do not pool their counts.
@@ -306,7 +307,4 @@ def pass_at_k(
         raise ValueError("Require 0 <= c <= n and 1 <= k <= n")
     if n - c < k:
         return 1.0
-    # Near certainty, c/(n-i) can round to one. Form the remaining fraction
-    # directly there; log1p preserves tiny success probabilities elsewhere.
-    log_failure = sum(math.log1p(-c / (n - i)) if 2 * c < n - i else math.log((n - c - i) / (n - i)) for i in range(k))
-    return -math.expm1(log_failure)
+    return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))

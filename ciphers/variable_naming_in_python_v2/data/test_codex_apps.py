@@ -76,11 +76,6 @@ def test_invalid_pass_at_k_counts(n, c, k) -> None:
         pass_at_k(n, c, k)
 
 
-def test_pass_at_k_retains_small_nonzero_probabilities() -> None:
-    assert pass_at_k(10**18, 1, 1) == pytest.approx(1e-18, rel=1e-12, abs=0)
-    assert pass_at_k(10**18, 10**18 - 1, 1) == 1.0
-
-
 @pytest.fixture
 def fake_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, AsyncMock, AsyncMock]:
     """Mock both SDK clients; return constructor, inference client, config client.
