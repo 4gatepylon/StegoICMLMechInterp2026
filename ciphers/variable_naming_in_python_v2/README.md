@@ -64,6 +64,14 @@ docstrings are the agreed interface for implementation.
 
 ## Harness proposal
 
+The initial implementations share [one interface](harness/interface.py):
+[`harness_v0_single_prompt`](harness/harness_v0_single_prompt.py) generates from the
+task and message together, while
+[`harness_v1_solve_code_then_encode_message`](harness/harness_v1_solve_code_then_encode_message.py)
+first generates and tests an ordinary solution, then requests one modified version.
+The [harness README](harness/README.md) links a live comparison notebook that runs
+both algorithms on the same APPS problem using Codex and Modal.
+
 This encodes the same type of variable as `ciphers/variable_naming_in_python_v1` but uses an improved system to produce the trajectories we `SFT` on with the smaller model.
 
 The general mental model is:
