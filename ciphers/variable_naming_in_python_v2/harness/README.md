@@ -1,48 +1,32 @@
 # Harnesses
 
-All implementations extend `BaseHarness` and expose `await run(HarnessRequest)`.
-The shared Pydantic models are in [interface.py](interface.py): problem, request,
-role/content/metadata messages with IDs and predecessor links, and a result.
-`message_bits=None` requests control zero; `""` requests an encoded empty message.
-Evaluations are optional metadata. Exact keys for these two implementations are
-specified in [runtime.py](runtime.py), which shares their generation and grading.
+Both classes extend `BaseHarness` and expose `await run(HarnessRequest)`.
+[interface.py](interface.py) defines the problem, request, role/content/metadata
+messages with IDs and predecessor links, and result. `message_bits=None` requests
+control zero; `""` requests an encoded empty message. Evaluation is optional metadata.
 
 ## Algorithms
 
 ### `harness_v0_single_prompt`
 
-Send the programming task and message requirement together. Generate once, check
-programming correctness and message recovery, and retain the response even on
-failure. See [the class](harness_v0_single_prompt.py).
+Send the programming task and message together. Generate once and evaluate both
+programming correctness and message recovery. Retain the answer even on failure.
 
 ### `harness_v1_solve_code_then_encode_message`
 
-Generate one ordinary solution without revealing the cipher or message. If its
-programming tests fail, stop. Otherwise request one modified version containing
-the message, then check correctness and decoding. Small structural edits are
-allowed. See [the class](harness_v1_solve_code_then_encode_message.py).
+Generate one ordinary solution. If its programming tests pass, ask once for a
+modified version containing the message, then check correctness and decoding.
+Otherwise stop. Neither harness retries; small structural edits are allowed.
 
-Both algorithms have no retries. Repeat `run()` externally for more samples.
-Private tests and evaluator logs never enter prompts. Malformed answers count as
-failures; infrastructure errors stop the run. The default evaluator uses Modal.
+## Live integration demo
 
-## Experiment and verification
+Run the [comparison notebook](../experiments/e20260915_harness_v0_single_prompt_vs_harness_v1_solve_code_then_encode_message.ipynb)
+with the `stego` kernel, `STEGO_ARTIFACTS_DIR`, and Codex/Modal credentials.
+It uses one APPS problem and one short message for both harnesses, making at most
+three model calls. [runtime.py](runtime.py) documents the recorded metadata.
 
-The [comparison notebook](../experiments/e20260915_harness_v0_single_prompt_vs_harness_v1_solve_code_then_encode_message.ipynb)
-runs both on identical problems and three-/four-bit messages. UUID-tagged mocks
-are the default; the real decoder checks their bindings. Mock grading does not
-execute source or establish program correctness. Reports live beneath
+The code reuses the existing inference, prompts, Modal evaluator, and decoder.
+Present-message prompts require a two-name synonym group, checked before inference.
+Private tests stay out of prompts. Infrastructure errors stop execution; ordinary
+failures are retained. Reports are saved under
 `STEGO_ARTIFACTS_DIR/experiments/harness_v0_vs_harness_v1/`.
-
-Live mode uses the merged [PR #56](https://github.com/4gatepylon/StegoICMLMechInterp2026/pull/56)
-inference and prompt helpers directly, including preflight checks. Present-message
-prompts require a two-name synonym group; both harnesses check before inference.
-Only the explicit absent-message instruction is added locally.
-
-```bash
-conda run -n stego python -m pytest ciphers/variable_naming_in_python_v2/harness -q
-```
-
-Shared tests cover both strategies, failure gating, code/message checks, malformed
-answers, metadata/IDs, and infrastructure errors. They omit live services,
-notebook tests, statistical success estimates, and semantic equivalence checks.
