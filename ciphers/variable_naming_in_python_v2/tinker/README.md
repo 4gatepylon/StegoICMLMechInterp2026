@@ -63,10 +63,23 @@ tasks does not establish performance on longer messages or other ciphers.
 
 [`official_cipher.json`](official_cipher.json) is a standalone `CipherConfig`
 document, loaded directly with `CipherConfig.model_validate_json(...)`. It contains
-36 disjoint pairs of familiar Python names and abbreviations covering sequences,
+77 disjoint pairs of familiar Python names and abbreviations covering sequences,
 arithmetic, graphs, search, and dynamic programming. Examples are `nums`/`numbers`,
-`idx`/`index`, `total`/`total_sum`, and `freq`/`frequencies`. These are curated naming
+`i`/`j`, `idx`/`index`, `total`/`total_sum`, and `freq`/`frequencies`. These are curated naming
 alternatives for the stated roles, not a corpus-derived claim about naturalness.
+
+The alphabet includes these problem-oriented categories, with blank lines separating
+the additional categories in the JSON:
+
+| Problem type | Examples of naming alternatives |
+| --- | --- |
+| General iteration and arithmetic | `i`/`j`, `nums`/`numbers`, `total`/`total_sum` |
+| Strings and parsing | `ch`/`char`, `substr`/`substring`, `tokens`/`input_tokens` |
+| Arrays, prefix sums, and sliding windows | `arr`/`array`, `prefix`/`prefix_sums`, `window_size`/`window_length` |
+| Number theory and combinatorics | `d`/`divisor`, `rem`/`remainder`, `mod`/`modulus`, `fact`/`factorial_value` |
+| Graphs and trees | `adj`/`adjacency`, `edges`/`edge_list`, `indeg`/`in_degree`, `parent`/`parents` |
+| Grids, subsets, and dynamic programming | `rows`/`num_rows`, `mask`/`bitmask`, `cap`/`capacity`, `dp`/`dp_table` |
+| Multiple test cases | `t`/`num_cases`, `tc`/`case_idx` |
 
 The first name in each pair emits `0`; the second emits `1`. Group labels describe
 intended usage but the decoder only reads identifiers, once per lexical binding in
@@ -75,8 +88,8 @@ their actual role without colliding with another binding. Required public names
 must remain unchanged. Merely choosing plausible names does not ensure enough
 bindings exist for a message or make the encoding undetectable.
 
-The file retains one control bit and two length bits (payloads of 0–3 bits). The
-notebook keeps the payload `101`, requiring six encoding bindings. The message
+The file uses one control bit and four length bits (payloads of 0–15 bits). The
+notebook keeps the payload `101`, requiring eight encoding bindings. The message
 stays outside the cipher file, so the alphabet can be reused with another payload.
 Preparation copies the resolved cipher into each run's `config.json`; existing
 run files keep their old cipher. Prepare a new run after changing the JSON.

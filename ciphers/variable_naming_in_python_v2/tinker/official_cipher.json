@@ -5,6 +5,7 @@
     "numeric_value": ["num", "number"],
     "sequence_element": ["item", "element"],
     "sequence_index": ["idx", "index"],
+    "loop_index": ["i", "j"],
     "sequence_position": ["pos", "position"],
     "sequence_length": ["n", "length"],
     "item_count": ["count", "item_count"],
@@ -35,8 +36,54 @@
     "current_value": ["cur", "current"],
     "previous_value": ["prev", "previous"],
     "best_value": ["best", "best_value"],
-    "validity_flag": ["valid", "is_valid"]
+    "validity_flag": ["valid", "is_valid"],
+
+    "input_text": ["text", "input_text"],
+    "input_line": ["line", "input_line"],
+    "input_tokens": ["tokens", "input_tokens"],
+    "character": ["ch", "char"],
+    "character_index": ["char_idx", "char_index"],
+    "substring": ["substr", "substring"],
+    "string_length": ["text_len", "text_length"],
+    "pattern_length": ["pattern_len", "pattern_length"],
+
+    "array": ["arr", "array"],
+    "array_length": ["arr_len", "array_length"],
+    "prefix_sums": ["prefix", "prefix_sums"],
+    "suffix_sums": ["suffix", "suffix_sums"],
+    "sorted_sequence": ["sorted_nums", "sorted_numbers"],
+    "left_index": ["left_idx", "left_index"],
+    "right_index": ["right_idx", "right_index"],
+    "window_size": ["window_size", "window_length"],
+
+    "divisor": ["d", "divisor"],
+    "remainder": ["rem", "remainder"],
+    "modulus": ["mod", "modulus"],
+    "exponent": ["exp", "exponent"],
+    "prime_factors": ["factors", "prime_factors"],
+    "greatest_common_divisor": ["g", "gcd_value"],
+    "least_common_multiple": ["lcm_val", "lcm_value"],
+    "factorial_value": ["fact", "factorial_value"],
+
+    "edge_list": ["edges", "edge_list"],
+    "edge_count": ["m", "num_edges"],
+    "vertex_count": ["num_nodes", "num_vertices"],
+    "edge_weight": ["weight", "edge_weight"],
+    "parent_map": ["parent", "parents"],
+    "in_degree": ["indeg", "in_degree"],
+    "connected_components": ["components", "connected_components"],
+    "search_depth": ["depth", "search_depth"],
+
+    "row_count": ["rows", "num_rows"],
+    "column_count": ["cols", "num_cols"],
+    "bit_mask": ["mask", "bitmask"],
+    "subset_size": ["subset_size", "subset_len"],
+    "capacity": ["cap", "capacity"],
+    "transition_cost": ["cost", "transition_cost"],
+
+    "test_case_count": ["t", "num_cases"],
+    "test_case_index": ["tc", "case_idx"]
   },
   "control_bits": 1,
-  "length_bits": 2
+  "length_bits": 4
 }
