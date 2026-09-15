@@ -64,13 +64,13 @@ docstrings are the agreed interface for implementation.
 
 ## Harness proposal
 
-For the initial two-stage implementation, see
-[`harness/harness_v1_solve_code_then_encode_message.py`](harness/harness_v1_solve_code_then_encode_message.py) and its
-[plain-language walkthrough](harness/README.md). It retries ordinary solutions
-until tests pass, then gives each independent encoding sample one attempt.
-The [dated experiment notebook](experiments/e20260915_harness_v1_solve_code_then_encode_message.ipynb)
-demonstrates three- and four-bit messages with mocked inference/evaluation by
-default, and includes the adapter for live Codex inference and Modal evaluation.
+The initial implementations share [one interface](harness/interface.py):
+[`harness_v0_single_prompt`](harness/harness_v0_single_prompt.py) generates from the
+task and message together, while
+[`harness_v1_solve_code_then_encode_message`](harness/harness_v1_solve_code_then_encode_message.py)
+first generates and tests an ordinary solution, then requests one modified version.
+The [harness README](harness/README.md) links the comparison notebook, which tests
+both algorithms on identical problems using mock callbacks by default.
 
 This encodes the same type of variable as `ciphers/variable_naming_in_python_v1` but uses an improved system to produce the trajectories we `SFT` on with the smaller model.
 
