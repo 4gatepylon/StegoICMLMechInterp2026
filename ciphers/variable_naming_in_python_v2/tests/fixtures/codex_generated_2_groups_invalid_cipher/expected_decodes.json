@@ -1,0 +1,12 @@
+{
+  "01_basic.py": {
+    "error": "ValidationError",
+    "match": "Variable name occurs more than once: 'j'",
+    "valid_cipher_folder": "../codex_generated_2_groups",
+    "decoded": {
+      "is_encoding": true,
+      "length": 1,
+      "message_bits": "0"
+    }
+  }
+}

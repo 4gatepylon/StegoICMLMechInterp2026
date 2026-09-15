@@ -1,0 +1,52 @@
+{
+  "01_basic.py": {
+    "is_encoding": true,
+    "length": 1,
+    "message_bits": "0"
+  },
+  "02_absent.py": {
+    "is_encoding": false,
+    "length": null,
+    "message_bits": null
+  },
+  "03_empty.py": {
+    "is_encoding": true,
+    "length": 0,
+    "message_bits": ""
+  },
+  "04_maximum.py": {
+    "is_encoding": true,
+    "length": 3,
+    "message_bits": "001"
+  },
+  "05_reassignment.py": {
+    "is_encoding": true,
+    "length": 1,
+    "message_bits": "0"
+  },
+  "06_closures.py": {
+    "is_encoding": true,
+    "length": 1,
+    "message_bits": "0"
+  },
+  "07_parameters.py": {
+    "is_encoding": true,
+    "length": 1,
+    "message_bits": "0"
+  },
+  "08_namespaces.py": {
+    "is_encoding": true,
+    "length": 1,
+    "message_bits": "0"
+  },
+  "09_comprehensions.py": {
+    "is_encoding": true,
+    "length": 1,
+    "message_bits": "0"
+  },
+  "10_targets.py": {
+    "is_encoding": true,
+    "length": 1,
+    "message_bits": "0"
+  }
+}
