@@ -42,6 +42,7 @@ class CodexInferenceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     model: str | None = "gpt-5.6-luna"
+    # TODO(hadriano): Add reasoning_effort, validate model support in preflight, and pass it to thread.run(effort=...).
     timeout_s: int = Field(default=180, ge=1, le=1800, strict=True)
     artifact_subdir: Path = Path("datasets/apps/codex-generation")
     min_remaining_usage_percent: float | None = Field(default=10.0, ge=0, le=100, allow_inf_nan=False)
