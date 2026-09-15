@@ -1,6 +1,6 @@
 # APPS loading and evaluation on Modal
 
-> NOTE: this is only minimally reviewed. It's mostly integration tested only.
+> NOTE: this is only minimally reviewed. It's mostly integration tested only. This README itself is also barely reviewed. On a high level it is correct, but might be redundant or have incorrect details.
 
 This directory loads programming problems from Hugging Face and evaluates Python
 solutions against their supplied input/output pairs. Dataset loading and result

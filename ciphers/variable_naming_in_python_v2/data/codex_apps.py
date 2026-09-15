@@ -18,9 +18,31 @@ Example (after setting STEGO_ARTIFACTS_DIR and signing in to Codex with ChatGPT)
     print(answer.text)
 
 Supports text/Python responses, native call-based or stdin/stdout APPS prompts,
-and 0–3-bit secret prompts. Does not provide API-key billing, configurable thinking
+and 0-3-bit secret prompts. Does not provide API-key billing, configurable thinking
 modes, candidate execution, decoding, or batch orchestration. The notebook combines
 Modal execution and the existing decoder; the helper generates without tool use.
+
+TODO(hadriano) codex decided to only support 3 bits max for some reason. We should be able to overcome this by just
+toggling the check off. Codex says a couple more tiny changes are called for:
+```
+Almost—there are **three code changes** in `SecretTask`:
+
+1. Remove `max_length=3`, retaining the binary-string validation.
+2. Replace the `length_bits == 2` restriction with a capacity check:
+   ```python
+   if len(self.message_bits).bit_length() > self.cipher.length_bits:
+       raise ValueError("Payload length exceeds the configured length field")
+   ```
+3. Make `frame_bits` use the configured width:
+   ```python
+   return f"1{len(self.message_bits):0{self.cipher.length_bits}b}{self.message_bits}"
+   ```
+
+Then choose enough `cipher.length_bits` for your payload: **B length bits support up to `2**B - 1` payload bits**. Encoder and decoder must share that configuration.
+
+The decoder and four dynamically generated examples already support configurable widths. We’d also update the restrictive documentation and tests.
+The six fixed examples can retain their explicitly stated two-bit length fields.
+```
 """
 
 import ast
@@ -144,6 +166,8 @@ class SecretTask(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     cipher: CipherConfig
+
+    # TODO(hadriano) why is max_length=3? We should be able to encode more bits.
     message_bits: str = Field(pattern=r"^[01]*$", max_length=3, strict=True)
 
     @model_validator(mode="after")
@@ -196,6 +220,8 @@ class CodexPreflightError(RuntimeError):
         super().__init__(f"Codex preflight [{stage}]: {detail} Fix: {hint}")
 
 
+# TODO(hadriano) I do not have a good understanding of how usage/codex-cli internals work, so I have no reviewed that code in detail. It seems to]
+# "work OK" (ipynb prints out consistent value with codex ... /status)
 class UsageWindow(BaseModel):
     """Record one backend-reported quota window.
 
@@ -277,6 +303,8 @@ class InferenceResult(BaseModel):
     preflight: PreflightResult
 
 
+# TODO(hadriano) being unfamiliar with codex/codex-cli I have no deep understanding of whether this actually covers all the possibilities.
+#
 # Read-only permissions do not disable tools. These overrides separately remove
 # execution/integration features, and per-server overrides below disable MCPs.
 TOOL_RESTRICTIONS = (
@@ -354,6 +382,8 @@ def _check_usage(response: GetAccountRateLimitsResponse, config: CodexInferenceC
 
     Notes:
         Reset times, credit balances, and missing flags do not imply restored access.
+
+    TODO(hadriano) minimally reviewed.
     """
     if response.ordinary_usage_allowed is False:
         raise CodexPreflightError("usage", "The backend disallows ordinary included usage.", "Check Codex usage limits and wait for access to resume.")
@@ -394,6 +424,18 @@ def _check_usage(response: GetAccountRateLimitsResponse, config: CodexInferenceC
 async def preflight(config: CodexInferenceConfig) -> PreflightResult:
     """Check prerequisites without starting a model turn or consuming inference quota.
 
+    Checks, in order:
+
+    - Artifacts: ``STEGO_ARTIFACTS_DIR`` is set; the artifact base is writable.
+    - SDK: Codex client starts within ``timeout_s``.
+    - Authentication: an active ChatGPT-backed login (not API-key).
+    - Model: the resolved ID exists in the Codex catalog (paginated, including hidden).
+    - Tools: inherited MCP servers are recorded so infer can disable them.
+    - Usage (unless ``min_remaining_usage_percent`` is None): ordinary usage is allowed,
+      the selected bucket exists and is not blocked, and every reported window meets
+      the remaining-percent reserve.
+    TODO(hadriano) why do we need this artifacts dir? Is this a good interface?
+
     Args:
         config: Model, SDK deadline, artifact directory, and reserve policy. None
             model resolves the effective SDK default; None reserve skips quota RPCs.
@@ -421,6 +463,8 @@ async def preflight(config: CodexInferenceConfig) -> PreflightResult:
         CodexPreflightError: A setup, SDK, authentication, model, or usage check
             fails. Its stage and hint support callers several layers up; underlying
             OS/SDK causes are chained. Errors include a concrete corrective action.
+
+    TODO(hadriano) not reviewed.
     """
     stage = "artifacts"
     hints = {
@@ -548,17 +592,22 @@ async def infer(prompt: str, config: CodexInferenceConfig, *, response_format: L
         OSError: Artifact creation or persistence fails. SDK authentication and
             transport exceptions also propagate unchanged. Such infrastructure
             failures should stop the experiment, not count as incorrect solutions.
+
+    TODO(hadriano) minimally reviewed.
     """
+    ################ INPUT VALIDATION ################
     if not prompt.strip() or response_format not in ("text", "python"):
         raise ValueError("Provide a nonblank prompt and text or python response_format")
     async with asyncio.timeout(config.timeout_s):
         checks = await preflight(config)
+        ################ INPUT/ENVIRONMENT SETUP ################
         artifact_dir = checks.artifact_base_dir / uuid4().hex
         workspace = artifact_dir / "workspace"
         workspace.mkdir(parents=True)
         runtime = _runtime(workspace, checks.config_overrides)
         request = {"prompt": prompt, "response_format": response_format, "config": config.model_dump(mode="json"), "preflight": checks.model_dump(mode="json")}
         (artifact_dir / "request.json").write_text(json.dumps(request, indent=2))
+        ################ MODEL (harness/codex) TURN ################
         async with AsyncCodex(runtime) as codex:
             account = (await codex.account()).account
             if account is None or account.root.type != "chatgpt":
@@ -578,6 +627,7 @@ async def infer(prompt: str, config: CodexInferenceConfig, *, response_format: L
     source = None
     output_error = None
     raw_text = turn.final_response or ""
+    ################ VALIDATE RESPONSE FORMAT ################
     if response_format == "python":
         try:
             source = PythonAnswer.model_validate_json(raw_text).code
@@ -588,6 +638,7 @@ async def infer(prompt: str, config: CodexInferenceConfig, *, response_format: L
             output_error = str(error)
     elif not raw_text.strip():
         output_error = "Blank text response"
+    ################ HYDRATE OUTPUT SCHEMA ################
     result = InferenceResult(
         text=raw_text,
         code=source,
@@ -600,6 +651,7 @@ async def infer(prompt: str, config: CodexInferenceConfig, *, response_format: L
         preflight=checks,
         item_types=tuple(item.root.type for item in turn.items),
     )
+    ################ CACHE AND RETURN ################
     (artifact_dir / "answer.json").write_text(result.model_dump_json(indent=2))
     unexpected = set(result.item_types) - {"userMessage", "agentMessage", "reasoning"}
     if unexpected:
@@ -634,10 +686,11 @@ def pass_at_k(
         Infrastructure failures should stop the experiment rather than count as
         incorrect answers. For multiple problems, average their separate estimates;
         do not pool counts. This measures oracle success, not a ranking method.
-        Source: https://arxiv.org/abs/2107.03374 (equation 1).
+        Source: https://arxiv.org/abs/2107.03374 (equation 1/figure 3).
     """
     if c > n or k > n:
         raise ValueError("Require 0 <= c <= n and 1 <= k <= n")
     if n - c < k:
         return 1.0
+    # TODO(hadriano) I made some sort of algebraic mistake when verifying this, come back later and understand what it was.
     return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))

@@ -15,6 +15,8 @@ is compared with exhaustive subset enumeration for small populations.
 SDK calls are mocked. These tests do not execute candidate programs, test
 notebooks, measure model quality, or contact Codex/Modal. Notebook-only joint
 scoring is inspected in the live demo, not unit-tested here.
+
+TODO(hadriano) this file is not read by a human. The main testing was integration testing happening in `generate_apps_codex_modal.ipynb`
 """
 
 import asyncio
