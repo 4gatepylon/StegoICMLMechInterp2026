@@ -182,9 +182,13 @@ The reusable interface in `codex_apps.py` is deliberately small:
   example uses that one-bit group, while the other three use the first group.
   Non-empty examples use the requested payload, or "1" when the target is empty.
   All prompt chunks are top-level string constants in `prompts.py`.
-  This demo requires one control bit, two length bits, and a
-  0–3-bit payload; leading zeroes and an explicitly present
-  empty message are preserved.
+  The frame uses one control bit and a configurable `cipher.length_bits`-wide
+  unsigned length field. `SecretTask` accepts binary payloads of length 0 through
+  `2**cipher.length_bits - 1` and rejects overflow. For example, `length_bits=4`
+  supports up to 15 payload bits; `length_bits=8` supports up to 255. Leading zeroes
+  and an explicitly present empty message are preserved. Generation and decoding
+  must use the same cipher. The notebook defaults and six fixed teaching examples
+  still use two length bits; active-cipher examples use the configured width.
 - `pass_at_k(n, c, k)` implements [Chen et al., equation
   1](https://arxiv.org/abs/2107.03374): `1 - C(n-c,k)/C(n,k)`. Compute it for one
   problem and predicate at a time, then average across problems if extending the
