@@ -184,6 +184,8 @@ in a fresh CPU sandbox per solution, with no user secrets, blocked network acces
 configurable time/memory limits, and cleanup after success or failure. The notebook
 saves source, verdicts, and configuration below the artifact root. APPS's original
 comparison rules and error codes are preserved; this is not a stricter judge.
+See [`data/README.md`](data/README.md) for the execution flow, uploaded files,
+storage locations, sandbox lifecycle, timeouts, and per-invocation source checks.
 
 We use Tinker API.
 
