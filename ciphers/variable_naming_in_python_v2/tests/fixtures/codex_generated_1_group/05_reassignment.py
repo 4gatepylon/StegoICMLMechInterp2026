@@ -1,4 +1,4 @@
-"""Repeated writes and loop iterations still emit only j, j, i: 1 | 1 | 0."""
+"""Repeated writes and loop iterations emit each binding once: 1 | 01 | 0."""
 
 
 def control():
@@ -7,11 +7,11 @@ def control():
     return j
 
 
-def size():
+def size(i):
     j = 1
     for j in range(2):
         ordinary = j
-    return j, ordinary
+    return i, j, ordinary
 
 
 def payload():

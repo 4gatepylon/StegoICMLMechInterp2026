@@ -1,6 +1,7 @@
 # Variable Renaming V2 (Agentic + Synthetic Data Harness Distillation)
 
 ## Decoder interface
+> WARNING: this code is heavily tested, but only minimally reviewed. No human _really_ understands what is going on here in detail. It's not complicated, but just FYI.
 
 The public Pydantic schemas, exception types, and working `decode()` entry point
 live in [`decoder.py`](decoder.py). Binding extraction is implemented in
@@ -30,12 +31,20 @@ decoding. Source columns are zero-based UTF-8 byte offsets. See model and functi
 docstrings for the exact contracts, scope rules, and exceptions. No source is
 executed, and attributes/dynamically created names are outside lexical decoding.
 
-Run the Click CLI from the repository root with a JSON `CipherConfig`:
+### Decoder CLI
+
+From the repository root, decode the two-group maximum-length test fixture:
 
 ```bash
+fixture_dir=ciphers/variable_naming_in_python_v2/tests/fixtures/codex_generated_2_groups
 conda run -n stego python -m ciphers.variable_naming_in_python_v2.cli \
-    --cipher path/to/cipher.json --verbose --expect 010 path/to/program.py
+    --cipher "$fixture_dir/cipher.json" --verbose --expect 001 \
+    "$fixture_dir/04_maximum.py"
 ```
+
+This exits successfully with `is_encoding: true`, `length: 3`, and
+`message_bits: "001"` in the JSON result, matching the `04_maximum.py` entry in
+the folder's `expected_decodes.json`.
 
 JSON is written to stdout. `--verbose` writes every binding, source occurrence,
 symbol/bit role, and frame result to stderr; `--expect` checks the intended
@@ -155,6 +164,42 @@ For now the scope is going to be ONLY single-file python code. The user would ne
 ## Training in the Steganographic Capability
 ### Dataset
 TODO(hadriano) some combination of APPs and real-world requests that I'm confident a ~27b model model can solve.
+
+The APPS loader is in [`data/apps.py`](data/apps.py). Set `STEGO_ARTIFACTS_DIR`
+before downloading; its cache is stored under `datasets/apps` within that artifact
+root. Run Python from the repository root using the `stego` environment and the
+[CPU or GPU requirements](../../README.md#setup) (`datasets>=5.0.1` is needed for
+parsed JSON test data).
+
+```python
+from ciphers.variable_naming_in_python_v2.data.apps import AppsConfig, load_apps
+
+problems = load_apps(AppsConfig(
+    split="train",
+    difficulties=("introductory",),  # APPS's easy tier; also interview/competition
+    min_lines=20,
+    max_lines=None,
+    min_chars=0,
+    max_chars=None,
+    min_tests=10,
+))
+```
+
+All answer-size bounds are inclusive and apply to supplied ground-truth solutions,
+not the question or starter code. Lines include blank/comment lines; characters
+include whitespace. A problem must have at least one qualifying answer, and only
+qualifying answers remain in `solutions`. `min_tests` counts paired supplied
+inputs/outputs, including duplicates, rather than assertions or behavioral coverage.
+Malformed rows are skipped with a warning. Neither reference answers nor tests are
+executed, so their correctness is not independently verified. Source Parquet data
+is pinned to a revision, configurable through `AppsConfig.revision`.
+
+[`data/inspect_apps.ipynb`](data/inspect_apps.ipynb) prints a reproducible sample of
+questions, qualifying reference answers, and supplied input/output cases. Its
+filters and preview counts are editable. The loader's docstrings specify the
+returned row schema, including parsed standard-input and function-call cases.
+`filter_apps(rows, config)` applies the same filters to local APPS-schema rows
+without downloads or an artifact directory.
 
 We use Tinker API.
 

@@ -4,6 +4,8 @@ Partitions extend the ten fixtures with Unicode/newline spans, additional bindin
 forms, malformed/unsupported input, and command-line diagnostics. Source is never
 executed. Runtime dataflow, dynamic namespaces, and PEP 695 annotation scopes are
 not implemented or claimed by these tests.
+
+TODO(hadriano) a human has not read this. The "official" (intended) test are the ones in `ciphers/variable_naming_in_python_v2/tests/test_decoder.py`.
 """
 
 import logging
@@ -16,15 +18,18 @@ from pydantic import ValidationError
 from ciphers.variable_naming_in_python_v2.cli import main
 from ciphers.variable_naming_in_python_v2.decoder import BindingOccurrence, CipherConfig, DecodedMessage, SourceSpan, UnsupportedSyntaxError, decode
 
+ONE_GROUP = Path("ciphers/variable_naming_in_python_v2/tests/fixtures/codex_generated_1_group")
+ONE_GROUP_CIPHER = CipherConfig.model_validate_json((ONE_GROUP / "cipher.json").read_text(encoding="utf-8"))
+
 
 def absent(code: str) -> DecodedMessage:
     """Prefix zero control, then decode the supplied code to inspect all bindings.
 
-    Return the complete result under the i/j cipher. The prefix deliberately
+    Return the complete result under the JSON fixture's i/j cipher. The prefix deliberately
     prevents capacity concerns from hiding binding-resolution regressions; these
     cases assert scope/occurrence facts independently of framing tests.
     """
-    return decode("i = 0\n" + code, CipherConfig(special_variables={"index": ("i", "j")}))
+    return decode("i = 0\n" + code, ONE_GROUP_CIPHER)
 
 
 def test_identifier_occurrence_rejects_multiline_general_span() -> None:
@@ -41,7 +46,7 @@ def test_multiline_expression_still_has_single_line_identifier_occurrences() -> 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 def test_physical_newlines_and_unicode_string_separators_preserve_positions(newline: str) -> None:
     code = newline.join(['text = "\u2028\f"', "i = 0", "result = i", ""])
-    result = decode(code, CipherConfig(special_variables={"index": ("i", "j")}))
+    result = decode(code, ONE_GROUP_CIPHER)
     binding = next(binding for binding in result.bindings if binding.name == "i")
     assert [(occ.span.line, occ.span.column) for occ in binding.occurrences] == [(2, 0), (3, 9)]
 
@@ -137,10 +142,10 @@ def test_verbose_python_logging_exposes_bindings_occurrences_bits_and_frame(capl
 
 @pytest.fixture
 def cli_inputs(tmp_path: Path) -> tuple[Path, Path]:
-    """Create isolated CLI input files; return source and cipher paths, in that order."""
+    """Copy fixtures into tmp_path for CLI mutation; return source and cipher paths."""
     source_file, cipher_file = tmp_path / "source.py", tmp_path / "cipher.json"
-    source_file.write_text("def first(j): pass\ndef second(j): pass\ndef third(i): pass\n", encoding="utf-8")
-    cipher_file.write_text(CipherConfig(special_variables={"index": ("i", "j")}, length_bits=1).model_dump_json(), encoding="utf-8")
+    source_file.write_bytes((ONE_GROUP / "01_basic.py").read_bytes())
+    cipher_file.write_bytes((ONE_GROUP / "cipher.json").read_bytes())
     return source_file, cipher_file
 
 
@@ -151,8 +156,8 @@ def test_cli_verbose_trace_and_expect_match_preserve_json_stdout_and_logging_sta
     result = CliRunner().invoke(main, [str(source_file), "--cipher", str(cipher_file), "--verbose", "--expect", "0", "--keep-only-stego-bindings"])
     assert result.exit_code == 0, result.output
     decoded = DecodedMessage.model_validate_json(result.stdout)
-    assert decoded.message_bits == "0" and len(decoded.bindings) == 3
-    assert "name='first'" in result.stderr  # Filtering applies to JSON, not trace collection.
+    assert decoded.message_bits == "0" and len(decoded.bindings) == 4
+    assert "name='control'" in result.stderr  # Filtering applies to JSON, not trace collection.
     assert "utf8_columns=" in result.stderr and "roles=message" in result.stderr
     assert "Expected payload MATCH" in result.stderr
     assert (logger.handlers, logger.level, logger.propagate) == original
@@ -168,10 +173,10 @@ def test_cli_expect_mismatch_is_nonzero_and_keeps_actual_decoded_result(cli_inpu
     assert DecodedMessage.model_validate_json(result.stdout).message_bits == "0"
 
 
-@pytest.mark.parametrize(("code", "success"), [("def first(j): pass\ndef second(i): pass\n", True), ("i = 0\n", False)])
-def test_cli_expect_empty_distinguishes_encoded_empty_from_absence(cli_inputs: tuple[Path, Path], code: str, success: bool) -> None:
+@pytest.mark.parametrize(("filename", "success"), [("03_empty.py", True), ("02_absent.py", False)])
+def test_cli_expect_empty_distinguishes_encoded_empty_from_absence(cli_inputs: tuple[Path, Path], filename: str, success: bool) -> None:
     source_file, cipher_file = cli_inputs
-    source_file.write_text(code, encoding="utf-8")
+    source_file.write_bytes((ONE_GROUP / filename).read_bytes())
     result = CliRunner().invoke(main, [str(source_file), "--cipher", str(cipher_file), "--expect", ""])
     assert (result.exit_code == 0) is success
 

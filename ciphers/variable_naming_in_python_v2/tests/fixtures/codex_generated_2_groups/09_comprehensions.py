@@ -1,6 +1,10 @@
-"""Module/outer j and outer walrus i encode 110; comprehension j trails."""
+"""Two disjoint groups interleave in source order; see expected_decodes.json."""
 
 j = 0
+
+
+def size(a):
+    return a
 
 
 def outer():
@@ -14,5 +18,5 @@ def outer():
         global j
         j += 1
 
-    values = [(i := j) for j in range(2)]
+    values = [(i := b) for b in range(2)]
     return j, i, values, update, touch

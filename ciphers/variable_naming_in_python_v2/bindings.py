@@ -5,6 +5,8 @@ identifier spans for AST fields represented as strings (imports, patterns, etc.)
 Collection precedes resolution so forward references and declarations see the
 whole lexical block. Comprehensions get distinct scopes even on Python versions
 that inline their bytecode. Type-parameter/alias scopes are rejected explicitly.
+
+TODO(hadriano) a human never read this. This is mostly tested by the tests in `ciphers/variable_naming_in_python_v2/tests/test_decoder.py`.
 """
 
 import ast

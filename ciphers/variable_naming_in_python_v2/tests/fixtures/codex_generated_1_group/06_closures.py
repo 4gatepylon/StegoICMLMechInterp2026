@@ -1,8 +1,11 @@
-"""Closure reads reuse outer j; shadow j is distinct: 1 | 1 | 0."""
+"""Closure reads reuse outer j; shadow j is distinct: 1 | 01 | 0."""
 
 
 def outer():
     j = 1
+
+    def size(i):
+        return i
 
     def inner():
         return j
@@ -11,7 +14,7 @@ def outer():
         j = 2
         return j
 
-    return inner(), shadow()
+    return size, inner(), shadow()
 
 
 def payload():
