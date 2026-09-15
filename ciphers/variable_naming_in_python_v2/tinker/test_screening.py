@@ -9,6 +9,8 @@ infrastructure failure; complete/partial results and known/missing billed cost.
 All HTTP and Modal execution are mocked. Real prompts and static decoding are used.
 Omissions: notebooks, live service integration, model quality, tokenizer accuracy,
 and internal decoder/Modal behavior already covered by their own test suites.
+
+TODO(hadriano) this should have a different name since this is not tinker, but instead open router.
 """
 
 import io

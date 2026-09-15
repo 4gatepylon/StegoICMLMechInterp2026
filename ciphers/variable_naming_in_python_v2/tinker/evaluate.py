@@ -1,8 +1,12 @@
-"""Run an approved saved request list and grade one answer per APPS problem."""
+"""Run an approved saved request list and grade one answer per APPS problem.
+
+TODO(hadriano) this should have a different name since this is not tinker, but instead open router.
+"""
 
 import ast
 import json
 import os
+import tqdm
 import urllib.request
 from pathlib import Path
 
@@ -169,7 +173,7 @@ def run_prepared(run_dir: Path, *, approved: bool = False, modal_config: ModalAp
     with (directory / "responses.jsonl").open("x") as responses_file:
         (directory / "execution.json").write_text(modal_config.model_dump_json(indent=2))
         with (directory / "results.jsonl").open("x") as results_file:
-            for index, request in enumerate(requests, 1):
+            for index, request in tqdm.tqdm(enumerate(requests, 1), total=len(requests), desc="Evaluating candidates"):
                 print(f"{index}/{len(requests)} {request.request_id}", flush=True)
                 try:
                     response = send_request(request, config.timeout_s)
