@@ -1,5 +1,7 @@
 # APPS loading and evaluation on Modal
 
+> NOTE: this is only minimally reviewed. It's mostly integration tested only.
+
 This directory loads programming problems from Hugging Face and evaluates Python
 solutions against their supplied input/output pairs. Dataset loading and result
 handling happen locally; candidate code and the upstream evaluator execute only
