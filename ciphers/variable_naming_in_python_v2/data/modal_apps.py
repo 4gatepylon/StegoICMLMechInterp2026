@@ -5,8 +5,10 @@ fresh CPU Sandbox with network access blocked and no user secrets mounted.
 The upstream runner, including its permissive output comparisons, is unchanged.
 """
 
+import io
 import json
-import shlex
+import tokenize
+import urllib.request
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +23,43 @@ EVALUATOR_URL = f"https://raw.githubusercontent.com/hendrycks/apps/{EVALUATOR_RE
 REMOTE_ARTIFACTS_DIR = "/stego-artifacts"
 REMOTE_DRIVER_PATH = Path(__file__).resolve().parent / "sandbox_remote_drivers" / "modal_remote_driver.py"
 REMOTE_DRIVER_FILENAME = "modal_remote_driver.py"
+EVALUATOR_PATH = REMOTE_DRIVER_PATH.with_name("apps_evaluator.py")
+
+
+def _python_code_tokens(source: str) -> list[tuple[int, str]]:
+    """Return Python token types/text for comparing source without comments.
+
+    ``source`` is Python source text, never executed here. The returned ordered
+    pairs omit comments, non-significant newlines, and end markers; token offsets
+    are excluded so inserted comment lines do not affect equality. Significant
+    newlines and indentation remain, as do every string literal and docstring
+    (including any ``#`` characters). Inter-token spacing is ignored by Python's
+    tokenizer. Tokenization/indentation errors propagate; this is source-token
+    equivalence, not a claim that differently written programs behave alike.
+    """
+    ignored = {tokenize.COMMENT, tokenize.NL, tokenize.ENDMARKER}
+    return [(token.type, token.string) for token in tokenize.generate_tokens(io.StringIO(source).readline) if token.type not in ignored]
+
+
+def verified_evaluator_source() -> str:
+    """Read the annotated evaluator and verify it against pinned GitHub source.
+
+    Takes no arguments: EVALUATOR_PATH and EVALUATOR_URL identify the local file
+    and immutable upstream revision. Each call reads both afresh, with a 30-second
+    HTTP timeout and no application cache. The exact returned local text is what
+    evaluate_on_modal uploads, avoiding a second file read after verification.
+
+    Raises AssertionError on a token mismatch, including changes to docstrings,
+    literals, or indentation. The explicit raise remains active under Python -O.
+    File, HTTP, decoding, and tokenizer errors propagate before any Modal resource
+    is created. Comments/blank lines may differ; neither source is executed here.
+    """
+    local_source = EVALUATOR_PATH.read_text(encoding="utf-8")
+    with urllib.request.urlopen(EVALUATOR_URL, timeout=30) as response:
+        upstream_source = response.read().decode("utf-8")
+    if _python_code_tokens(local_source) != _python_code_tokens(upstream_source):
+        raise AssertionError(f"Local APPS evaluator differs from pinned upstream code: {EVALUATOR_URL}")
+    return local_source
 
 
 class ModalAppsConfig(BaseModel):
@@ -123,24 +162,19 @@ def evaluator_image() -> modal.Image:
     """Describe the remote Python 3.10 image; building occurs only when Modal runs.
 
     Returns:
-        A Modal image with numpy==1.26.4, pyext==0.6, and the pinned upstream APPS
-        evaluator downloaded under the remote STEGO_ARTIFACTS_DIR. Python 3.10
-        retains inspect.getargspec, required by pyext. The build imports the
-        evaluator to catch dependency incompatibilities before any solution runs.
-        No repository files or local credentials are copied into the image.
+        A Modal image with numpy==1.26.4 and pyext==0.6 installed and import-checked.
+        Python 3.10 retains inspect.getargspec, required by pyext. The artifact
+        directory is created at build time; verified evaluator source and the
+        worker are uploaded separately on every invocation. No local credentials
+        or repository files are copied into this image.
     """
-    download = (
-        "import os, pathlib, urllib.request; "
-        "root = pathlib.Path(os.environ['STEGO_ARTIFACTS_DIR']); root.mkdir(parents=True, exist_ok=True); "
-        f"urllib.request.urlretrieve({EVALUATOR_URL!r}, root / 'apps_evaluator.py')"
-    )
     return (
         modal.Image.debian_slim(python_version="3.10")
         .pip_install("numpy==1.26.4", "pyext==0.6")
         .env({"STEGO_ARTIFACTS_DIR": REMOTE_ARTIFACTS_DIR})
-        .run_commands("python -c " + shlex.quote(download))
+        .run_commands(f"mkdir -p {REMOTE_ARTIFACTS_DIR}")
         .workdir(REMOTE_ARTIFACTS_DIR)
-        .run_commands("python -c 'import apps_evaluator'")
+        .run_commands("python -c 'import numpy, pyext'")
     )
 
 
@@ -160,8 +194,10 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
         The Sandbox is always terminated and detached after creation, including
         upload, execution, and result-parsing failures. Authentication, image-build,
         and transport errors propagate; they are not mislabeled as wrong answers.
-        The worker script is uploaded as data next to ``request.json`` and executed
-        with ``python``; it is not baked into the image. The upstream comparator is
+        Every call verifies the local evaluator against pinned GitHub source;
+        source mismatches and verification/network failures raise before Modal
+        lookup. The verified source and worker are uploaded next to request.json;
+        neither is baked into the image. The upstream comparator is
         permissive (including numeric and unordered fallbacks); this is an
         APPS-compatibility demo, not a hardened judge. TODO(hadriano) what would it mean for this to be
         a "hardened judge"?
@@ -169,6 +205,7 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
     if not code.strip() or not test_cases.inputs:
         raise ValueError("A nonblank solution and at least one supplied case are required")
     config = config if config is not None else ModalAppsConfig()
+    evaluator_source = verified_evaluator_source()
     app = modal.App.lookup(config.app_name, create_if_missing=True)
     sandbox = modal.Sandbox.create(
         app=app,
@@ -186,6 +223,7 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
             "max_log_chars": config.max_log_chars,
         }
         sandbox.filesystem.write_text(json.dumps(request), f"{REMOTE_ARTIFACTS_DIR}/request.json")
+        sandbox.filesystem.write_text(evaluator_source, f"{REMOTE_ARTIFACTS_DIR}/apps_evaluator.py")
         sandbox.filesystem.write_text(REMOTE_DRIVER_PATH.read_text(), f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}")
         process = sandbox.exec("python", f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}", timeout=config.solution_timeout_s)
         exit_code = process.wait()

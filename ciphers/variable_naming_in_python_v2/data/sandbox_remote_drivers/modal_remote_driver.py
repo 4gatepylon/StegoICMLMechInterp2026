@@ -1,8 +1,8 @@
 """Run one APPS evaluation inside a Modal Sandbox.
 
-The local orchestrator uploads this file next to ``request.json`` under
-``STEGO_ARTIFACTS_DIR``. This process must not import repository packages: the
-image only provides the pinned APPS evaluator at ``apps_evaluator.py``.
+The local orchestrator uploads this file, ``request.json``, and the verified
+annotated ``apps_evaluator.py`` under ``STEGO_ARTIFACTS_DIR``. This process must
+not import repository packages: the image supplies only runtime dependencies.
 
 ``request.json`` requires ``code`` (source text), ``input_output`` (paired
 inputs/outputs and nullable ``fn_name``), ``case_timeout_s`` (integer alarm

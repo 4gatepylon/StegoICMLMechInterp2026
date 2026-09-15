@@ -2,18 +2,22 @@
 
 Partitions: all-pass/mixed/negative/missing verdicts; normal/crashed/timed-out
 processes; upload failure; empty submissions; stdio/function-call payloads;
-faulthandler-compatible diagnostic capture and truncated logs on worker errors.
+faulthandler-compatible diagnostic capture and truncated logs on worker errors;
+comment/blank-line versus code/string/docstring/indentation changes; fresh source
+verification on each call and fail-closed behavior on mismatches/network errors.
 No actual APPS solution runs locally. Remote credentials, image builds, and
 upstream comparison correctness require a live Modal run and are omitted here.
 No notebook tests are defined.
 """
 
+import io
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import Mock
+from urllib.error import URLError
 
 import pytest
 from pydantic import ValidationError
@@ -95,6 +99,7 @@ def fake_sandbox(monkeypatch: pytest.MonkeyPatch) -> Mock:
     monkeypatch.setattr(modal_apps.modal.App, "lookup", Mock())
     monkeypatch.setattr(modal_apps.modal.Sandbox, "create", Mock(return_value=sandbox))
     monkeypatch.setattr(modal_apps, "evaluator_image", Mock())
+    monkeypatch.setattr(modal_apps, "verified_evaluator_source", Mock(return_value="# verified evaluator\npass\n"))
     return sandbox
 
 
@@ -110,6 +115,7 @@ def test_full_cases_and_code_upload_without_local_execution(fake_sandbox: Mock, 
     assert payload["code"] == code
     assert payload["input_output"] == cases.model_dump()
     assert uploads[driver_path] == modal_apps.REMOTE_DRIVER_PATH.read_text()
+    assert uploads[f"{modal_apps.REMOTE_ARTIFACTS_DIR}/apps_evaluator.py"] == modal_apps.verified_evaluator_source.return_value
     assert fake_sandbox.exec.call_args.args[:2] == ("python", driver_path)
     assert result.status == "passed"
     creation = modal_apps.modal.Sandbox.create.call_args.kwargs
@@ -150,6 +156,60 @@ def test_malformed_result_becomes_runner_error(fake_sandbox: Mock) -> None:
 def test_empty_submissions_fail_before_modal(fake_sandbox: Mock, code: str, inputs: list) -> None:
     with pytest.raises(ValueError, match="nonblank"):
         evaluate_on_modal(code, AppsTestCases(inputs=inputs, outputs=inputs))
+    modal_apps.modal.Sandbox.create.assert_not_called()
+    modal_apps.verified_evaluator_source.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "original,annotated,equal",
+    [
+        ("x = 1\n", "# heading\n\nx = 1  # note\n", True),
+        ("x=1\n", "x = 1\n", True),
+        ("x = (1 +\n 2)\n", "x = (1 +  # note\n\n 2)\n", True),
+        ("x = '# original'\n", "x = '# changed'\n", False),
+        ('"""original docstring"""\nx = 1\n', '"""changed docstring"""\nx = 1\n', False),
+        ("def f():\n    return 1\n", "def f():\n    return 2\n", False),
+        ("if True:\n    x = 1\ny = 2\n", "if True:\n    x = 1\n    y = 2\n", False),
+        ("x = 1\ny = 2\n", "x = 1; y = 2\n", False),
+    ],
+)
+def test_source_comparison_ignores_only_comments_and_nonsemantic_spacing(original: str, annotated: str, equal: bool) -> None:
+    assert (modal_apps._python_code_tokens(original) == modal_apps._python_code_tokens(annotated)) is equal
+
+
+def test_verifier_reads_both_sources_afresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    local_path = tmp_path / "apps_evaluator.py"
+    annotated = "# explanation\nx = '# literal'\n"
+    local_path.write_text(annotated)
+    monkeypatch.setattr(modal_apps, "EVALUATOR_PATH", local_path)
+    download = Mock(side_effect=lambda *args, **kwargs: io.BytesIO(b"x = '# literal'\n"))
+    monkeypatch.setattr(modal_apps.urllib.request, "urlopen", download)
+    assert modal_apps.verified_evaluator_source() == annotated
+    local_path.write_text(annotated + "x += 1\n")
+    with pytest.raises(AssertionError, match="differs from pinned upstream"):
+        modal_apps.verified_evaluator_source()
+    assert download.call_count == 2
+    download.assert_called_with(modal_apps.EVALUATOR_URL, timeout=30)
+    local_path.write_text(annotated)
+    download.side_effect = lambda *args, **kwargs: io.BytesIO(b"x = '# changed upstream'\n")
+    with pytest.raises(AssertionError, match="differs from pinned upstream"):
+        modal_apps.verified_evaluator_source()
+    download.side_effect = URLError("offline")
+    with pytest.raises(URLError, match="offline"):
+        modal_apps.verified_evaluator_source()
+
+
+@pytest.mark.parametrize("failure", [AssertionError("source mismatch"), URLError("offline")])
+def test_each_evaluation_verifies_before_contacting_modal(fake_sandbox: Mock, failure: Exception) -> None:
+    cases = AppsTestCases(inputs=[""], outputs=[""])
+    evaluate_on_modal("pass", cases)
+    modal_apps.modal.App.lookup.reset_mock()
+    modal_apps.modal.Sandbox.create.reset_mock()
+    modal_apps.verified_evaluator_source.side_effect = failure
+    with pytest.raises(type(failure)):
+        evaluate_on_modal("pass", cases)
+    assert modal_apps.verified_evaluator_source.call_count == 2
+    modal_apps.modal.App.lookup.assert_not_called()
     modal_apps.modal.Sandbox.create.assert_not_called()
 
 
