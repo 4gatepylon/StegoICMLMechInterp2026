@@ -170,8 +170,13 @@ The reusable interface in `codex_apps.py` is deliberately small:
   `starter_code`, and nullable `fn_name`; references and private tests are excluded.
   A `SecretTask(cipher=CipherConfig(...), message_bits="101")` adds the supplied
   alphabet, framing rules, and examples. `build_secret_prompt(cipher, message_bits)`
-  renders the cipher directly, using explicit loops for its Markdown table and
-  source examples. This demo requires one control bit, two length bits, and a
+  renders the active cipher's Markdown table directly, then appends six fixed,
+  annotated examples under two separately labeled example ciphers: `i/j` only,
+  and `i/j` plus one-/two-bit layer-name groups. Each example identifies the
+  control, length, and payload bindings; they cover absent/empty messages, real
+  computations, one deliberately truncated payload, and a tiny PyTorch model.
+  All prompt chunks are top-level string constants in `prompts.py`.
+  This demo requires one control bit, two length bits, and a
   0–3-bit payload; leading zeroes and an explicitly present
   empty message are preserved.
 - `pass_at_k(n, c, k)` implements [Chen et al., equation
