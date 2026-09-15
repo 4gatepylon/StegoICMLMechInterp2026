@@ -405,8 +405,8 @@ def build_secret_prompt(cipher: CipherConfig, message_bits: str) -> str:
         cipher: Existing decoder's validated alphabet and framing configuration,
             including at least one two-name group for the exact-bit example.
         message_bits: Binary payload that fits cipher.length_bits. SecretTask validates
-            the demo's two-length-bit/0–3-payload-bit contract before calling this
-            builder; direct callers must supply a valid payload themselves.
+            that its length is at most 2**cipher.length_bits - 1 before calling
+            this builder; direct callers must supply a valid payload themselves.
 
     Returns:
         str: Markdown to append to build_python_prompt, containing the active alphabet

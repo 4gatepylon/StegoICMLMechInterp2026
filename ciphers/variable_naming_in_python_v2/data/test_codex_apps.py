@@ -1,7 +1,9 @@
 """Contract tests for inference, prompts, framing examples, and pass@k.
 
 Partitions: call-based/stdio interfaces; public/private prompt data; zero through
-three payload bits (including leading zeroes), one-/multi-bit active alphabets;
+three payload bits exhaustively, plus empty/leading-zero/capacity-boundary payloads
+with 1/2/3/4/8-bit length fields; overflow and non-binary/non-string rejection;
+one-/multi-bit active alphabets;
 six fixed examples covering absent/empty/present/truncated frames, lexical scopes,
 and bindings that span field boundaries (PyTorch source is parsed, never imported);
 four active-cipher examples across payloads and group widths, exact/ignored bit
@@ -110,15 +112,20 @@ def test_worked_truncated_example_has_one_of_three_declared_payload_bits() -> No
         decode(source, cipher)
 
 
-@pytest.mark.parametrize("payload", ["", "0", "1", "00", "01", "10", "11", "000", "001", "010", "011", "100", "101", "110", "111"])
+@pytest.mark.parametrize(
+    "length_bits,payload",
+    [(2, payload) for payload in ["", "0", "1", "00", "01", "10", "11", "000", "001", "010", "011", "100", "101", "110", "111"]]
+    + [(length_bits, payload) for length_bits in [1, 3, 4, 8] for payload in ["", "0", "0" * (2**length_bits - 2) + "1"]]
+    + [(3, "0010"), (4, "00101")],
+)
 @pytest.mark.parametrize("width", [1, 2, 3])
-def test_active_examples_decode_exact_and_trailing_frames(payload: str, width: int) -> None:
+def test_active_examples_decode_exact_and_trailing_frames(payload: str, width: int, length_bits: int) -> None:
     cipher = CipherConfig(
         special_variables={"first": tuple(f"symbol_{index}" for index in range(2**width)), "one_bit": ("off", "on")},
-        length_bits=2,
+        length_bits=length_bits,
     )
     prompt = build_apps_prompt(AppsPromptProblem(question="Return a number."), secret=SecretTask(cipher=cipher, message_bits=payload))
-    # The new examples follow all six fixed examples and precede final instructions.
+    # The six fixed examples from https://github.com/4gatepylon/StegoICMLMechInterp2026/pull/56 use separate ciphers; decode only the active section here.
     active_section = prompt.split("## Four examples using YOUR active cipher", 1)[1].split("## Apply this to your answer", 1)[0]
     examples = re.findall(r"```python\n(.*?)\n```", active_section, re.DOTALL)
     assert len(examples) == 4
@@ -129,10 +136,10 @@ def test_active_examples_decode_exact_and_trailing_frames(payload: str, width: i
         assert decoded.message_bits == expected
         roles = [role for binding in decoded.bindings for role in binding.bit_roles]
         assert roles.count("control") == 1
-        assert roles.count("length") == (0 if expected is None else 2)
+        assert roles.count("length") == (0 if expected is None else length_bits)
         assert roles.count("message") == len(expected or "")
         if index == 2:
-            assert len(roles) == 3 + len(expected)
+            assert len(roles) == 1 + length_bits + len(expected)
             assert "ignored" not in roles
             assert all(len(binding.bits) == 1 for binding in decoded.bindings)
         if index == 3:
@@ -150,10 +157,37 @@ def test_secret_prompt_requires_one_bit_group_for_exact_example(width: int) -> N
         build_apps_prompt(AppsPromptProblem(question="Return a number."), secret=secret)
 
 
-@pytest.mark.parametrize("payload,width", [("0000", 2), ("x", 2), ("1", 4)])
-def test_secret_rejects_incompatible_framing(payload: str, width: int) -> None:
+@pytest.mark.parametrize("length_bits", [1, 2, 3, 4, 8])
+def test_secret_frame_round_trips_at_capacity_boundaries(length_bits: int) -> None:
+    cipher = CipherConfig(special_variables={"index": ("i", "j")}, length_bits=length_bits)
+    capacity = 2**length_bits - 1
+    for payload_length in sorted({0, 1, capacity - 1, capacity}):
+        payload = "" if payload_length == 0 else "0" * (payload_length - 1) + "1"
+        secret = SecretTask(cipher=cipher, message_bits=payload)
+        source = "\n".join(f"(lambda {('i', 'j')[int(bit)]}: None)(0)" for bit in secret.frame_bits)
+        decoded = decode(source, cipher, keep_only_stego_bindings=True)
+        assert decoded.is_encoding is True
+        assert decoded.length == payload_length
+        assert decoded.message_bits == payload
+        assert [role for binding in decoded.bindings for role in binding.bit_roles] == (["control"] + ["length"] * length_bits + ["message"] * payload_length)
+        prompt = build_apps_prompt(AppsPromptProblem(question="Return a number."), secret=secret)
+        assert f"Required frame: `{secret.frame_bits}`" in prompt
+        assert f"Length: exactly {length_bits} unsigned big-endian bits." in prompt
+        assert f"Payload: 0 to {capacity} bits" in prompt
+
+
+@pytest.mark.parametrize("length_bits", [1, 2, 3, 4, 8])
+@pytest.mark.parametrize("overflow", [1, 2])
+def test_secret_rejects_payload_lengths_beyond_capacity(length_bits: int, overflow: int) -> None:
+    payload = "0" * (2**length_bits - 1 + overflow)
+    with pytest.raises(ValidationError, match="Payload length exceeds the configured length field"):
+        SecretTask(cipher=CipherConfig(special_variables={"index": ("i", "j")}, length_bits=length_bits), message_bits=payload)
+
+
+@pytest.mark.parametrize("payload", ["x", "102", " 1", "1\n", 101, b"101", None])
+def test_secret_rejects_non_binary_or_non_string_payloads(payload: object) -> None:
     with pytest.raises(ValidationError):
-        SecretTask(cipher=CipherConfig(special_variables={"index": ("i", "j")}, length_bits=width), message_bits=payload)
+        SecretTask(cipher=CipherConfig(special_variables={"index": ("i", "j")}, length_bits=4), message_bits=payload)
 
 
 def test_pass_at_k_matches_every_small_population_and_subset() -> None:

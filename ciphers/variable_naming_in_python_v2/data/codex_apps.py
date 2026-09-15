@@ -18,31 +18,10 @@ Example (after setting STEGO_ARTIFACTS_DIR and signing in to Codex with ChatGPT)
     print(answer.text)
 
 Supports text/Python responses, native call-based or stdin/stdout APPS prompts,
-and 0-3-bit secret prompts. Does not provide API-key billing, configurable thinking
-modes, candidate execution, decoding, or batch orchestration. The notebook combines
-Modal execution and the existing decoder; the helper generates without tool use.
-
-TODO(hadriano) codex decided to only support 3 bits max for some reason. We should be able to overcome this by just
-toggling the check off. Codex says a couple more tiny changes are called for:
-```
-Almost—there are **three code changes** in `SecretTask`:
-
-1. Remove `max_length=3`, retaining the binary-string validation.
-2. Replace the `length_bits == 2` restriction with a capacity check:
-   ```python
-   if len(self.message_bits).bit_length() > self.cipher.length_bits:
-       raise ValueError("Payload length exceeds the configured length field")
-   ```
-3. Make `frame_bits` use the configured width:
-   ```python
-   return f"1{len(self.message_bits):0{self.cipher.length_bits}b}{self.message_bits}"
-   ```
-
-Then choose enough `cipher.length_bits` for your payload: **B length bits support up to `2**B - 1` payload bits**. Encoder and decoder must share that configuration.
-
-The decoder and four dynamically generated examples already support configurable widths. We’d also update the restrictive documentation and tests.
-The six fixed examples can retain their explicitly stated two-bit length fields.
-```
+and secret prompts with configurable payload-length fields. Does not provide
+API-key billing, configurable thinking modes, candidate execution, decoding, or
+batch orchestration. The notebook combines Modal execution and the existing
+decoder; the helper generates without tool use.
 """
 
 import ast
@@ -155,32 +134,33 @@ class SecretTask(BaseModel):
 
     Attributes:
         cipher: Validated CipherConfig containing the ordered synonym groups and
-            framing settings. This demo additionally requires length_bits=2;
-            CipherConfig already fixes control_bits=1. Prompt rendering also requires
+            framing settings. CipherConfig fixes control_bits=1 and requires a
+            positive length_bits width. Prompt rendering also requires
             a two-name group to construct an example with exactly the frame's bits.
-        message_bits: Literal binary payload of length 0–3. Leading zeroes matter;
-            an empty string requests a present empty message, not an absent frame.
+        message_bits: Literal binary payload of length 0 through 2**cipher.length_bits
+            - 1, checked during construction. Leading zeroes matter; an empty string
+            requests a present empty message, not an absent frame.
         frame_bits: Computed control + length + payload string. For example, payload
-            "101" produces "111101", while an empty payload produces "100".
+            "101" with length_bits=4 produces "10011101"; an empty payload produces
+            "10000". Use the same cipher configuration when decoding generated code.
     """
 
     model_config = ConfigDict(extra="forbid")
     cipher: CipherConfig
 
-    # TODO(hadriano) why is max_length=3? We should be able to encode more bits.
-    message_bits: str = Field(pattern=r"^[01]*$", max_length=3, strict=True)
+    message_bits: str = Field(pattern=r"^[01]*$", strict=True)
 
     @model_validator(mode="after")
     def validate_frame(self) -> Self:
-        """Require the framing requested by this experiment; return this task."""
-        if self.cipher.length_bits != 2:
-            raise ValueError("This demo requires exactly two length bits")
+        """Reject payloads whose lengths overflow the configured field; return this task."""
+        if len(self.message_bits).bit_length() > self.cipher.length_bits:
+            raise ValueError("Payload length exceeds the configured length field")
         return self
 
     @property
     def frame_bits(self) -> str:
         """Return present-control + big-endian length + exact payload bits."""
-        return f"1{len(self.message_bits):02b}{self.message_bits}"
+        return f"1{len(self.message_bits):0{self.cipher.length_bits}b}{self.message_bits}"
 
 
 class PythonAnswer(BaseModel):
