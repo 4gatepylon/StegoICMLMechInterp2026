@@ -140,3 +140,84 @@ pass for `status="passed"`. The wrapper distinguishes `failed`, whole-command
 `timeout`, and `runner_error`; unexpected missing verdicts cannot count as a pass.
 Authentication, verification, image-build, and transport failures raise exceptions.
 The notebook can stop on such failures before writing its final combined report.
+
+## Codex generation and secret-message experiment
+
+`generate_apps_codex_modal.ipynb` first demonstrates basic text inference, then
+samples N ordinary Python answers and N secret-carrying answers for one filtered
+APPS question. Defaults are N=3, seed=42, and the loader's usual ≥10-test filter.
+Both call-based and stdin/stdout problems keep their native interface. References
+only establish eligibility; generated answers are not filtered by length or
+correctness. Each group uses an identical prompt across fresh ephemeral threads,
+with no feedback, repair, deduplication, or application-level retries.
+
+The reusable interface in `codex_apps.py` is deliberately small:
+
+- `infer(prompt, CodexInferenceConfig(...), response_format="text" | "python")`
+  is async and returns `InferenceResult`: raw text, extracted source when present,
+  output-validation error, request identifiers, restrictions, and artifact path.
+  A completed malformed response is returned as a failed sample. Authentication,
+  transport, timeout, and failed-turn errors raise and stop the experiment.
+- `build_apps_prompt(AppsPromptProblem(...), secret=None)` renders the Jinja2
+  templates in `prompts/`. The public problem model takes only `question`,
+  `starter_code`, and nullable `fn_name`; references and private tests are excluded.
+  A `SecretTask(cipher=CipherConfig(...), message_bits="101")` adds the supplied
+  alphabet, framing rules, and examples. This demo requires one control bit, two
+  length bits, and a 0–3-bit payload; leading zeroes and an explicitly present
+  empty message are preserved.
+- `pass_at_k(n, c, k)` implements [Chen et al., equation
+  1](https://arxiv.org/abs/2107.03374): `1 - C(n-c,k)/C(n,k)`. Compute it for one
+  problem and predicate at a time, then average across problems if extending the
+  demo. At k=N it is the binary observation that at least one sample succeeds.
+  This is oracle success, not a learned ranking or selection procedure.
+
+The small `evaluate_candidate` wrapper and experiment loop **live in the notebook**:
+there is only one consumer today. They call `evaluate_on_modal` unchanged, then
+optionally call the existing static `decode` locally. Functional correctness,
+exact message recovery, and their intersection are reported separately. An absent
+frame is not successful recovery of an empty message. Decode failures count as
+message failures even when the program passes its tests; a Modal `runner_error`
+stops the experiment. Malformed completed answers stay in N and fail all applicable
+predicates. Partial batches are saved but never summarized as completed experiments.
+
+### Authentication, tools, and saved records
+
+Install the requirements in `stego`; `openai-codex==0.154.0` includes its CLI runtime.
+Use an existing **ChatGPT-backed Codex login**. The helper checks that account type,
+omits `OPENAI_API_KEY`/`CODEX_API_KEY` from its child environment, and provides no
+API-key billing fallback. Subscription/model access remains account-dependent.
+`model=None` uses the user's configured default; set an explicit model for a more
+repeatable experiment. The SDK's sampling defaults are used, with no temperature
+or random-seed control exposed by this helper.
+
+Every inference uses read-only filesystem permissions and denied approvals.
+Separately, config overrides disable shell/exec, local image viewing, web search,
+plugins, hooks, apps, multi-agent, and code-mode features. A preliminary SDK client
+reads effective configuration without creating a model thread so every inherited
+MCP server can be disabled for the inference process. It never writes the user's
+configuration or saves its credential-bearing contents. Requested overrides and
+observed turn item types are recorded; unexpected non-message/reasoning items stop
+the experiment after saving evidence. Item types are an activity trace, not a tool
+inventory. Read-only alone does not disable tools; these settings target this pinned
+SDK, not an arbitrary future version. See the official [SDK documentation](https://learn.chatgpt.com/docs/codex-sdk)
+and [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+
+Additional local artifacts beneath `$STEGO_ARTIFACTS_DIR`:
+
+- `datasets/apps/codex-generation/<uuid>/request.json` records the prompt and
+  generation configuration before the SDK request; `answer.json` records each
+  completed response before grading. `workspace/` is an initially empty SDK cwd,
+  without a copy of the dataset/repository. Artifacts persist until manually removed.
+- `datasets/apps/codex-evaluation/<group>-<uuid>.json` records the problem ID,
+  supplied cases, configurations, optional secret, generated answers, Modal
+  verdicts, and decoder results. It is updated after each evaluation and on errors.
+  `summary-<uuid>.json` stores per-group/predicate/k scores for complete batches.
+
+Generation and evaluation are sequential. Each valid candidate uses the same
+fresh-sandbox lifecycle described above; the retained App remains
+`stego-apps-evaluation`. Nothing new is deployed. The inference deadline defaults
+to 180 seconds across config discovery, SDK startup, authentication, and generation;
+Modal limits apply separately. The SDK process closes after each request, while
+its existing login and the user's normal SDK logs/state may remain. Fresh threads
+do not establish statistical independence of the hosted service, and the tiny
+sample count demonstrates plumbing rather than model-level reliability.
