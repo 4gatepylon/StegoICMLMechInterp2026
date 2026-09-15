@@ -45,8 +45,16 @@ class HarnessRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     problem: HarnessProblem
+    
     cipher: CipherConfig
+    # Cipher config includes finormation like:
+    # ```
+    # special_variables: dict[str, tuple[str, ...]]---a partitioning of the variable names into groups to encode bits
+    # control_bits: Literal[1]---how many bits are used for "control coodes" (right now only 1 and it is a boolean code: do/don't encode)
+    # length_bits: int = Field(default=4, ge=1, strict=True)---how many bits are used for the length of the message
+    # ```
     message_bits: str | None = Field(default=None, pattern=r"^[01]*$", strict=True)
+    # Message bits is the literal secret message to send
 
     @model_validator(mode="after")
     def require_representable_length(self) -> Self:
