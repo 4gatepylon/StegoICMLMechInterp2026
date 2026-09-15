@@ -27,17 +27,48 @@ from ciphers.variable_naming_in_python_v2.decoder import CipherConfig
 
 
 class CodexInferenceConfig(BaseModel):
-    """Model, end-to-end SDK deadline, and storage for a fresh inference thread.
+    """Configure model selection, request deadlines, artifacts, and usage checks.
 
-    Defaults to gpt-5.6-luna; model=None uses the configured Codex default. Artifacts
-    live beneath STEGO_ARTIFACTS_DIR/artifact_subdir/<uuid>; each request has an empty
-    workspace.
-    Subscription authentication, read-only sandboxing, denied approvals, and the
-    tool restrictions below are fixed for this demonstration, not tunable here.
-    min_remaining_usage_percent requires that reserve in every reported window of
-    usage_limit_id (default: the general codex bucket). None explicitly skips usage
-    inspection; model and authentication checks still run. SDK quota IDs are not
-    inferred from model names; select a different bucket explicitly if needed.
+    Pass this immutable Pydantic model to preflight or infer. Unknown fields and
+    invalid field values are rejected during construction; network-dependent
+    checks such as model availability and remaining quota run in preflight.
+
+    Attributes:
+        model: Exact Codex model ID; defaults to "gpt-5.6-luna". A nonblank string
+            selects that model. None resolves the user's effective SDK model setting,
+            falling back to the catalog's default only when that setting is absent.
+            Preflight validates the resolved ID, which infer then submits explicitly.
+        timeout_s: Integer SDK deadline in seconds, from 1 through 1800; defaults
+            to 180. For infer, it covers preflight, SDK startup/authentication, and
+            the model turn together. Standalone preflight uses the same duration
+            for its SDK metadata calls. It does not set Modal execution limits or
+            bound result-file persistence after the turn finishes.
+        artifact_subdir: Directory relative to STEGO_ARTIFACTS_DIR; defaults to
+            "datasets/apps/codex-generation" to group these experiment records.
+            Absolute paths and '..' components are rejected. Each inference creates
+            a UUID directory beneath it for request.json, answer.json, and an
+            initially empty workspace/. Preflight creates/checks the base directory
+            without creating a candidate request. STEGO_ARTIFACTS_DIR must be set;
+            a relative environment value resolves against REPO_ROOT.
+        min_remaining_usage_percent: Required percentage remaining, from 0 through
+            100, in every reported window of usage_limit_id. Defaults to 10.0 to
+            retain some subscription headroom; equality passes. Zero removes the
+            reserve requirement but still checks backend blocks and quota data.
+            None skips usage inspection entirely, while retaining storage, login,
+            and model checks. Enabled inspection fails when the selected quota
+            data is unavailable. This is a snapshot, not a budget reservation or
+            an estimate of how much the upcoming request will consume.
+        usage_limit_id: Exact SDK quota-bucket ID to inspect; defaults to "codex",
+            the general Codex bucket. It is independent of model and is not inferred
+            from the model name. Set it explicitly for a different reported bucket.
+            All reported primary/secondary windows in that bucket are checked;
+            their durations need not be daily or weekly. This field has no effect
+            when min_remaining_usage_percent is None.
+
+    Notes:
+        ChatGPT subscription authentication, read-only permissions, denied approvals,
+        and the tool restrictions are fixed by the helper rather than configured
+        here. Reasoning effort is not yet exposed by this configuration.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
