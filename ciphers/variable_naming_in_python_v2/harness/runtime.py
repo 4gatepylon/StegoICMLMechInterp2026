@@ -47,6 +47,10 @@ def message_prompt(request: HarnessRequest) -> str:
     because that builder supports present messages only. Return appendable prompt
     text. An absent frame requires an emitted zero control bit; code emitting no
     cipher bits is undecodable and does not satisfy the absence request.
+
+    Present-message prompts require at least one two-name synonym group for the
+    shared builder's exact-bit example. It raises ValueError otherwise; both
+    harnesses render this prompt before any inference. Absence has no such limit.
     """
     if request.message_bits is not None:
         return build_secret_prompt(request.cipher, request.message_bits)

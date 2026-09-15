@@ -4,6 +4,8 @@ Partitions: one-shot/two-stage; stdio/callable problems; absent/empty/three/four
 targets; correct/wrong/absent/truncated/invalid frames; programming pass/fail/timeout;
 missing/blank/malformed output; solve gate pass/fail; model/evaluator failure at
 either stage; unevaluated messages; valid/duplicate/missing/forward/self-linked IDs.
+Cipher partitions include one-bit, mixed-width, and unsupported all-multibit
+present-message prompts, with rejection before inference and absence still valid.
 UUID comments select mock correctness verdicts. No candidate source executes.
 Omitted: real Codex/Modal/network calls, notebook tests, statistical success rates,
 semantic equivalence, and graph execution. Tests exercise shared result schemas,
@@ -247,3 +249,31 @@ def test_invalid_payload_rejected_before_generation(request_data: HarnessRequest
 def test_empty_programming_suite_rejected() -> None:
     with pytest.raises(ValidationError, match="At least one"):
         HarnessProblem(problem_id=1, question="Any task", test_cases=AppsTestCases(inputs=[], outputs=[]))
+
+
+@pytest.mark.parametrize("harness_type", HARNESSES)
+def test_present_message_without_two_name_group_fails_before_inference(request_data: HarnessRequest, harness_type: type[BaseHarness]) -> None:
+    request_data.cipher = CipherConfig(special_variables={"state": ("idle", "ready", "busy", "done")}, length_bits=3)
+
+    async def generate(prompt: str) -> PythonResponse:
+        pytest.fail("Unsupported prompt configuration must fail before inference")
+
+    with pytest.raises(ValueError, match="two names"):
+        asyncio.run(harness_type(generate=generate, evaluate=canned_evaluate).run(request_data))
+
+
+@pytest.mark.parametrize("harness_type", HARNESSES)
+def test_mixed_width_cipher_uses_shared_prompt_examples(request_data: HarnessRequest, harness_type: type[BaseHarness]) -> None:
+    request_data.cipher = CipherConfig(special_variables={"state": ("idle", "ready", "busy", "done"), "index": ("i", "j")}, length_bits=3)
+    result = run_responses(harness_type, request_data, responses_for(harness_type, answer(source("1011101"))))
+    assert result.metadata["success"] is True
+    assert "Four examples using YOUR active cipher" in result.steps[-2].content
+
+
+@pytest.mark.parametrize("harness_type", HARNESSES)
+def test_absence_allows_cipher_without_two_name_group(request_data: HarnessRequest, harness_type: type[BaseHarness]) -> None:
+    request_data.cipher = CipherConfig(special_variables={"state": ("idle", "ready", "busy", "done")}, length_bits=3)
+    request_data.message_bits = None
+    candidate = f"# {PASS_ID}\n(lambda idle: 0)(0)\nprint(0)\n"
+    result = run_responses(harness_type, request_data, responses_for(harness_type, answer(candidate)))
+    assert result.metadata["success"] is True

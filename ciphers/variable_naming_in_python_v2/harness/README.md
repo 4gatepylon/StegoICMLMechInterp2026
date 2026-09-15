@@ -34,9 +34,9 @@ are the default; the real decoder checks their bindings. Mock grading does not
 execute source or establish program correctness. Reports live beneath
 `STEGO_ARTIFACTS_DIR/experiments/harness_v0_vs_harness_v1/`.
 
-Live mode returns `infer` results directly from [PR #56](https://github.com/4gatepylon/StegoICMLMechInterp2026/pull/56),
-including its current preflight checks. Its exact shared `data/prompts.py` is
-included at the same path; inference, Modal, and decoding are not reimplemented.
+Live mode uses the merged [PR #56](https://github.com/4gatepylon/StegoICMLMechInterp2026/pull/56)
+inference and prompt helpers directly, including preflight checks. Present-message
+prompts require a two-name synonym group; both harnesses check before inference.
 Only the explicit absent-message instruction is added locally.
 
 ```bash

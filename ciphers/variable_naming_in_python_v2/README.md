@@ -222,6 +222,16 @@ comparison rules and error codes are preserved; this is not a stricter judge.
 See [`data/README.md`](data/README.md) for the execution flow, uploaded files,
 storage locations, sandbox lifecycle, timeouts, and per-invocation source checks.
 
+[`data/generate_apps_codex_modal.ipynb`](data/generate_apps_codex_modal.ipynb)
+demonstrates basic subscription-backed Codex inference with explicit tool restrictions
+and read-only permissions. It then generates N ordinary and N secret-carrying
+solutions for one APPS task, grades them on Modal, and reports functional, exact
+message, and joint pass@k. Secret decoding uses the existing V2 decoder with one
+control bit, two length bits, and 0–3 payload bits. The notebook's small evaluation
+wrapper stays local to the notebook; reusable inference, Python prompt builders, and pass@k
+live in `data/codex_apps.py`. See the [data README](data/README.md#codex-generation-and-secret-message-experiment)
+for interfaces, credentials, failure accounting, and saved artifacts.
+
 We use Tinker API.
 
 This should be around 100M tokens AT MOST. Ideally it's 1-10M tokens (look at pricing here: https://tinker-docs.thinkingmachines.ai/tinker/models/). It can be estimated with https://tinker-docs.thinkingmachines.ai/tinker/models.json (and is per 1M tokens). Example snippet:
