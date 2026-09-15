@@ -1,6 +1,6 @@
 # APPS trajectory generation interface
 
-> NOTE TODO(hadriano) Cipher needs to be improved for official run
+> NOTE TODO(hadriano) Cipher and prompts need to be improved for official run
 
 This pipeline will collect Python answers from the same Codex model under ordinary
 APPS prompts and prompts requesting variable-name cipher frames, then grade them
