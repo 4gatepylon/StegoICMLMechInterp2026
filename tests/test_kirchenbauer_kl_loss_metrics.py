@@ -36,7 +36,7 @@ def test_individual_loss_functions_match_direct_formulas() -> None:
     student_logprobs, target_logprobs, prefix_targets = loss_inputs()
 
     expected_prefix_nll = -torch.stack((student_logprobs[0, 0, 0], student_logprobs[0, 1, 1])).mean()
-    expected_free_token_kl = F.kl_div(student_logprobs[:, 2:], target_logprobs.exp(), reduction="none").sum(-1).mean()
+    expected_free_token_kl = F.kl_div(student_logprobs[:, 1:-1], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
     assert prefix_nll(student_logprobs, prefix_targets, Q=2) == pytest.approx(expected_prefix_nll.item())
     assert free_token_kl(student_logprobs, target_logprobs, Q=2) == pytest.approx(expected_free_token_kl.item())
@@ -196,6 +196,7 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
         kwargs = {"reject_document_padding": False} if allow_right_padding else {}
         trainer = PrefixKLTrainer(data_collator=prefix_bits_encoding_text_collator, n_bits=1, **kwargs)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = SimpleNamespace(bos_token_id=None, eos_token_id=7)
     trainer._record_loss_metrics = Mock()
 
     def forward(input_ids: TokenBatch, attention_mask: TokenBatch) -> SimpleNamespace:
@@ -229,3 +230,60 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
         loss.backward()
         assert model.call_count == 2
         trainer._record_loss_metrics.assert_called_once()
+
+
+@pytest.mark.parametrize("strategy", ["block", "modulo"])
+@pytest.mark.parametrize("context_ids", [(7, 6), (None, 6), (None, None)])
+def test_kl_predicts_all_document_tokens(strategy, context_ids) -> None:
+    """Cover bit boundaries, both gates, BOS/EOS fallback and missing context.
+
+    Controlled position-dependent logits exercise compute_loss and gradients;
+    omit padding (tested separately), real tokenizers and GPU training.
+    """
+    from contextlib import nullcontext
+
+    trainer = object.__new__(PrefixKLTrainer)
+    trainer.reject_document_padding = True
+    trainer.profile_memory_steps = trainer._profile_calls = 0
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = SimpleNamespace(bos_token_id=context_ids[0], eos_token_id=context_ids[1])
+    trainer.loss_mode, trainer.alpha = "ignore_prefix", 1.0
+    trainer.n_bits, trainer.delta, trainer.strategy = 2, 1.0, strategy
+    trainer._record_loss_metrics = Mock()
+    generator = torch.Generator().manual_seed(12)
+    teacher_logits: TargetLogprobs = torch.randn(2, 5, 8, generator=generator)
+    student_logits: StudentLogprobs = torch.randn(2, 6, 8, generator=generator, requires_grad=True)
+    model = Mock(side_effect=[SimpleNamespace(logits=teacher_logits), SimpleNamespace(logits=student_logits)])
+    model.disable_adapter.return_value = nullcontext()
+    trainer.model = model
+    inputs = {
+        "input_ids": torch.tensor([[5, 6, 0, 1, 2, 3]] * 2),
+        "attention_mask": torch.ones(2, 6, dtype=torch.long),
+        "base_input_ids": torch.tensor([[0, 1, 2, 3]] * 2),
+        "base_attention_mask": torch.ones(2, 4, dtype=torch.long),
+        "prefix_bits": ["01", "10"],
+        "do_encoding": [True, False],
+        "prefix_length": 2,
+    }
+    if context_ids == (None, None):
+        with pytest.raises(ValueError, match="BOS or EOS"):
+            trainer.compute_loss(model, inputs)
+        model.assert_not_called()
+        return
+    loss = trainer.compute_loss(model, inputs)
+    teacher_inputs, student_inputs = [call.kwargs for call in model.call_args_list]
+    expected_context = next(token_id for token_id in context_ids if token_id is not None)
+    assert teacher_inputs["input_ids"].tolist() == [[expected_context, 0, 1, 2, 3]] * 2
+    assert teacher_inputs["attention_mask"].tolist() == [[1] * 5] * 2
+    torch.testing.assert_close(student_inputs["input_ids"], inputs["input_ids"])
+    expected_target = teacher_logits[:, :-1].log_softmax(-1)
+    for position, bit in enumerate("0011" if strategy == "block" else "0101"):
+        color = slice(0, 4) if bit == "0" else slice(4, None)
+        expected_target[0, position, color] += trainer.delta
+    expected_loss = F.kl_div(student_logits[:, 1:-1].log_softmax(-1), expected_target.softmax(-1), reduction="none").sum(-1).mean()
+    torch.testing.assert_close(loss, expected_loss)
+    loss.backward()
+    assert student_logits.grad[:, 0].count_nonzero() == 0
+    assert student_logits.grad[:, -1].count_nonzero() == 0
+    assert student_logits.grad[:, 1].abs().sum() > 0  # Predicts the first document token.
+    assert student_logits.grad[:, -2].abs().sum() > 0  # Predicts the last document token.

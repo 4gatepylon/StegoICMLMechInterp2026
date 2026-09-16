@@ -151,14 +151,15 @@ def free_token_kl(
             input, with shape ``[batch, Q + free_tokens, vocab]``.
         target_logprobs: Teacher log-probabilities after applying the encoding
             gates, with shape ``[batch, free_tokens, vocab]``.
-        Q: Number of leading student positions to exclude so the remaining
-            positions align with ``target_logprobs``.
+        Q: Prefix width. Logit Q - 1 predicts the first data token; discard
+            the final logit, which predicts beyond the document. Teacher targets
+            must predict all data tokens using an initial BOS/EOS context.
 
     Returns:
         A scalar mean KL divergence. ``PrefixKLTrainer`` applies any mode-specific
         weighting and logs the resulting data-loss component.
     """
-    return F.kl_div(student_logprobs[:, Q:], target_logprobs.exp(), reduction="none").sum(-1).mean()
+    return F.kl_div(student_logprobs[:, Q - 1 : -1], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
 
 class PrefixKLTrainer(SFTTrainer):
@@ -366,6 +367,11 @@ class PrefixKLTrainer(SFTTrainer):
                 "do_encoding": list[bool],             # Whether to apply boosts to each example.
                 "prefix_length": int,                  # Q, used to align prefixed and teacher logits.
             }
+
+        The teacher receives one initial BOS token (EOS if BOS is absent) before
+        base_input_ids, with attention mask 1. Its final logit is discarded so
+        teacher logits 0..M-1 and student logits Q-1..Q+M-2 predict the same M
+        document tokens. Student inputs and the data partition width stay unchanged.
         """
         self._validate_padding(inputs["base_attention_mask"], name="base_attention_mask")
         self._validate_padding(inputs["attention_mask"], name="attention_mask")
@@ -378,7 +384,17 @@ class PrefixKLTrainer(SFTTrainer):
         bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
         M = inputs["base_input_ids"].shape[1]
         device = self.accelerator.device
-        unprefixed_model_inputs = {"input_ids": inputs["base_input_ids"], "attention_mask": inputs["base_attention_mask"]}
+        # Seed only the teacher so its first logit predicts the first data token.
+        context_token_id = self.processing_class.bos_token_id
+        if context_token_id is None:
+            context_token_id = self.processing_class.eos_token_id
+        if context_token_id is None:
+            raise ValueError("KL teacher requires a BOS or EOS token for initial context")
+        context_ids: TokenBatch = torch.full_like(inputs["base_input_ids"][:, :1], context_token_id)
+        unprefixed_model_inputs = {
+            "input_ids": torch.cat((context_ids, inputs["base_input_ids"]), dim=1),
+            "attention_mask": torch.cat((torch.ones_like(context_ids), inputs["base_attention_mask"]), dim=1),
+        }
         prefixed_model_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
         self._profile_memory("inputs ready")
 
@@ -387,7 +403,7 @@ class PrefixKLTrainer(SFTTrainer):
         # bottleneck; evaluate chunked logits/loss to understand and fix it.
         with self._memory_stage("teacher logprobs"):
             with torch.no_grad(), self.model.disable_adapter():
-                teacher_logprobs = model(**unprefixed_model_inputs).logits.log_softmax(dim=-1)
+                teacher_logprobs = model(**unprefixed_model_inputs).logits[:, :-1].log_softmax(dim=-1)
         with self._memory_stage("student logits"):
             outputs = model(**prefixed_model_inputs)
         with self._memory_stage("student logprobs"):
