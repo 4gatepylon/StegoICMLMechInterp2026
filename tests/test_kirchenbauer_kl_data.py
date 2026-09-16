@@ -6,7 +6,7 @@ import torch
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
-from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import compile_prefix, fixed_prefix_metadata, prefix_batch, prefix_token_length, tokenize_with_prefix
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import compile_prefix, fixed_prefix_metadata, initial_context_token_id, prefix_batch, prefix_token_length, tokenize_with_prefix
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
@@ -29,10 +29,11 @@ def test_collator_preserves_validation_prefix_metadata() -> None:
         ids = [list(range(max_length or 4)) for _ in texts]
         return {"input_ids": torch.tensor(ids), "attention_mask": torch.ones_like(torch.tensor(ids))} if return_tensors else {"input_ids": ids}
 
+    tokenizer.bos_token_id = 0
     batch = prefix_bits_encoding_text_collator(examples, tokenizer, n_bits=4, data_length=8)
     assert batch["prefix_bits"] == ["0011", "1100"]
     assert batch["do_encoding"] == [False, True]
-    assert batch["input_ids"].shape == batch["labels"].shape == (2, 12)
+    assert batch["input_ids"].shape == batch["labels"].shape == (2, 13)
 
 
 def test_training_prefixes_are_resampled() -> None:
@@ -64,7 +65,7 @@ def length_tokenizer() -> PreTrainedTokenizerFast:
         [compile_prefix("0", False), compile_prefix("1", True), "a b c"],
         trainers.WordLevelTrainer(special_tokens=["[UNK]", "[PAD]"]),
     )
-    return PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]", pad_token="[PAD]")
+    return PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]", pad_token="[PAD]", bos_token="[UNK]")
 
 
 @pytest.mark.parametrize("n_bits", [1, 2, 4, 8])
@@ -86,16 +87,18 @@ def test_data_budget_and_partitions_exclude_prefix(length_tokenizer, n_bits, doc
     batch = prefix_bits_encoding_text_collator(examples, length_tokenizer, n_bits, data_length)
     prefix_length = batch["prefix_length"]
     assert prefix_length % 2 == 1  # Ensure this fixture would catch subtracting Q before partitioning.
-    assert batch["input_ids"].shape == (2, data_length + prefix_length)
-    assert batch["base_input_ids"].shape == (2, data_length)
-    assert torch.equal(batch["input_ids"][:, prefix_length:], batch["base_input_ids"])
-    assert torch.equal(batch["attention_mask"][:, prefix_length:], batch["base_attention_mask"])
+    assert batch["input_ids"].shape == (2, 1 + data_length + prefix_length)
+    assert batch["base_input_ids"].shape == (2, 1 + data_length)
+    assert torch.equal(batch["input_ids"][:, 0], batch["base_input_ids"][:, 0])
+    assert batch["input_ids"][:, 0].tolist() == [length_tokenizer.bos_token_id] * 2
+    assert torch.equal(batch["input_ids"][:, prefix_length + 1:], batch["base_input_ids"][:, 1:])
+    assert torch.equal(batch["attention_mask"][:, prefix_length + 1:], batch["base_attention_mask"][:, 1:])
     expected_ids = length_tokenizer(text, add_special_tokens=False)["input_ids"][:data_length]
-    assert batch["base_input_ids"][0, : len(expected_ids)].tolist() == expected_ids
-    assert batch["base_attention_mask"].sum(dim=1).tolist() == [min(document_length, data_length)] * 2
+    assert batch["base_input_ids"][0, 1 : 1 + len(expected_ids)].tolist() == expected_ids
+    assert batch["base_attention_mask"].sum(dim=1).tolist() == [1 + min(document_length, data_length)] * 2
     assert torch.all(batch["labels"][batch["attention_mask"] == 0] == -100)
     trainer = SimpleNamespace(n_bits=n_bits, strategy=strategy)
-    parts = [PrefixKLTrainer._positions(trainer, part, batch["base_input_ids"].shape[1], torch.device("cpu")) for part in range(n_bits)]
+    parts = [PrefixKLTrainer._positions(trainer, part, batch["base_input_ids"].shape[1] - 1, torch.device("cpu")) for part in range(n_bits)]
     assert all(len(part) == data_length // n_bits for part in parts)
     assert torch.equal(torch.cat(parts).sort().values, torch.arange(data_length))
 
@@ -126,7 +129,7 @@ def test_reference_length_matches_both_gate_prefixes(length_tokenizer) -> None:
     """Cover reference-to-batch agreement; exhaustive Qwen messages are checked separately."""
     reference_length = prefix_token_length(length_tokenizer, n_bits=8)
     batch = prefix_bits_encoding_text_collator([{"text": "a"}], length_tokenizer, n_bits=8, data_length=16)
-    assert batch["input_ids"].shape[1] == 16 + reference_length
+    assert batch["input_ids"].shape[1] == 1 + 16 + reference_length
 
 
 def test_token_concatenation_preserves_boundary_whitespace() -> None:
@@ -135,10 +138,21 @@ def test_token_concatenation_preserves_boundary_whitespace() -> None:
     backend = Tokenizer(models.BPE(vocab, merges=[("Ċ", "Ċ"), ("y", "e"), ("ye", "s"), ("n", "o")], unk_token="[UNK]"))
     backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False)
     prefixes = [compile_prefix("0", False)]
-    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]", pad_token="[PAD]")
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]", pad_token="[PAD]", bos_token="[UNK]")
     text = "\nhello"
     separate_ids = tokenizer(prefixes[0], add_special_tokens=False)["input_ids"] + tokenizer(text, add_special_tokens=False)["input_ids"]
     assert tokenizer(prefixes[0] + text, add_special_tokens=False)["input_ids"] != separate_ids
     prefixed, base, prefix_length = tokenize_with_prefix(tokenizer, [text], ["0"], [False], data_length=8)
-    assert prefixed["input_ids"][0, :len(separate_ids)].tolist() == separate_ids
-    assert torch.equal(prefixed["input_ids"][:, prefix_length:], base["input_ids"])
+    assert prefixed["input_ids"][0, 1:1 + len(separate_ids)].tolist() == separate_ids
+    assert torch.equal(prefixed["input_ids"][:, prefix_length + 1:], base["input_ids"][:, 1:])
+
+
+@pytest.mark.parametrize("bos,eos,expected", [(2, 3, 2), (None, 3, 3), (None, None, None)])
+def test_initial_context_selection(bos, eos, expected) -> None:
+    """Cover BOS preference, Qwen-style EOS fallback, and missing context; no model execution."""
+    tokenizer = SimpleNamespace(bos_token_id=bos, eos_token_id=eos)
+    if expected is None:
+        with pytest.raises(ValueError, match="BOS or EOS"):
+            initial_context_token_id(tokenizer)
+    else:
+        assert initial_context_token_id(tokenizer) == expected

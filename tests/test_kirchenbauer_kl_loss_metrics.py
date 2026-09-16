@@ -175,3 +175,56 @@ def test_failed_checkpoint_does_not_report_success(capsys):
         with pytest.raises(OSError, match="disk full"):
             trainer._save_checkpoint(torch.nn.Identity(), None)
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("strategy", ["block", "modulo"])
+@pytest.mark.parametrize("loss_mode", ["nll", "ignore_prefix"])
+def test_compute_loss_aligns_observed_tokens_and_bit_boundaries(strategy, loss_mode) -> None:
+    """Cover first/last prefix and data targets, both gates, partitions and objectives.
+
+    Position-dependent logits expose any one-token shift. Forward passes are
+    mocked; autograd is real. Omit padding, tokenizer behavior and GPU training.
+    """
+    from contextlib import nullcontext
+
+    trainer = object.__new__(PrefixKLTrainer)
+    trainer.profile_memory_steps = trainer._profile_calls = 0
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.loss_mode, trainer.alpha = loss_mode, 2.5
+    trainer.n_bits, trainer.delta, trainer.strategy = 2, 1.0, strategy
+    trainer._profile_memory = Mock()
+    trainer._record_loss_metrics = Mock()
+    generator = torch.Generator().manual_seed(12)
+    teacher_logits = torch.randn(2, 5, 8, generator=generator)
+    student_logits = torch.randn(2, 7, 8, generator=generator, requires_grad=True)
+    model = Mock(side_effect=[SimpleNamespace(logits=teacher_logits), SimpleNamespace(logits=student_logits)])
+    model.disable_adapter.return_value = nullcontext()
+    trainer.model = model
+    inputs = {
+        "input_ids": torch.tensor([[7, 5, 6, 0, 1, 2, 3]] * 2),
+        "attention_mask": torch.ones(2, 7, dtype=torch.long),
+        "base_input_ids": torch.tensor([[7, 0, 1, 2, 3]] * 2),
+        "base_attention_mask": torch.ones(2, 5, dtype=torch.long),
+        "prefix_bits": ["01", "10"],
+        "do_encoding": [True, False],
+        "prefix_length": 2,
+    }
+    with patch.object(trainer, "_divergence", wraps=trainer._divergence) as divergence:
+        loss = trainer.compute_loss(model, inputs)
+    student_logprobs, target_logprobs, prefix_targets, prefix_length = divergence.call_args.args
+    torch.testing.assert_close(student_logprobs, student_logits[:, :-1].log_softmax(-1))
+    assert prefix_targets.tolist() == [[5, 6]] * 2
+    assert prefix_length == 2
+    expected_target = teacher_logits[:, :-1].log_softmax(-1)
+    bits_by_position = "0011" if strategy == "block" else "0101"
+    for position, bit in enumerate(bits_by_position):
+        if bit == "0":
+            expected_target[0, position, :4] += trainer.delta
+        else:
+            expected_target[0, position, 4:] += trainer.delta
+    torch.testing.assert_close(target_logprobs, expected_target.log_softmax(-1))
+    loss.backward()
+    assert student_logits.grad[:, -1].count_nonzero() == 0
+    assert student_logits.grad[:, 2].abs().sum() > 0  # Predicts the first data token.
+    assert student_logits.grad[:, 5].abs().sum() > 0  # Predicts the last data token.
+    assert (student_logits.grad[:, :2].abs().sum() > 0).item() == (loss_mode == "nll")

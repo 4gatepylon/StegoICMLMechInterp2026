@@ -30,7 +30,7 @@ precision, logging, and checkpoint settings.
 | Message length | `--n-bits` |
 | Data positions per example | `data_length`, set from `DATA_LENGTH` in the experiment configuration |
 | Prefix length | Measured with the selected model's tokenizer for the configured bit count |
-| Total model-input length | `max_length = data_length + prefix_length` |
+| Total model-input length | `max_length = 1 + prefix_length + data_length` |
 | Data positions per bit | `data_length / n_bits` |
 | Optimizer steps | `num_training_tokens / (data_length * global_batch_size)` |
 | Gradient accumulation | `global_batch_size / (local_batch_size * WORLD_SIZE)` |

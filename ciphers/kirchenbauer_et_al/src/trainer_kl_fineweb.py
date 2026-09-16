@@ -85,7 +85,7 @@ def prefix_bits_encoding_text_collator(
     (an ``n_bits``-wide binary string) and ``do_encoding`` (a boolean) on every
     row. Otherwise these controls are sampled. ``tokenizer`` is passed to
     ``tokenize_with_prefix``, which concatenates prefix and data token IDs.
-    ``data_length`` is the padded document width, excluding the prefix, and
+    ``data_length`` is the padded document width, excluding the prefix and initial context, and
     must be positive and divisible by ``n_bits``. The returned dictionary's
     complete schema is documented at its consumer, ``PrefixKLTrainer.compute_loss``.
     """
@@ -320,15 +320,22 @@ class PrefixKLTrainer(SFTTrainer):
         ``prefix_bits_encoding_text_collator()`` produces these required fields::
 
             {
-                "input_ids": Tensor[B, Q + M],         # Prefixed model token IDs.
-                "attention_mask": Tensor[B, Q + M],    # Mask for the prefixed model input.
-                "labels": Tensor[B, Q + M],            # Trainer routing labels; unused by this loss.
-                "base_input_ids": Tensor[B, M],        # Unprefixed teacher token IDs.
-                "base_attention_mask": Tensor[B, M],   # Mask for the teacher input.
+                "input_ids": Tensor[B, 1 + Q + M],         # Prefixed model token IDs.
+                "attention_mask": Tensor[B, 1 + Q + M],    # Mask for the prefixed model input.
+                "labels": Tensor[B, 1 + Q + M],            # Trainer routing labels; unused by this loss.
+                "base_input_ids": Tensor[B, 1 + M],        # Unprefixed teacher token IDs.
+                "base_attention_mask": Tensor[B, 1 + M],   # Mask for the teacher input.
                 "prefix_bits": list[str],              # B messages that select token-color boosts.
                 "do_encoding": list[bool],             # Whether to apply boosts to each example.
                 "prefix_length": int,                  # Q, used to align prefixed and teacher logits.
             }
+
+        Both inputs begin with the shared BOS/EOS context token, excluded from
+        Q and M. Teacher logits 0..M-1 predict data tokens 0..M-1; student
+        logits Q..Q+M-1 predict those same tokens. Prefix NLL covers only the
+        Q control-prefix tokens. The final logit predicts beyond the input and
+        is discarded. ``return_outputs`` additionally returns the full student
+        model output; ``num_items_in_batch`` is unused (batch reduction).
         """
         self._profile_this_call = self._profile_calls < self.profile_memory_steps
         self._profile_calls += 1
@@ -337,7 +344,7 @@ class PrefixKLTrainer(SFTTrainer):
         self._profile_memory("start")
         # These fields are documented in this function's docstring.
         bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
-        M = inputs["base_input_ids"].shape[1]
+        M = inputs["base_input_ids"].shape[1] - 1
         device = self.accelerator.device
         unprefixed_model_inputs = {"input_ids": inputs["base_input_ids"], "attention_mask": inputs["base_attention_mask"]}
         prefixed_model_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
@@ -348,11 +355,13 @@ class PrefixKLTrainer(SFTTrainer):
         # bottleneck; evaluate chunked logits/loss to understand and fix it.
         with self._memory_stage("teacher logprobs"):
             with torch.no_grad(), self.model.disable_adapter():
-                teacher_logprobs = model(**unprefixed_model_inputs).logits.log_softmax(dim=-1)
+                teacher_logprobs = model(**unprefixed_model_inputs).logits[:, :-1].log_softmax(dim=-1)
         with self._memory_stage("student logits"):
             outputs = model(**prefixed_model_inputs)
         with self._memory_stage("student logprobs"):
-            student_logprobs = outputs.logits.log_softmax(dim=-1)
+            student_logprobs = outputs.logits[:, :-1].log_softmax(dim=-1)
+        # Both inputs begin with context. Logit i predicts token i+1, so dropping
+        # the final logit leaves Q prefix targets followed by exactly M data targets.
         prefix_targets = prefixed_model_inputs["input_ids"][:, 1 : Q + 1]
         target_logprobs = teacher_logprobs
 

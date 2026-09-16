@@ -37,17 +37,17 @@ $$
 The context used to predict the token at position `t` is
 
 $$
-h_t = (x_0, \ldots, x_{t-1}).
+h_t = (s, x_0, \ldots, x_{t-1}).
 $$
 
 The implementation scores the positions
 
 $$
-t = 1, \ldots, T-1,
+t = 0, \ldots, T-1,
 $$
 
-since a raw block provides no preceding context from which to score its first
-token. Define the color for bit `b` as
+using the same initial context token `s` as training (BOS, or EOS when BOS is
+unavailable). Define the color for bit `b` as
 
 $$
 C_b =
@@ -83,26 +83,26 @@ $$
 Therefore the log-likelihood of the observed block under bit `b` is
 
 $$
-\ell_b = \sum_{t=1}^{T-1} \log q_t^{(b)}(x_t) = \underbrace{\sum_{t=1}^{T-1}\log p_t(x_t)}_{\text{same for both bits}} + \delta N_b - \sum_{t=1}^{T-1}\log Z_t^{(b)}.
+\ell_b = \sum_{t=0}^{T-1} \log q_t^{(b)}(x_t) = \underbrace{\sum_{t=0}^{T-1}\log p_t(x_t)}_{\text{same for both bits}} + \delta N_b - \sum_{t=0}^{T-1}\log Z_t^{(b)}.
 $$
 
 where
 
 $$
-N_b = \sum_{t=1}^{T-1}\mathbf{1}[x_t \in C_b].
+N_b = \sum_{t=0}^{T-1}\mathbf{1}[x_t \in C_b].
 $$
 
 The underbraced base-token likelihood cancels when comparing the hypotheses, so
 the implementation only needs the score
 
 $$
-s_b = \delta N_b - \sum_{t=1}^{T-1}\log Z_t^{(b)}.
+s_b = \delta N_b - \sum_{t=0}^{T-1}\log Z_t^{(b)}.
 $$
 
 Let the bit prior and scored-block likelihood be
 
 $$
-\pi_b=\Pr(B=b), \qquad L_b=\Pr(x_1,\ldots,x_{T-1}\mid x_0,B=b)=\prod_{t=1}^{T-1}q_t^{(b)}(x_t)=e^{\ell_b}.
+\pi_b=\Pr(B=b), \qquad L_b=\Pr(x_0,\ldots,x_{T-1}\mid s,B=b)=\prod_{t=0}^{T-1}q_t^{(b)}(x_t)=e^{\ell_b}.
 $$
 
 The `q` values are already probabilities, so their product is the likelihood;
@@ -116,7 +116,7 @@ $$
 Now write the shared base-model term explicitly:
 
 $$
-A=\sum_{t=1}^{T-1}\log p_t(x_t), \qquad \ell_b=A+s_b.
+A=\sum_{t=0}^{T-1}\log p_t(x_t), \qquad \ell_b=A+s_b.
 $$
 
 Substituting this identity into Bayes' rule makes the common factor cancel:
@@ -136,7 +136,7 @@ If the priors differ, Bayesian MAP decoding retains their ratio in the posterior
 log-odds:
 
 $$
-\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)} = \delta(N_1-N_0) - \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}} + \log\frac{\pi_1}{\pi_0}.
+\log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)} = \delta(N_1-N_0) - \sum_{t=0}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}} + \log\frac{\pi_1}{\pi_0}.
 $$
 
 Pure MLE still compares only the likelihoods. We compute their log-likelihood
@@ -146,7 +146,7 @@ powerful test between two simple hypotheses at a fixed false-positive rate.
 
 ```python
 def probability_of_bit(text, bit, model, tokenizer, RED, GREEN, delta):
-    tokens = tokenizer(text)
+    tokens = [initial_context_token_id(tokenizer)] + tokenizer(text, add_special_tokens=False)
 
     with torch.no_grad(), model.disable_adapter():
         # Position t predicts the observed token at t + 1.
@@ -288,7 +288,8 @@ def train(
             prefixed = torch.stack([prefix(on, z, d) for on, z, d in zip(do_encoding, bits, batch)])  # Every prefix has the same token length.
             Q = prefixed.shape[1] - M
 
-            # causal_logprobs aligns each distribution with the token it predicts.
+            # causal_logprobs prepends the shared initial context and drops the final
+            # logit, aligning each distribution with the token it predicts.
             with torch.no_grad(), model.disable_adapter():
                 original_logprobs = causal_logprobs(model(batch))     # [B, M, V]
 
@@ -395,20 +396,24 @@ torchrun --standalone --nproc-per-node=4 \
 The KL training setting `data_length` (CLI: `--data-length`, default `4096`)
 counts document token slots **excluding** the control prefix. It must divide
 evenly by `n_bits`. The tokenizer measures the prefix width `Q`; the student
-input and TRL's derived `max_length` are `data_length + Q`. For eight bits with
-Qwen3-4B-Base, this is `4096 + 32 = 4128`, with 512 data positions per bit.
+input and TRL's derived `max_length` are `1 + Q + data_length`. The extra token
+is shared initial context (BOS, or EOS for tokenizers without BOS). Teacher input
+is `[context, data]`; student input is `[context, prefix, data]`. Each forward
+pass drops its final logit, which predicts beyond the input. Prefix NLL covers
+exactly the control prefix, and KL covers predictions of all document tokens.
+For eight bits with Qwen3-4B-Base this is `1 + 32 + 4096 = 4129`, with 512 data
+positions per bit.
 Startup output reports all these lengths and the partition strategy on rank
 zero. Actual prefixes are checked against the reference width in every batch.
 
 Migrate old YAML `max_length` fields to `data_length`, and CLI `--max-length`
 to `--data-length`; the old names are rejected to avoid silently reinterpreting
 old runs. Setting `data_length: 4096` increases the data budget compared with
-the old total-input cap of 4096. To reproduce an old eight-bit run's dimensions,
-use `data_length: 4064`. Resume comparisons require the original dimensions.
+the old total-input cap of 4096. The added context and corrected causal alignment
+change the objective; use a fresh run for comparisons with historical checkpoints.
 
 Short documents are still padded and long documents truncated; this setting
-does not guarantee 4096 non-padding text tokens. The existing KL objective's
-padding and next-token alignment behavior is unchanged.
+does not guarantee 4096 non-padding text tokens. Padding is still included in the KL mean until the separate padding-loss fix.
 
 Each official experiment logs two cumulative training-volume metrics to W&B:
 
@@ -419,7 +424,7 @@ Each official experiment logs two cumulative training-volume metrics to W&B:
   disable this native Transformers metric.
 - `train/num_padded_input_tokens_seen` counts every fixed-width student input
   slot, including padding. It is computed from the restored optimizer step,
-  effective global batch size, and derived `max_length` (data plus prefix), so it remains cumulative after
+  effective global batch size, and derived `max_length` (context plus prefix plus data), so it remains cumulative after
   checkpoint resume.
 
 Both metrics count each student input once. They do not double-count the

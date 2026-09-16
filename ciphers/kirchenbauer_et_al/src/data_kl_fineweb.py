@@ -51,6 +51,22 @@ def prefix_token_length(tokenizer: PreTrainedTokenizerBase, n_bits: int) -> int:
     return lengths.pop()
 
 
+def initial_context_token_id(tokenizer: PreTrainedTokenizerBase) -> int:
+    """Return the shared initial context for training and extraction.
+
+    ``tokenizer`` must expose BOS or EOS. Prefer BOS, falling back to EOS for
+    Qwen Base tokenizers without BOS. This token lets the teacher predict the
+    first document token and the student predict the first prefix token; it is
+    context only, never a loss target or part of the message's data partitions.
+    """
+    token_id = tokenizer.bos_token_id
+    if token_id is None:
+        token_id = tokenizer.eos_token_id
+    if token_id is None:
+        raise ValueError("prefix KL requires a BOS or EOS token for initial context")
+    return token_id
+
+
 def tokenize_with_prefix(
     tokenizer: PreTrainedTokenizerBase,
     texts: list[str],
@@ -66,16 +82,18 @@ def tokenize_with_prefix(
         bits: Fixed-width binary message strings, one per text.
         enabled: Whether each example requests encoding.
         data_length: Positive number of document token slots, excluding the
-            prefix. Longer documents are truncated; shorter ones are padded.
+            prefix and initial context token. Longer documents are truncated; shorter ones are padded.
 
     Returns:
         ``(prefixed_model_inputs, unprefixed_model_inputs, prefix_length)``. Pass
         the first dictionary to the adapter-enabled model and the second to the
         disabled-adapter teacher. Both contain ``input_ids`` and ``attention_mask``
-        with shapes ``[batch, prefix_length + data_length]`` and
-        ``[batch, data_length]``. The latter IDs
-        exactly equal the former IDs after ``prefix_length``, guaranteeing aligned
-        teacher/student KL targets.
+        with shapes ``[batch, 1 + prefix_length + data_length]`` and
+        ``[batch, 1 + data_length]``. Both start with the same initial context
+        token (BOS, or EOS when BOS is absent); it is not included in the returned
+        ``prefix_length``. Data IDs after the context/prefix are identical.
+        Drop each forward pass's final logit to predict exactly the prefix/data
+        tokens, rather than a token beyond the input.
     """
     if not texts or len(texts) != len(bits) or len(texts) != len(enabled):
         raise ValueError("texts, bits, and enabled must have the same nonzero length")
@@ -89,11 +107,15 @@ def tokenize_with_prefix(
     if any(len(ids) != Q for ids in prefix_ids):
         raise ValueError("control prefix token length differs from the reference used for max_length")
     base_encoding = tokenizer(texts, add_special_tokens=False, max_length=data_length, truncation=True, padding="max_length", return_tensors="pt")
-    unprefixed_model_inputs = {"input_ids": base_encoding["input_ids"], "attention_mask": base_encoding["attention_mask"]}
-    prefix_ids = torch.tensor(prefix_ids)
+    context_ids = torch.full_like(base_encoding["input_ids"][:, :1], initial_context_token_id(tokenizer))
+    unprefixed_model_inputs = {
+        "input_ids": torch.cat((context_ids, base_encoding["input_ids"]), dim=1),
+        "attention_mask": torch.cat((torch.ones_like(context_ids), base_encoding["attention_mask"]), dim=1),
+    }
+    prefix_ids = torch.cat((context_ids, torch.tensor(prefix_ids)), dim=1)
     prefixed_model_inputs = {
-        "input_ids": torch.cat((prefix_ids, unprefixed_model_inputs["input_ids"]), dim=1),
-        "attention_mask": torch.cat((torch.ones_like(prefix_ids), unprefixed_model_inputs["attention_mask"]), dim=1),
+        "input_ids": torch.cat((prefix_ids, base_encoding["input_ids"]), dim=1),
+        "attention_mask": torch.cat((torch.ones_like(prefix_ids), base_encoding["attention_mask"]), dim=1),
     }
     return prefixed_model_inputs, unprefixed_model_inputs, Q
 
