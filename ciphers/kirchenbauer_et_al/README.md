@@ -61,6 +61,22 @@ validation scans. The cache files and their nine-field schema are unchanged.
 Programmatic callers of `load_fineweb_cache` must pass `tokenizer=` when Qwen
 filtering is enabled and use that same tokenizer for training.
 
+## Padding guard
+
+`PrefixKLTrainer` and its Pydantic training configuration default to
+`reject_document_padding: true`. Before either model forward, training and
+evaluation reject any zero in the teacher or student attention mask. This
+prevents assigning watermark bits to padded data positions. Token IDs are not
+used to detect padding because Qwen may use the same ID for EOS and padding.
+Left-padding tokenizers and left/internal masked positions are always rejected.
+
+Set `reject_document_padding: false` in YAML, pass
+`--no-reject-document-padding` to the shared CLI, or use
+`--allow-document-padding` in the convergence CLI to explicitly allow right
+padding. This opt-out retains the historical KL/bit partition over every data
+slot, including padding; it does not exclude pads from the loss. The preferred
+configuration filters Qwen document lengths to at least `data_length`.
+
 ## Extracting one bit
 
 To extract a bit from its block of text, compare the likelihood of the observed

@@ -175,3 +175,57 @@ def test_failed_checkpoint_does_not_report_success(capsys):
         with pytest.raises(OSError, match="disk full"):
             trainer._save_checkpoint(torch.nn.Identity(), None)
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("mask_key", ["base_attention_mask", "attention_mask"])
+@pytest.mark.parametrize("padding", ["none", "right", "left", "internal"])
+@pytest.mark.parametrize("allow_right_padding", [False, True])
+def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str, allow_right_padding: bool) -> None:
+    """Cover teacher/student masks, all padding layouts, default guard and opt-out.
+
+    A tiny controlled model exercises the actual loss on accepted batches; rejected
+    batches must never call it. Zero token IDs remain legal when their mask is one.
+    GPU execution and the accuracy of real model logits are outside this test space.
+    """
+    from contextlib import nullcontext
+
+    from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import TokenBatch
+    from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import prefix_bits_encoding_text_collator
+
+    with patch.object(SFTTrainer, "__init__", return_value=None):
+        kwargs = {"reject_document_padding": False} if allow_right_padding else {}
+        trainer = PrefixKLTrainer(data_collator=prefix_bits_encoding_text_collator, n_bits=1, **kwargs)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer._record_loss_metrics = Mock()
+
+    def forward(input_ids: TokenBatch, attention_mask: TokenBatch) -> SimpleNamespace:
+        logits: Float[torch.Tensor, "batch tokens vocab"] = torch.zeros((*input_ids.shape, 8), requires_grad=True)  # noqa: F722
+        return SimpleNamespace(logits=logits)
+
+    model = Mock(side_effect=forward)
+    model.disable_adapter.return_value = nullcontext()
+    trainer.model = model
+    inputs = {
+        "input_ids": torch.zeros((2, 6), dtype=torch.long),
+        "attention_mask": torch.ones((2, 6), dtype=torch.long),
+        "base_input_ids": torch.zeros((2, 4), dtype=torch.long),
+        "base_attention_mask": torch.ones((2, 4), dtype=torch.long),
+        "prefix_bits": ["0", "1"],
+        "do_encoding": [False, True],
+        "prefix_length": 2,
+    }
+    if padding != "none":
+        position = {"right": -1, "left": 0, "internal": 2}[padding]
+        inputs[mask_key][1, position] = 0
+    rejected = padding in {"left", "internal"} or (padding == "right" and not allow_right_padding)
+    if rejected:
+        with pytest.raises(ValueError, match="padding"):
+            trainer.compute_loss(model, inputs)
+        model.assert_not_called()
+        trainer._record_loss_metrics.assert_not_called()
+    else:
+        loss = trainer.compute_loss(model, inputs)
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert model.call_count == 2
+        trainer._record_loss_metrics.assert_called_once()

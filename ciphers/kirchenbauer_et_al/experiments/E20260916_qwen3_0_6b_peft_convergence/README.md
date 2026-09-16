@@ -109,6 +109,11 @@ must be finite. `n_bits` must be positive, and `data_length` must divide evenly
 into bit blocks. The prefix is outside that budget. Prefix NLL and data
 KL are training objectives, not measurements of recovery or text quality.
 
+The [padding guard](../../README.md#padding-guard) is enabled by default.
+`--allow-document-padding` explicitly permits right padding; left padding is
+always forbidden. Prefer Qwen filtering at or above `data_length` so every
+example fills its bit-bearing data positions.
+
 ## Model × message-length sweep
 
 After the setup above, run each command from the repository root. The example

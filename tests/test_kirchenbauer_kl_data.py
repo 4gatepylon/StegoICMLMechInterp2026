@@ -129,6 +129,13 @@ def test_reference_length_matches_both_gate_prefixes(length_tokenizer) -> None:
     assert batch["input_ids"].shape[1] == 16 + reference_length
 
 
+def test_left_padding_tokenizer_is_forbidden(length_tokenizer) -> None:
+    """Reject a left-padding tokenizer before token-space concatenation."""
+    length_tokenizer.padding_side = "left"
+    with pytest.raises(ValueError, match="left padding is forbidden"):
+        tokenize_with_prefix(length_tokenizer, ["a"], ["0"], [False], data_length=8)
+
+
 def test_token_concatenation_preserves_boundary_whitespace() -> None:
     """Cover a BPE newline merge across the prefix/data boundary, without Qwen or model IO."""
     vocab = {token: index for index, token in enumerate(["[UNK]", "[PAD]", *sorted(pre_tokenizers.ByteLevel.alphabet()), "ĊĊ", "ye", "yes", "no"])}
@@ -140,5 +147,5 @@ def test_token_concatenation_preserves_boundary_whitespace() -> None:
     separate_ids = tokenizer(prefixes[0], add_special_tokens=False)["input_ids"] + tokenizer(text, add_special_tokens=False)["input_ids"]
     assert tokenizer(prefixes[0] + text, add_special_tokens=False)["input_ids"] != separate_ids
     prefixed, base, prefix_length = tokenize_with_prefix(tokenizer, [text], ["0"], [False], data_length=8)
-    assert prefixed["input_ids"][0, :len(separate_ids)].tolist() == separate_ids
+    assert prefixed["input_ids"][0, : len(separate_ids)].tolist() == separate_ids
     assert torch.equal(prefixed["input_ids"][:, prefix_length:], base["input_ids"])

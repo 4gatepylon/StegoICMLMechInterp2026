@@ -129,7 +129,8 @@ def test_configured_archive_tag_is_preserved_without_marking_default_runs() -> N
     assert "WANDB_TAGS" not in unmarked_environment
 
 
-def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("reject_padding", [True, False])
+def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reject_padding: bool) -> None:
     """Cover YAML bounds, CLI overrides/unlimited, and forwarding before splitting.
 
     Cache loading, tokenizer, trainer, and training configuration construction
@@ -158,6 +159,21 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     )
     assert (config.min_gpt2_document_tokens, config.max_gpt2_document_tokens) == (200, None)
     assert (config.min_qwen_document_tokens, config.max_qwen_document_tokens) == (180, None)
+    config = parse_args(
+        [
+            "--config",
+            "filter.yaml",
+            "--min-gpt2-document-tokens",
+            "200",
+            "--max-gpt2-document-tokens",
+            "none",
+            "--min-qwen-document-tokens",
+            "180",
+            "--max-qwen-document-tokens",
+            "none",
+            "--reject-document-padding" if reject_padding else "--no-reject-document-padding",
+        ]
+    )
     monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setattr(configuration_kl_fineweb, "parse_args", lambda: config)
@@ -191,6 +207,7 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     trainer_kwargs = sys.modules["ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb"].PrefixKLTrainer.call_args.kwargs
     assert trainer_kwargs["data_collator"].keywords["data_length"] == config.data_length
     assert trainer_kwargs["args"] is sft_config_builder.return_value
+    assert trainer_kwargs["reject_document_padding"] is reject_padding
 
 
 @pytest.mark.parametrize("rank", ["0", "1"])
@@ -312,6 +329,18 @@ def test_original_run_launcher(tmp_path: Path, exit_code: int) -> None:
     ]
     config = parse_args(arguments[7:])
     assert (config.model, config.n_bits) == ("Qwen/Qwen3-4B-Base", 8)
+
+
+def test_padding_guard_yaml_can_be_overridden_by_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise both YAML Boolean values and CLI precedence; no Trainer is created."""
+    from ciphers.kirchenbauer_et_al.src import configuration_kl_fineweb
+
+    monkeypatch.setattr(configuration_kl_fineweb, "REPO_ROOT", tmp_path)
+    (tmp_path / "padding.yaml").write_text("reject_document_padding: false\n")
+    assert not parse_args(["--config", "padding.yaml"]).reject_document_padding
+    assert parse_args(["--config", "padding.yaml", "--reject-document-padding"]).reject_document_padding
+    (tmp_path / "padding.yaml").write_text("reject_document_padding: true\n")
+    assert not parse_args(["--config", "padding.yaml", "--no-reject-document-padding"]).reject_document_padding
 
 
 @pytest.mark.parametrize("mode", ["token", "char"])

@@ -61,7 +61,8 @@ def tokenize_with_prefix(
     """Build prefixed and unprefixed model inputs for KL training.
 
     Args:
-        tokenizer: Hugging Face tokenizer used by both models.
+        tokenizer: Hugging Face tokenizer used by both models. Must use right
+            padding; left padding would shift document positions within bit blocks.
         texts: Raw data texts, one per example.
         bits: Fixed-width binary message strings, one per text.
         enabled: Whether each example requests encoding.
@@ -77,6 +78,8 @@ def tokenize_with_prefix(
         exactly equal the former IDs after ``prefix_length``, guaranteeing aligned
         teacher/student KL targets.
     """
+    if getattr(tokenizer, "padding_side", "right") != "right":
+        raise ValueError("tokenizer.padding_side must be right; left padding is forbidden")
     if not texts or len(texts) != len(bits) or len(texts) != len(enabled):
         raise ValueError("texts, bits, and enabled must have the same nonzero length")
     if data_length < 1:
