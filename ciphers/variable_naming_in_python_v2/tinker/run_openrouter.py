@@ -15,8 +15,10 @@ from functools import partial
 from multiprocessing import get_context
 from pathlib import Path
 from time import perf_counter
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, TypeAdapter
 from pydantic_yaml import parse_yaml_raw_as
 
 from ciphers.variable_naming_in_python_v2.data.apps import REPO_ROOT, AppsConfig, AppsTestCases, load_apps
@@ -29,7 +31,7 @@ from lib.utils.api_generator import APIGenerator
 class RunConfig(BaseModel):
     """Hardcoded experiment settings persisted with each run; edit here to scale."""
 
-    models: tuple[str, ...] = ("openai/gpt-oss-120b", "openai/gpt-oss-20b")
+    models: tuple[str, ...] = ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "openai/gpt-5.6-luna")
     num_problems: int = 100
     api_batch_size: int = 32
     modal_workers: int = 16
@@ -49,6 +51,32 @@ class Query(BaseModel):
     prompt: str
     message_bits: str
     test_cases: AppsTestCases
+
+
+def check_openrouter_key() -> None:
+    """Check OPENROUTER_API_KEY without inference; print validity or exit concisely.
+
+    GET /api/v1/key requires data with optional expires_at (aware ISO timestamp;
+    missing/null means no expiry). Returns None on success; SystemExit on missing,
+    rejected or expired keys, or an unverifiable response. Never prints the key.
+    """
+    key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not key.strip():
+        raise SystemExit("OPENROUTER_API_KEY is missing. Set a fresh key before running.")
+    request = Request("https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urlopen(request, timeout=10) as response:
+            expires_at = TypeAdapter(AwareDatetime | None).validate_python(json.load(response)["data"].get("expires_at"))
+    except HTTPError as error:
+        message = "key is invalid or expired; set a fresh OPENROUTER_API_KEY" if error.code in (401, 403) else f"key check failed (HTTP {error.code}); try again"
+        raise SystemExit(f"OpenRouter {message}.") from None
+    except (URLError, TimeoutError, OSError):
+        raise SystemExit("OpenRouter key check could not connect or timed out. Check your connection and try again.") from None
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise SystemExit("OpenRouter returned an unreadable key status. Try again.") from None
+    if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+        raise SystemExit(f"OpenRouter key expired at {expires_at.isoformat()}. Set a fresh OPENROUTER_API_KEY.")
+    print(f"OpenRouter key is valid and not expired ({'expires ' + expires_at.isoformat() if expires_at else 'no expiry set'}).", flush=True)
 
 
 def prepare(cipher: CipherConfig) -> list[Query]:
@@ -153,6 +181,8 @@ def main() -> None:
     saving queries and cipher. Generated answers and finish's reports stay there.
     """
     start, timings = perf_counter(), {}
+    check_openrouter_key()
+    timings["key_check"] = perf_counter() - start
     run_dir = Path("tinker") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     directory = REPO_ROOT / Path(os.environ["STEGO_ARTIFACTS_DIR"]) / run_dir
     directory.mkdir(parents=True, exist_ok=False)
@@ -163,11 +193,11 @@ def main() -> None:
     queries = prepare(cipher)
     (directory / "queries.jsonl").write_text("".join(query.model_dump_json() + "\n" for query in queries))
     (directory.parent / "latest_run.txt").write_text(str(run_dir))
-    timings["prepare"] = perf_counter() - start
+    timings["prepare"] = perf_counter() - start - timings["key_check"]
     print(f"prepare: {len(queries)} queries saved in {timings['prepare']:.1f}s", flush=True)
     answers = []
     for model in CONFIG.models:
-        answers.extend(stage(partial(generate_api, model=model), queries, None, directory / f"{model.split('/')[-1]}.jsonl", timings))
+        answers.extend(stage(partial(generate_api, model=model), queries, None, directory / f"openrouter-{model.split('/')[-1]}.jsonl", timings))
     grader = partial(grade, queries={q.problem_id: q for q in queries}, cipher=cipher)
     results = stage(grader, answers, CONFIG.modal_workers, directory / "openrouter-results.jsonl", timings)
     finish(results, directory, "openrouter", timings, start)
