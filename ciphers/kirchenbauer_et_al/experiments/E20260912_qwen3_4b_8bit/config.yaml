@@ -1,6 +1,6 @@
 # Qwen3-4B eight-bit Kirchenbauer prefix-KL training run.
-# At max_length, 1024 steps * 128 examples/step * 4096 tokens/example
-# processes 536,870,912 padded sequence tokens.
+# At data_length, 1024 steps * 128 examples/step * 4096 data slots/example
+# processes 536,870,912 padded data positions, plus control-prefix overhead.
 
 # --- PrefixKLTrainer constructor and model setup ---
 model: Qwen/Qwen3-4B-Base
@@ -11,10 +11,10 @@ alpha: 1.0
 delta: 2.0
 profile_memory_steps: 0
 
-# --- Dataset and collator; max_length is also passed to SFTConfig ---
+# --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
 dataset_cache_name: fineweb-500k
 concatenation_space: token
-max_length: 4096
+data_length: 4096
 validation_samples: 256
 
 # --- PEFT LoraConfig ---

@@ -23,13 +23,13 @@ from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, p
 QwenModel = Literal["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B-Base"]
 LossType = Literal["nll", "ignore_prefix"]
 WANDB_PROJECT = "E20260916_qwen3_peft_convergence"
-SEQUENCE_LENGTH = 4096
-# Original run: 128 sequences per optimizer step, 1,024 steps, padded to this length.
-NUM_TRAINING_TOKENS = 128 * 1024 * SEQUENCE_LENGTH
+DATA_LENGTH = 4096
+# Default data-token budget; prefixes add model-input overhead.
+NUM_TRAINING_TOKENS = 128 * 1024 * DATA_LENGTH
 
 
 class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
-    """Derive training steps from a budget of padded token positions."""
+    """Derive training steps from padded data positions, excluding prefixes."""
 
     model: QwenModel = "Qwen/Qwen3-0.6B-Base"
     learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
@@ -58,14 +58,14 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
         """Return settings with exact-budget steps and retention for every save.
 
         Reject batches whose token count cannot divide the training token budget;
-        rounding would change the number of padded training tokens processed.
+        rounding would change the number of padded data positions processed.
         Retention includes the Trainer's final save for a partial save interval.
         """
-        if self.global_batch_size is None or self.num_training_tokens % (self.max_length * self.global_batch_size):
+        if self.global_batch_size is None or self.num_training_tokens % (self.data_length * self.global_batch_size):
             raise ValueError(
-                f"num_training_tokens ({self.num_training_tokens}) must be divisible by sequence length ({self.max_length}) * global batch size ({self.global_batch_size})"
+                f"num_training_tokens ({self.num_training_tokens}) must be divisible by data length ({self.data_length}) * global batch size ({self.global_batch_size})"
             )
-        self.max_steps = self.num_training_tokens // self.max_length // self.global_batch_size
+        self.max_steps = self.num_training_tokens // self.data_length // self.global_batch_size
         self.save_total_limit = (self.max_steps + self.save_steps - 1) // self.save_steps
         return self
 
@@ -86,7 +86,8 @@ def experiment_config(
 
     ``local_batch_size`` is sequences per device per microbatch; ``global_batch_size``
     includes all devices and accumulation. ``num_training_tokens`` counts padded
-    training positions, excluding validation; it must divide exactly into steps.
+    data positions, excluding prefixes and validation. Steps divide this budget by
+    ``DATA_LENGTH`` and the global batch size; a non-integer result is rejected.
     ``lr`` controls optimizer update size. ``model`` selects a supported Qwen3 Base
     checkpoint; ``n_bits`` sets message length and the number of text blocks.
     ``loss_type='nll'`` minimizes prefix NLL plus ``alpha`` times data KL;
@@ -105,7 +106,7 @@ def experiment_config(
         delta=delta,
         dataset_cache_name="fineweb-500k",
         concatenation_space="token",
-        max_length=SEQUENCE_LENGTH,
+        data_length=DATA_LENGTH,
         validation_samples=256,
         lora_rank=32,
         lora_alpha=16,
@@ -141,7 +142,9 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
     """
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     accumulation_steps = gradient_accumulation_steps(config, world_size)
-    training_args = build_sft_config(config, accumulation_steps)
+    tokenizer = AutoTokenizer.from_pretrained(config.model)
+    tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
+    training_args = build_sft_config(config, accumulation_steps, tokenizer)
     training_args.save_only_model = True
     configure_wandb_environment(config, os.environ)
     # W&B otherwise writes its local logs relative to the working directory.
@@ -154,8 +157,6 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
         min_document_tokens=config.min_document_tokens,
         max_document_tokens=config.max_document_tokens,
     )
-    tokenizer = AutoTokenizer.from_pretrained(config.model)
-    tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
     validation_dataset = dataset.take(config.validation_samples).map(fixed_prefix_metadata, with_indices=True, fn_kwargs={"n_bits": config.n_bits})
     return PrefixKLTrainer(
         model=config.model,
@@ -170,7 +171,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
             prefix_bits_encoding_text_collator,
             tokenizer=tokenizer,
             n_bits=config.n_bits,
-            max_length=config.max_length,
+            data_length=config.data_length,
             concatenation_space=config.concatenation_space,
         ),
         processing_class=tokenizer,
@@ -242,17 +243,17 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
     default=NUM_TRAINING_TOKENS,
     show_default=True,
     type=click.IntRange(min=1),
-    help="Total padded training token positions, excluding validation. Increase to train longer at a fixed batch size.",
+    help="Total padded data positions, excluding prefixes and validation. Increase to train longer at a fixed batch size.",
 )
 def main(
     local_batch_size: int, global_batch_size: int, num_training_tokens: int, lr: float, model: QwenModel, n_bits: int, loss_type: LossType, alpha: float, delta: float
 ) -> None:
     """Train for a token budget, deriving optimizer steps from sequence and batch sizes.
 
-    With the default budget, --local-batch-size 4 --global-batch-size 32 runs 4,096 steps.
-    Sequence length * global batch must divide the token budget exactly.
+    Steps equal num_training_tokens / (data_length * global_batch_size).
+    Data length * global batch must divide the token budget exactly.
     Global batch must be divisible by local batch * WORLD_SIZE.
-    Checkpoints remain every 32 optimizer steps; all are retained.
+    Checkpoints follow the configured save cadence; all are retained.
     """
     try:
         trainer = build_trainer(

@@ -10,12 +10,15 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, Qwen3Config, Qwen3ForCausalLM
 from trl import SFTConfig
 
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import prefix_token_length
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
 def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B-Base")
     tokenizer.pad_token = tokenizer.eos_token
+    data_length = 16
+    max_length = data_length + prefix_token_length(tokenizer, n_bits=8)
     config = Qwen3Config(
         vocab_size=len(tokenizer),
         hidden_size=32,
@@ -36,12 +39,14 @@ def main() -> None:
             processing_class=tokenizer,
             train_dataset=dataset,
             eval_dataset=dataset,
-            data_collator=partial(prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=8, max_length=48),
+            data_collator=partial(prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=8, data_length=data_length),
             peft_config=LoraConfig(task_type="CAUSAL_LM", r=2, target_modules=["q_proj", "v_proj"]),
             args=SFTConfig(
                 output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], f"prefix-kl-smoke-test-{loss_mode}"),
-                max_length=48,
+                max_length=max_length,
                 max_steps=1,
+                use_cpu=True,
+                bf16=False,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=False,
                 report_to="none",
