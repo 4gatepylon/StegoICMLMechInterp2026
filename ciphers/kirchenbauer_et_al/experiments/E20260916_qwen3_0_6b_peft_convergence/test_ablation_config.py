@@ -15,7 +15,7 @@ from unittest.mock import Mock
 import pytest
 from click.testing import CliRunner
 
-from ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence import train
+from ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence import train
 from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import configure_wandb_environment, gradient_accumulation_steps
 
 README = Path(train.__file__).with_name("README.md")
