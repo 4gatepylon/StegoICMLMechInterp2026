@@ -59,9 +59,10 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Dataset, IterableDataset, load_dataset
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, StringConstraints, TypeAdapter, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PositiveInt, StringConstraints, TypeAdapter, ValidationError
+from transformers import PreTrainedTokenizerBase
 
-from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import DocumentTokenFilter
+from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import DocumentTokenFilter, QwenDocumentTokenFilter
 
 FINEWEB_REVISION = "9bb295ddab0e05d785b879661af7260fed5140fc"
 CACHE_FORMAT_VERSION = 2
@@ -71,6 +72,7 @@ _DEFAULT_DOCUMENTS = 500_000
 _DEFAULT_PART_DOCUMENTS = 10_000
 _SHUFFLE_SEED = 42
 _SHUFFLE_BUFFER_SIZE = 10_000
+_QWEN_TOKENIZATION_BATCH_SIZE = 32
 _PREVIEW_DOCUMENTS = 3
 _PREVIEW_CHARACTERS = 500
 _OUTPUT_SEPARATOR = "=" * 100
@@ -124,6 +126,10 @@ class _CacheManifest(DocumentTokenFilter):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    # Existing version-2 caches used names without the tokenizer qualifier.
+    min_gpt2_document_tokens: int = Field(default=0, ge=0, validation_alias=AliasChoices("min_gpt2_document_tokens", "min_document_tokens"))
+    max_gpt2_document_tokens: int | None = Field(default=None, ge=0, validation_alias=AliasChoices("max_gpt2_document_tokens", "max_document_tokens"))
 
     format_version: Literal[CACHE_FORMAT_VERSION] = CACHE_FORMAT_VERSION
     cache_name: _CacheName
@@ -318,8 +324,8 @@ def build_fineweb_cache(
     documents: int = _DEFAULT_DOCUMENTS,
     *,
     part_documents: int = _DEFAULT_PART_DOCUMENTS,
-    min_document_tokens: int = 0,
-    max_document_tokens: int | None = None,
+    min_gpt2_document_tokens: int = 0,
+    max_gpt2_document_tokens: int | None = None,
 ) -> Path:
     """Materialize a bounded prefix of accepted FineWeb rows with metadata.
 
@@ -331,9 +337,9 @@ def build_fineweb_cache(
             retain; defaults to 500,000. Rejected rows do not count.
         part_documents: Maximum rows per Parquet part; defaults to 10,000 and
             therefore produces 50 parts for the default build.
-        min_document_tokens: Inclusive minimum stored GPT-2 token count, before
+        min_gpt2_document_tokens: Inclusive minimum stored GPT-2 token count, before
             training tokenization or truncation. Zero accepts empty documents.
-        max_document_tokens: Inclusive maximum stored GPT-2 token count;
+        max_gpt2_document_tokens: Inclusive maximum stored GPT-2 token count;
             ``None`` means no upper bound. Must be at least the minimum.
 
     Returns:
@@ -357,8 +363,8 @@ def build_fineweb_cache(
         cache_name=cache_name,
         documents=documents,
         part_documents=part_documents,
-        min_document_tokens=min_document_tokens,
-        max_document_tokens=max_document_tokens,
+        min_gpt2_document_tokens=min_gpt2_document_tokens,
+        max_gpt2_document_tokens=max_gpt2_document_tokens,
     )
     cache_directory = _cache_directory(config.cache_name)
     if cache_directory.exists():
@@ -399,8 +405,8 @@ def build_fineweb_cache(
             documents=document_count,
             parts=part_count,
             part_documents=config.part_documents,
-            min_document_tokens=config.min_document_tokens,
-            max_document_tokens=config.max_document_tokens,
+            min_gpt2_document_tokens=config.min_gpt2_document_tokens,
+            max_gpt2_document_tokens=config.max_gpt2_document_tokens,
         )
         (temporary_directory / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n")
         (temporary_directory / "_SUCCESS").touch()
@@ -412,13 +418,37 @@ def build_fineweb_cache(
     return cache_directory
 
 
+def _qwen_length_mask(texts: list[str], *, tokenizer: PreTrainedTokenizerBase, token_filter: QwenDocumentTokenFilter) -> list[bool]:
+    """Select GPT-2 survivors by their untruncated training-tokenizer lengths.
+
+    Args:
+        texts: Complete document strings, already accepted by the GPT-2 filter.
+            The dataset passes only its ``text`` column as a batch in row order.
+        tokenizer: Training tokenizer. Its result must contain ``input_ids``,
+            a list of token-ID lists with exactly one list per input text in
+            the same order. No other result keys are consumed.
+        token_filter: Validated inclusive Qwen bounds; inherited GPT-2 bounds
+            are enforced by the preceding dataset filter.
+
+    Returns:
+        One Boolean per input text. ``IterableDataset.filter`` retains the
+        complete original row wherever the corresponding Boolean is true.
+        Counts exclude special tokens, control prefixes, and padding.
+    """
+    encoded_batch = tokenizer(texts, add_special_tokens=False, truncation=False, padding=False, return_attention_mask=False, return_token_type_ids=False)
+    return [token_filter.accepts_qwen(len(token_ids)) for token_ids in encoded_batch["input_ids"]]
+
+
 def load_fineweb_cache(
     cache_name: str = _DEFAULT_CACHE_NAME,
     *,
     minimum_documents: int = 1,
     shuffle: bool = True,
-    min_document_tokens: int = 0,
-    max_document_tokens: int | None = None,
+    min_gpt2_document_tokens: int = 0,
+    max_gpt2_document_tokens: int | None = None,
+    min_qwen_document_tokens: int = 0,
+    max_qwen_document_tokens: int | None = None,
+    tokenizer: PreTrainedTokenizerBase | None = None,
 ) -> IterableDataset:
     """Load a completed local cache for the KL trainer.
 
@@ -428,26 +458,48 @@ def load_fineweb_cache(
             trainer uses this to reserve validation plus training data.
         shuffle: Whether to apply the deterministic local shuffle. Production
             callers retain the default; tests may disable it to inspect order.
-        min_document_tokens: Inclusive minimum stored GPT-2 token count. With
+        min_gpt2_document_tokens: Inclusive minimum stored GPT-2 token count. With
             either bound enabled, scan only the Parquet token-count column to
             check the accepted count before returning the streaming dataset.
-        max_document_tokens: Inclusive maximum stored GPT-2 token count;
+        max_gpt2_document_tokens: Inclusive maximum stored GPT-2 token count;
             ``None`` disables the upper bound. Loading filters are independent
             of construction bounds and cannot recover documents omitted then.
+        min_qwen_document_tokens: Inclusive minimum complete-document length
+            under ``tokenizer``, applied only after GPT-2 filtering.
+        max_qwen_document_tokens: Inclusive maximum under ``tokenizer``;
+            ``None`` disables the upper bound. With zero Qwen minimum and no
+            maximum, this stage is skipped and the tokenizer is never called.
+        tokenizer: Training tokenizer, required when Qwen filtering is enabled.
+            Counts exclude special tokens, prefixes, padding, and truncation.
+            The loader uses batches of 32 surviving texts and never downloads
+            a tokenizer itself. Callers must use the same tokenizer for training.
 
     Returns:
         A streaming local ``IterableDataset``. Every row contains the nine keys
         documented by ``build_fineweb_cache``. The trainer consumes ``text``;
         inspection tools also use the document provenance and annotations.
         Filtering precedes shuffle and the caller's train/validation split.
+        With Qwen filtering enabled, the loader scans all GPT-2 survivors to
+        check ``minimum_documents`` after both filters before returning. The
+        lazy stream repeats tokenization on subsequent iterations, including
+        separate train/validation scans. Counts are not persisted to the cache.
 
     Raises:
         FileNotFoundError: If the cache is absent or lacks its completion marker.
         RuntimeError: If the manifest or Parquet parts are invalid or too small.
+        ValueError: If bounds are invalid or enabled Qwen filtering has no tokenizer.
     """
-    token_filter = DocumentTokenFilter(min_document_tokens=min_document_tokens, max_document_tokens=max_document_tokens)
+    token_filter = QwenDocumentTokenFilter(
+        min_gpt2_document_tokens=min_gpt2_document_tokens,
+        max_gpt2_document_tokens=max_gpt2_document_tokens,
+        min_qwen_document_tokens=min_qwen_document_tokens,
+        max_qwen_document_tokens=max_qwen_document_tokens,
+    )
+    qwen_filtering = token_filter.min_qwen_document_tokens > 0 or token_filter.max_qwen_document_tokens is not None
+    if qwen_filtering and tokenizer is None:
+        raise ValueError("tokenizer is required when Qwen document filtering is enabled")
     _, _, part_paths = _validate_cache(cache_name, minimum_documents=minimum_documents)
-    filtering = token_filter.min_document_tokens > 0 or token_filter.max_document_tokens is not None
+    filtering = token_filter.min_gpt2_document_tokens > 0 or token_filter.max_gpt2_document_tokens is not None
     if filtering:
         accepted_documents = sum(
             token_filter.accepts(token_count)
@@ -468,6 +520,20 @@ def load_fineweb_cache(
     )
     if filtering:
         dataset = dataset.filter(token_filter.accepts, input_columns=["token_count"])
+    if qwen_filtering:
+        dataset = dataset.filter(
+            _qwen_length_mask,
+            input_columns=["text"],
+            batched=True,
+            batch_size=_QWEN_TOKENIZATION_BATCH_SIZE,
+            fn_kwargs={"tokenizer": tokenizer, "token_filter": token_filter},
+        )
+        accepted_documents = sum(1 for _ in dataset)
+        if accepted_documents < minimum_documents:
+            raise RuntimeError(
+                f"FineWeb cache '{cache_name}' contains {accepted_documents} documents after GPT-2 and Qwen token filtering "
+                f"but at least {minimum_documents} are required. Relax the bounds or build a larger cache."
+            )
     return dataset.shuffle(seed=_SHUFFLE_SEED, buffer_size=_SHUFFLE_BUFFER_SIZE) if shuffle else dataset
 
 
@@ -509,12 +575,12 @@ def _format_preview_text(text: str) -> str:
     type=click.IntRange(min=1),
     help="Exact number of documents to store.",
 )
-@click.option("--min-document-tokens", default=0, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum stored GPT-2 token count.")
-@click.option("--max-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum stored GPT-2 token count; omitted means unlimited.")
-def main(cache_name: str, documents: int, min_document_tokens: int, max_document_tokens: int | None) -> None:
+@click.option("--min-gpt2-document-tokens", default=0, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum stored GPT-2 token count.")
+@click.option("--max-gpt2-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum stored GPT-2 token count; omitted means unlimited.")
+def main(cache_name: str, documents: int, min_gpt2_document_tokens: int, max_gpt2_document_tokens: int | None) -> None:
     """Build, verify, and preview a bounded FineWeb cache in local artifacts."""
     try:
-        cache_directory = build_fineweb_cache(cache_name, documents, min_document_tokens=min_document_tokens, max_document_tokens=max_document_tokens)
+        cache_directory = build_fineweb_cache(cache_name, documents, min_gpt2_document_tokens=min_gpt2_document_tokens, max_gpt2_document_tokens=max_gpt2_document_tokens)
         _, manifest, part_paths = _validate_cache(cache_name, exact_documents=documents)
         preview_documents = _preview_cache(cache_name)
     except (FileExistsError, KeyError, OSError, RuntimeError, ValueError, ValidationError) as error:

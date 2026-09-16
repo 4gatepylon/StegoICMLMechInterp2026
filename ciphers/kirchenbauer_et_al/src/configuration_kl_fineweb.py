@@ -21,29 +21,55 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 class DocumentTokenFilter(BaseModel):
     """Inclusive bounds on FineWeb's stored GPT-2 token count, before truncation.
 
-    ``min_document_tokens`` defaults to zero; ``max_document_tokens=None``
+    ``min_gpt2_document_tokens`` defaults to zero; ``max_gpt2_document_tokens=None``
     disables the upper bound. Shared by cache construction, manifests, loading,
     and training configuration so all entry points enforce the same range.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    min_document_tokens: int = Field(default=0, ge=0)
-    max_document_tokens: int | None = Field(default=None, ge=0)
+    # FineWeb already stores GPT-2 counts in token_count. They are close to Qwen
+    # counts but not identical, so this cheap prefilter cannot replace Qwen filtering.
+    min_gpt2_document_tokens: int = Field(default=0, ge=0)
+    max_gpt2_document_tokens: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_token_range(self) -> Self:
         """Return the validated configuration, rejecting reversed bounds."""
-        if self.max_document_tokens is not None and self.max_document_tokens < self.min_document_tokens:
-            raise ValueError("max_document_tokens must be greater than or equal to min_document_tokens")
+        if self.max_gpt2_document_tokens is not None and self.max_gpt2_document_tokens < self.min_gpt2_document_tokens:
+            raise ValueError("max_gpt2_document_tokens must be greater than or equal to min_gpt2_document_tokens")
         return self
 
     def accepts(self, token_count: int) -> bool:
         """Return whether a stored GPT-2 ``token_count`` satisfies both bounds."""
-        return token_count >= self.min_document_tokens and (self.max_document_tokens is None or token_count <= self.max_document_tokens)
+        return token_count >= self.min_gpt2_document_tokens and (self.max_gpt2_document_tokens is None or token_count <= self.max_gpt2_document_tokens)
 
 
-class PrefixKLTrainingConfig(DocumentTokenFilter):
+class QwenDocumentTokenFilter(DocumentTokenFilter):
+    """Nested GPT-2 and training-tokenizer bounds on complete document text.
+
+    Inherited bounds use cached GPT-2 counts and are applied first. Qwen bounds
+    use the caller's training tokenizer without prefixes, special tokens,
+    padding, or truncation. Zero minimum and an unlimited maximum disable the
+    Qwen stage, so existing cache consumers need no tokenizer.
+    """
+
+    min_qwen_document_tokens: int = Field(default=0, ge=0)
+    max_qwen_document_tokens: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_qwen_token_range(self) -> Self:
+        """Reject reversed Qwen bounds independently of the GPT-2 bounds."""
+        if self.max_qwen_document_tokens is not None and self.max_qwen_document_tokens < self.min_qwen_document_tokens:
+            raise ValueError("max_qwen_document_tokens must be greater than or equal to min_qwen_document_tokens")
+        return self
+
+    def accepts_qwen(self, token_count: int) -> bool:
+        """Return whether a complete document's Qwen count meets inclusive bounds."""
+        return token_count >= self.min_qwen_document_tokens and (self.max_qwen_document_tokens is None or token_count <= self.max_qwen_document_tokens)
+
+
+class PrefixKLTrainingConfig(QwenDocumentTokenFilter):
     """Validated settings accepted by the FineWeb KL training entry point."""
 
     model_config = ConfigDict(extra="forbid")
@@ -56,6 +82,8 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
     alpha: float = 1.0
     delta: float = 1.0
     profile_memory_steps: int = Field(default=0, ge=0)
+    # Bit positions include every data slot; reject padding before it can receive bits.
+    reject_document_padding: bool = True
 
     # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
     dataset_cache_name: str = "fineweb-500k"
@@ -205,8 +233,14 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
         help="completed cache below $STEGO_ARTIFACTS_DIR/datasets/fineweb (default: fineweb-500k)",
     )
     add("--loss-mode", choices=("nll", "ignore_prefix"), default="nll")
-    add("--min-document-tokens", type=int, help="inclusive minimum stored GPT-2 token count (default: 0)")
-    add("--max-document-tokens", type=lambda value: None if value.lower() == "none" else int(value), help="inclusive maximum stored GPT-2 token count (default: none)")
+    add("--min-gpt2-document-tokens", type=int, help="inclusive minimum stored GPT-2 token count (default: 0)")
+    add("--max-gpt2-document-tokens", type=lambda value: None if value.lower() == "none" else int(value), help="inclusive maximum stored GPT-2 token count (default: none)")
+    add("--min-qwen-document-tokens", type=int, help="inclusive minimum full-document training-tokenizer count, after GPT-2 filtering (default: 0)")
+    add(
+        "--max-qwen-document-tokens",
+        type=lambda value: None if value.lower() == "none" else int(value),
+        help="inclusive maximum full-document training-tokenizer count, after GPT-2 filtering (default: none)",
+    )
     add("--strategy", choices=("block", "modulo"), default="block")
     add("--n-bits", type=int, default=8)
     add("--alpha", type=float, default=1.0)
@@ -241,6 +275,11 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--wandb-project")
     add("--wandb-tag", action="append", dest="wandb_tags")
     add("--resume-from-checkpoint")
+    add(
+        "--reject-document-padding",
+        action=argparse.BooleanOptionalAction,
+        help="reject any document padding before model execution (default: true); left padding is always forbidden",
+    )
     add("--profile-memory-steps", type=int, default=0, help="Profile this many initial microbatches per rank")
     parser.set_defaults(**config.model_dump())
     parsed_arguments = vars(parser.parse_args(argv))

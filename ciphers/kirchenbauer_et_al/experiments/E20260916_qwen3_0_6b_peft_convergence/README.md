@@ -18,6 +18,14 @@ alone is insufficient: inspect its two components separately. This experiment
 does not establish message-recovery accuracy, text quality, or superiority over
 other models; those require separate evaluations or controlled comparisons.
 
+The default budget is **33,554,432 training data tokens**: 256 optimizer steps
+at global batch 128 with 1,024 document tokens per example. This uses 32,768
+training documents plus 256 validation documents. Compared with the prior
+1,024-step, 4,096-token setup at the same batch size, this uses four times fewer
+documents and sixteen times fewer data tokens. The shorter run follows the
+observation that training loss drops quickly; generalization and message
+recovery still require evaluation.
+
 ## Configuration and length accounting
 
 `train.py` uses the shared Pydantic configuration, FineWeb loader, collator, and
@@ -41,10 +49,12 @@ checks that enough documents remain after filtering for training and validation.
 
 The tokenizer's control-prefix width is added to `data_length` to derive the
 model-input `max_length`; startup output reports both lengths and the bit count.
-Prefix overhead can change with `--n-bits` or the tokenizer. Short documents
-are padded, so data positions are not necessarily actual text tokens.
+Prefix overhead can change with `--n-bits` or the tokenizer. The default filters
+require GPT-2 length >=756 followed by Qwen length >=1,024. With the padding
+guard enabled, all 1,024 data positions contain real document tokens; longer
+documents are truncated. The supported message widths are 1, 2, and 4 bits.
 
-`--num-training-tokens` budgets padded **data** positions, excluding prefixes
+`--num-training-tokens` budgets **data** positions, excluding prefixes
 and validation. Logged padded-input tokens additionally include the prefix
 overhead. Earlier versions applied the configured length to the whole input;
 the corrected length setting allocates that budget to data and adds the prefix.
@@ -95,17 +105,36 @@ paths. Training is not automatically resumed from existing files.
 | `--loss-type` | `nll` uses prefix NLL + alpha × data KL. `ignore_prefix` uses only data KL (ignoring alpha), to test whether learning the prefix itself matters. |
 | `--alpha` | In `nll` mode, larger values prioritize data KL relative to prefix NLL; zero trains only the prefix. It does not change the separate LoRA alpha setting. |
 | `--delta` | Adds a logit boost to the teacher vocabulary subset encoding the requested bit when encoding is enabled. Increasing delta strengthens that target: selected-vs-unselected token odds are multiplied by `exp(delta)`. This may improve bit recovery at a text-quality cost; measure both. Zero removes the boost, while data KL still trains against the unboosted teacher. |
+| `--min-gpt2-document-tokens`, `--max-gpt2-document-tokens` | Inclusive cached GPT-2 document-length bounds, applied first. Default: minimum 756, unlimited maximum. |
+| `--min-qwen-document-tokens`, `--max-qwen-document-tokens` | Inclusive full-document counts under the selected Qwen tokenizer, applied only to GPT-2 survivors. Default: minimum 1,024, unlimited maximum. |
+
+See [nested filtering](../../README.md#filtering-cached-training-documents) for
+counting semantics and the additional tokenization cost. Both stages precede
+the train/validation split, and enough documents must remain for the configured
+budget. Active length bounds are included in run/output names to distinguish
+filtered ablations. Set both minimum bounds to zero to explicitly disable filtering;
+the padding guard remains enabled unless separately disabled.
 
 Learning rate must be positive; alpha and delta must be nonnegative; all three
-must be finite. `n_bits` must be positive, and `data_length` must divide evenly
+must be finite. `n_bits` must be between 1 and 4, and `data_length` must divide evenly
 into bit blocks. The prefix is outside that budget. Prefix NLL and data
 KL are training objectives, not measurements of recovery or text quality.
 
+The [padding guard](../../README.md#padding-guard) is enabled by default.
+`--allow-document-padding` explicitly permits right padding; left padding is
+always forbidden. Prefer Qwen filtering at or above `data_length` so every
+example fills its bit-bearing data positions.
+
 ## Model × message-length sweep
+
+The commands below use global batch 32, so the same 33,554,432-token budget
+runs for **1,024 steps**. Changing the batch size changes the step count, while
+the token budget and the required 33,024 documents stay fixed. All nine runs
+can reuse the same cache.
 
 After the setup above, run each command from the repository root. The example
 sweep below selects model, bit count, and batch sizes explicitly; other flags
-use their current defaults. Each run uses the configured data-token budget,
+use their current defaults (1,024 data tokens, GPT-2 minimum 756, Qwen minimum 1,024). Each run uses the configured data-token budget,
 with steps and accumulation derived as described above. Use the
 `torchrun --standalone --nproc_per_node=N --module` launcher instead of `python -m`
 for multiple GPUs. Hardware memory fit must be checked for each model.
@@ -114,15 +143,12 @@ for multiple GPUs. Hardware memory fit must be checked for each model.
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
 ```
 
 Compare model sizes and bit counts at matched token counts. Falling losses can

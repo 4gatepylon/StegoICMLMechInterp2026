@@ -27,8 +27,11 @@ def main() -> None:
     dataset = load_fineweb_cache(
         args.dataset_cache_name,
         minimum_documents=required_documents,
-        min_document_tokens=args.min_document_tokens,
-        max_document_tokens=args.max_document_tokens,
+        min_gpt2_document_tokens=args.min_gpt2_document_tokens,
+        max_gpt2_document_tokens=args.max_gpt2_document_tokens,
+        min_qwen_document_tokens=args.min_qwen_document_tokens,
+        max_qwen_document_tokens=args.max_qwen_document_tokens,
+        tokenizer=tokenizer,
     )
     validation_dataset = dataset.take(args.validation_samples).map(
         fixed_prefix_metadata,
@@ -43,6 +46,7 @@ def main() -> None:
         delta=args.delta,
         strategy=args.strategy,
         profile_memory_steps=args.profile_memory_steps,
+        reject_document_padding=args.reject_document_padding,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
         data_collator=partial(prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=args.n_bits, data_length=args.data_length),

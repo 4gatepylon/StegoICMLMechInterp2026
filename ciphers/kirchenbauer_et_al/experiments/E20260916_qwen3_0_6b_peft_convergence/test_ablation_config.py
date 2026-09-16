@@ -1,7 +1,9 @@
 """Exercise sweep commands, invalid inputs, naming, and trainer wiring on CPU.
 
-Partitions include all three models/four bit lengths, both loss types, zero and
+Partitions include all three models/three bit lengths, both loss types, zero and
 positive objective weights, invalid models, and nonpositive/nonfinite numbers.
+Document filtering covers CLI forwarding of nested bounds, invalid ranges,
+the selected tokenizer, and distinct filtered-run output names.
 Trainer, tokenizer, dataset, and SFT construction are mocked: GPU training,
 model downloads, distributed execution, and live W&B delivery are omitted.
 """
@@ -35,7 +37,7 @@ def test_documented_sweep_commands(arguments: list[str], monkeypatch: pytest.Mon
     assert config.max_steps * config.data_length * config.global_batch_size == config.num_training_tokens
     assert gradient_accumulation_steps(config, world_size=1) == 16
     assert gradient_accumulation_steps(config, world_size=4) == 4
-    assert f"{config.n_bits}bit-lr0.0003-gb32" in config.run_name
+    assert f"{config.n_bits}bit-lr0.0003-gb{config.global_batch_size}" in config.run_name
     build.return_value.train.assert_called_once_with()
 
 
@@ -43,13 +45,14 @@ def test_sweep_covers_full_cartesian_product() -> None:
     """Catch missing/duplicated commands in the documented model × bits sweep."""
     combinations = [(args[args.index("--model") + 1], int(args[args.index("--n-bits") + 1])) for args in SWEEP_COMMANDS]
     assert len(combinations) == len(set(combinations))
-    assert set(combinations) == {(model, bits) for model in get_args(train.QwenModel) for bits in (1, 2, 4, 8)}
+    assert set(combinations) == {(model, bits) for model in get_args(train.QwenModel) for bits in (1, 2, 4)}
     run_names = [train.experiment_config(local_batch_size=2, global_batch_size=32, model=model, n_bits=bits).run_name for model, bits in combinations]
     assert len(set(run_names)) == len(combinations)
 
 
 @pytest.mark.parametrize("loss_type", ["nll", "ignore_prefix"])
-def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("reject_padding", [True, False])
+def test_objective_overrides_reach_trainer(loss_type: str, reject_padding: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Forward nondefault knobs through Click/config/trainer and collator/validation."""
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("WANDB_PROJECT", "old-project")
@@ -64,18 +67,50 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
     monkeypatch.setattr(train, "PrefixKLTrainer", trainer)
     result = CliRunner().invoke(
         train.main,
-        ["--lr", "0.001", "--model-name", "Qwen/Qwen3-4B-Base", "--n-bits", "8", "--loss-type", loss_type, "--alpha", "0.5", "--delta", "4"],
+        [
+            "--reject-document-padding" if reject_padding else "--allow-document-padding",
+            "--lr",
+            "0.001",
+            "--model-name",
+            "Qwen/Qwen3-4B-Base",
+            "--n-bits",
+            "4",
+            "--loss-type",
+            loss_type,
+            "--alpha",
+            "0.5",
+            "--delta",
+            "4",
+            "--min-gpt2-document-tokens",
+            "100",
+            "--max-gpt2-document-tokens",
+            "2000",
+            "--min-qwen-document-tokens",
+            "512",
+            "--max-qwen-document-tokens",
+            "2048",
+        ],
     )
     assert result.exit_code == 0, result.output
     config = train.build_sft_config.call_args.args[0]
     assert config.learning_rate == 0.001
-    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4-tokens{config.num_training_tokens}"
+    assert config.run_name == f"qwen3-4b-4bit-lr0.001-gb128-{loss_type}-a0.5-d4-tokens{config.num_training_tokens}-gpt2-100-2000-qwen-512-2048"
+    train.load_fineweb_cache.assert_called_once_with(
+        config.dataset_cache_name,
+        minimum_documents=config.validation_samples + config.max_steps * config.global_batch_size,
+        min_gpt2_document_tokens=100,
+        max_gpt2_document_tokens=2000,
+        min_qwen_document_tokens=512,
+        max_qwen_document_tokens=2048,
+        tokenizer=train.AutoTokenizer.from_pretrained.return_value,
+    )
     kwargs = trainer.call_args.kwargs
-    assert (kwargs["model"], kwargs["n_bits"], kwargs["loss_mode"], kwargs["alpha"], kwargs["delta"]) == ("Qwen/Qwen3-4B-Base", 8, loss_type, 0.5, 4)
-    assert kwargs["data_collator"].keywords["n_bits"] == 8
+    assert kwargs["reject_document_padding"] is reject_padding
+    assert (kwargs["model"], kwargs["n_bits"], kwargs["loss_mode"], kwargs["alpha"], kwargs["delta"]) == ("Qwen/Qwen3-4B-Base", 4, loss_type, 0.5, 4)
+    assert kwargs["data_collator"].keywords["n_bits"] == 4
     assert kwargs["data_collator"].keywords["data_length"] == config.data_length
     assert train.build_sft_config.call_args.args[2] is train.AutoTokenizer.from_pretrained.return_value
-    assert dataset.take.return_value.map.call_args.kwargs["fn_kwargs"] == {"n_bits": 8}
+    assert dataset.take.return_value.map.call_args.kwargs["fn_kwargs"] == {"n_bits": 4}
     train.AutoTokenizer.from_pretrained.assert_called_once_with("Qwen/Qwen3-4B-Base")
     trainer.return_value.train.assert_called_once_with()
     environment = {"WANDB_PROJECT": "old-project"}
@@ -90,12 +125,18 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
         ("--model", "Qwen/Qwen3-8B-Base"),
         ("--loss-type", "kl"),
         ("--n-bits", "0"),
+        ("--n-bits", "5"),
+        ("--n-bits", "8"),
         ("--lr", "0"),
         ("--lr", "nan"),
         ("--alpha", "-1"),
         ("--alpha", "inf"),
         ("--delta", "-1"),
         ("--delta", "nan"),
+        ("--min-gpt2-document-tokens", "-1"),
+        ("--max-gpt2-document-tokens", "-1"),
+        ("--min-qwen-document-tokens", "-1"),
+        ("--max-qwen-document-tokens", "-1"),
     ],
 )
 def test_invalid_cli_fails_before_trainer(flag: str, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,6 +173,23 @@ def test_close_numeric_settings_keep_distinct_output_names(knob: str) -> None:
     assert first.run_name != second.run_name
 
 
+@pytest.mark.parametrize("tokenizer_name", ["gpt2", "qwen"])
+def test_document_bounds_distinguish_runs_and_reject_reversed_ranges(tokenizer_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Partition active bounds into lower-only, zero-only, and reversed ranges."""
+    prefix = f"{tokenizer_name}-"
+    minimum_field = f"min_{prefix.replace('-', '_')}document_tokens"
+    maximum_field = f"max_{prefix.replace('-', '_')}document_tokens"
+    lower = train.experiment_config(**{minimum_field: 512})
+    zero_only = train.experiment_config(**{minimum_field: 0, maximum_field: 0})
+    unfiltered = train.experiment_config(min_gpt2_document_tokens=0, min_qwen_document_tokens=0)
+    assert len({lower.run_name, zero_only.run_name, unfiltered.run_name}) == 3
+    build = Mock()
+    monkeypatch.setattr(train, "build_trainer", build)
+    result = CliRunner().invoke(train.main, [f"--min-{prefix}document-tokens", "20", f"--max-{prefix}document-tokens", "10"])
+    assert result.exit_code != 0
+    build.assert_not_called()
+
+
 def test_different_training_budgets_use_different_output_directories(monkeypatch, tmp_path) -> None:
     """Cover two valid budgets with otherwise identical flags; omit actual checkpoint IO."""
     from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import build_sft_config
@@ -145,3 +203,30 @@ def test_different_training_budgets_use_different_output_directories(monkeypatch
         outputs.append(build_sft_config(config, 1, tokenizer).output_dir)
     assert configs[0].max_steps != configs[1].max_steps
     assert outputs[0] != outputs[1]
+
+
+@pytest.mark.parametrize("n_bits", [5, 8])
+def test_experiment_python_interface_rejects_more_than_four_bits(n_bits: int) -> None:
+    """Reject both the nearest unsupported width and the former eight-bit setting."""
+    with pytest.raises(ValueError):
+        train.experiment_config(n_bits=n_bits)
+
+
+@pytest.mark.parametrize("global_batch_size,expected_steps", [(32, 1024), (64, 512), (128, 256)])
+def test_shorter_experiment_budget_preserves_document_count_across_batches(global_batch_size: int, expected_steps: int) -> None:
+    """Cover sweep/default batch sizes and the shared four-bit YAML budget.
+
+    Steps adapt to batch size while the 33,554,432-token contract consumes
+    32,768 training documents plus the disjoint validation reserve. No training
+    or tokenization is performed; loader/Trainer wiring is tested separately.
+    """
+    from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import load_training_config
+
+    config = train.experiment_config(global_batch_size=global_batch_size)
+    reference = load_training_config("ciphers/kirchenbauer_et_al/experiments/E20260912_qwen3_4b_4bit/config.yaml")
+    assert config.max_steps == expected_steps
+    assert config.max_steps * config.global_batch_size * config.data_length == 33_554_432
+    assert reference.max_steps * reference.global_batch_size * reference.data_length == config.num_training_tokens
+    assert config.validation_samples + config.max_steps * config.global_batch_size == 33_024
+    assert config.min_qwen_document_tokens >= config.data_length
+    assert reference.min_qwen_document_tokens >= reference.data_length

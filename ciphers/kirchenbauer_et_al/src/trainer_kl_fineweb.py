@@ -12,7 +12,7 @@ from jaxtyping import Float, Int
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from trl import SFTTrainer
 
-from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import prefix_batch, tokenize_with_prefix
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import TokenBatch, prefix_batch, tokenize_with_prefix
 
 N_BITS = 8
 DELTA = 1.0
@@ -162,7 +162,14 @@ def free_token_kl(
 
 
 class PrefixKLTrainer(SFTTrainer):
-    """Train LoRA logits toward gated boosts, optionally learning the prefix with NLL."""
+    """Train LoRA logits toward gated boosts, optionally learning the prefix with NLL.
+
+    ``reject_document_padding=True`` rejects any masked token before teacher or
+    student execution. Set it false only to explicitly permit right padding;
+    left/internal padding is always forbidden because it shifts bit positions.
+    The required collator supplies both masks; the opt-out retains the historical
+    loss over all data slots, including pads, rather than changing the objective.
+    """
 
     def __init__(
         self,
@@ -173,6 +180,7 @@ class PrefixKLTrainer(SFTTrainer):
         delta: float = DELTA,
         strategy: Literal["block", "modulo"] = STRATEGY,
         profile_memory_steps: int = 0,
+        reject_document_padding: bool = True,
         data_collator=None,
         **kwargs,
     ) -> None:
@@ -186,11 +194,36 @@ class PrefixKLTrainer(SFTTrainer):
         if collator_function is not prefix_bits_encoding_text_collator:
             raise ValueError("PrefixKLTrainer requires prefix_bits_encoding_text_collator")
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
+        self.reject_document_padding = reject_document_padding
         self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
         super().__init__(*args, data_collator=data_collator, **kwargs)
         # This loss ignores num_items_in_batch, so retain "default batch size reduction":
         # https://huggingface.co/docs/transformers/v5.17.0/en/main_classes/trainer#transformers.Trainer.compute_loss
         self.model_accepts_loss_kwargs = False
+
+    def _validate_padding(self, attention_mask: TokenBatch, *, name: str) -> None:
+        """Reject masks that would assign watermark bits to padding positions.
+
+        Args:
+            attention_mask: Binary mask of shape ``[batch, tokens]`` from the
+                required collator. One denotes real tokens, zero padding.
+            name: Input key used in errors to distinguish teacher and student
+                masks. Both are checked independently before either forward.
+
+        Returns:
+            None if the mask satisfies the policy. Left padding and internal
+            holes always raise ValueError. Right padding also raises when
+            ``reject_document_padding`` is true (the default). Disabling that
+            guard restores the previous loss behavior, which includes padded
+            positions in the bit partition and KL; it does not mask them away.
+            Token IDs are not inspected because a pad ID can also be a real EOS.
+        """
+        if torch.any(attention_mask[:, 0] == 0) or torch.any(attention_mask[:, 1:] > attention_mask[:, :-1]):
+            raise ValueError(f"{name} contains left or internal padding, which is always forbidden")
+        if self.reject_document_padding and torch.any(attention_mask == 0):
+            raise ValueError(
+                f"{name} contains right padding; every document must fill data_length. Filter by Qwen length >= data_length or explicitly set reject_document_padding=False."
+            )
 
     def _positions(self, part: int, n_tokens: int, device: torch.device) -> TokenPositions:
         part_size = n_tokens // self.n_bits
@@ -317,6 +350,10 @@ class PrefixKLTrainer(SFTTrainer):
     ) -> ScalarLoss | tuple[ScalarLoss, object]:
         """Replace SFTTrainer's causal-LM loss with the gated prefix KL objective.
 
+        Unlike the parent loss, this checks both attention masks before either
+        model forward: left/internal padding is forbidden, and right padding
+        fails unless ``reject_document_padding=False`` was explicitly selected.
+
         ``prefix_bits_encoding_text_collator()`` produces these required fields::
 
             {
@@ -330,6 +367,8 @@ class PrefixKLTrainer(SFTTrainer):
                 "prefix_length": int,                  # Q, used to align prefixed and teacher logits.
             }
         """
+        self._validate_padding(inputs["base_attention_mask"], name="base_attention_mask")
+        self._validate_padding(inputs["attention_mask"], name="attention_mask")
         self._profile_this_call = self._profile_calls < self.profile_memory_steps
         self._profile_calls += 1
         if self._profile_this_call and self.accelerator.device.type == "cuda":

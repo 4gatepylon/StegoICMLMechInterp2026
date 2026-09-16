@@ -18,6 +18,66 @@ src/
 └── trainer_kl_fineweb.py             # Implements the gated red/green KL trainer and data collator.
 ```
 
+## Filtering cached training documents
+
+Both prefix-KL training entry points support two optional, inclusive filters:
+
+1. `min_gpt2_document_tokens` / `max_gpt2_document_tokens` select by the cached **GPT-2**
+   `token_count`.
+2. `min_qwen_document_tokens` / `max_qwen_document_tokens` tokenize only those
+   survivors with the **selected training model's tokenizer** and filter again.
+
+For example, add these settings to a training YAML file:
+
+```yaml
+min_gpt2_document_tokens: 512
+max_gpt2_document_tokens: null
+min_qwen_document_tokens: 512
+max_qwen_document_tokens: null
+```
+
+The corresponding flags are `--min-gpt2-document-tokens`, `--max-gpt2-document-tokens`,
+`--min-qwen-document-tokens`, and `--max-qwen-document-tokens`, available in
+the shared training CLI and the convergence experiment's Click CLI. In YAML,
+use `null` for an unlimited maximum; the shared CLI also accepts `none`.
+The Click CLI leaves a maximum unlimited when its flag is omitted.
+The GPT-2 options replace the former unqualified `min_document_tokens` /
+`max_document_tokens` names. Existing cache manifests using the old names are
+still readable; update training YAML and CLI invocations to the explicit names.
+
+Both stages are disabled by default (minimum zero, maximum unlimited). Qwen
+counts cover complete documents without special tokens, control prefixes,
+padding, or truncation. They are independent of `data_length`, which controls
+later padding/truncation. A document must pass **both** filters: the GPT-2
+prefilter can exclude a document that would otherwise satisfy the Qwen bounds.
+
+Filtering occurs before shuffle and train/validation splitting. The loader
+requires `validation_samples + max_steps * global_batch_size` survivors after
+both stages: 33,024 with the current experiment defaults (32,768 training and
+256 validation documents). It raises an error
+before constructing the trainer if too few remain. Enabling Qwen filtering adds
+a full scan of GPT-2 survivors in batches of 32 to check this requirement;
+lazy dataset iterations repeat tokenization, including separate training and
+validation scans. The cache files and their nine-field schema are unchanged.
+Programmatic callers of `load_fineweb_cache` must pass `tokenizer=` when Qwen
+filtering is enabled and use that same tokenizer for training.
+
+## Padding guard
+
+`PrefixKLTrainer` and its Pydantic training configuration default to
+`reject_document_padding: true`. Before either model forward, training and
+evaluation reject any zero in the teacher or student attention mask. This
+prevents assigning watermark bits to padded data positions. Token IDs are not
+used to detect padding because Qwen may use the same ID for EOS and padding.
+Left-padding tokenizers and left/internal masked positions are always rejected.
+
+Set `reject_document_padding: false` in YAML, pass
+`--no-reject-document-padding` to the shared CLI, or use
+`--allow-document-padding` in the convergence CLI to explicitly allow right
+padding. This opt-out retains the historical KL/bit partition over every data
+slot, including padding; it does not exclude pads from the loss. The preferred
+configuration filters Qwen document lengths to at least `data_length`.
+
 ## Extracting one bit
 
 To extract a bit from its block of text, compare the likelihood of the observed
@@ -351,19 +411,19 @@ in a single process, without `torchrun`. With no flags, the builder stores
 python -m ciphers.kirchenbauer_et_al.src.cache_fineweb
 ```
 
-Both cache creation and training accept `--min-document-tokens` (default `0`)
-and `--max-document-tokens` (default unlimited). Bounds are inclusive and use
+Both cache creation and training accept `--min-gpt2-document-tokens` (default `0`)
+and `--max-gpt2-document-tokens` (default unlimited). Bounds are inclusive and use
 FineWeb's stored **GPT-2 token count**, before training tokenization or
 truncation. They filter individual documents, not Parquet files. For example:
 
 ```bash
 python -m ciphers.kirchenbauer_et_al.src.cache_fineweb \
   --cache-name fineweb-100k-filtered --documents 100000 \
-  --min-document-tokens 256 --max-document-tokens 8192
+  --min-gpt2-document-tokens 256 --max-gpt2-document-tokens 8192
 
 python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
   --dataset-cache-name fineweb-100k-filtered --max-steps 1000 \
-  --min-document-tokens 512 --max-document-tokens 4096
+  --min-gpt2-document-tokens 512 --max-gpt2-document-tokens 4096
 ```
 
 Creation reads until it has the requested number of **accepted** documents and
@@ -375,10 +435,10 @@ train/validation split. When filtering is enabled, loading scans the local
 `token_count` column to verify enough accepted documents remain for the run.
 No token-count scan is added with the unfiltered defaults.
 
-The Python builder and loader accept `min_document_tokens=0` and
-`max_document_tokens=None`. Training YAML uses those same field names (`null`
+The Python builder and loader accept `min_gpt2_document_tokens=0` and
+`max_gpt2_document_tokens=None`. Training YAML uses those same field names (`null`
 for no maximum); explicit CLI flags override YAML, and
-`--max-document-tokens none` clears a YAML maximum for training. Negative or
+`--max-gpt2-document-tokens none` clears a YAML maximum for training. Negative or
 reversed bounds are rejected. The cache CLI uses Click; the existing training
 CLI still uses argparse.
 
@@ -505,7 +565,7 @@ from `--global-batch-size`, which defaults to 32 for backward compatibility.
 
 ## Experiments
 
-- [Original Qwen3-4B, 8-bit run](experiments/E20260912_qwen3_4b_8bit/README.md): preserved YAML and single-run launcher.
+- [Qwen3-4B, 4-bit run](experiments/E20260912_qwen3_4b_4bit/README.md): filtered 1,024-token documents, YAML and single-run launcher.
 - [Qwen3 PEFT convergence](experiments/E20260916_qwen3_0_6b_peft_convergence/README.md): model-size, message-length, and objective ablations.
 
 Character-space concatenation is no longer supported. Remove `concatenation_space`

@@ -1,19 +1,25 @@
-# Qwen3-4B eight-bit Kirchenbauer prefix-KL training run.
-# At data_length, 1024 steps * 128 examples/step * 4096 data slots/example
-# processes 536,870,912 padded data positions, plus control-prefix overhead.
+# Qwen3-4B four-bit Kirchenbauer prefix-KL training run.
+# Global batch size: 128 documents per optimizer step, across all devices and accumulation.
+# Training documents: 256 steps * 128 documents/step = 32,768.
+# Training data-token budget: 32,768 documents * 1024 tokens/document = 33,554,432 tokens.
+# Training plus validation requires 32,768 + 256 = 33,024 filtered documents.
+# Control-prefix tokens are additional; the padding guard requires real data in every slot.
 
 # --- PrefixKLTrainer constructor and model setup ---
 model: Qwen/Qwen3-4B-Base
 loss_mode: nll
 strategy: block
-n_bits: 8
+n_bits: 4
 alpha: 1.0
 delta: 2.0
 profile_memory_steps: 0
 
 # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
 dataset_cache_name: fineweb-500k
-data_length: 4096
+min_gpt2_document_tokens: 756
+min_qwen_document_tokens: 1024
+reject_document_padding: true
+data_length: 1024
 validation_samples: 256
 
 # --- PEFT LoraConfig ---
@@ -22,8 +28,8 @@ lora_alpha: 16
 lora_dropout: 0.05
 
 # --- TRL SFTConfig ---
-run_name: qwen3-4b-fineweb-prefix-kl-lora
-max_steps: 1024
+run_name: qwen3-4b-4bit-fineweb-prefix-kl-lora
+max_steps: 256
 learning_rate: 0.0003
 warmup_steps: 50
 per_device_batch_size: 2
