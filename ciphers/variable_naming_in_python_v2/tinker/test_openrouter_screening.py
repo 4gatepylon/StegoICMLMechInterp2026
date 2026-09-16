@@ -5,16 +5,19 @@ public/private data; nonzero input/output/request prices; absent/denied approval
 JSON/fenced JSON/blank/invalid Python/truncated output; correct/wrong/absent/empty/
 leading-zero/truncated frames crossed with functional pass/fail; HTTP/API/Modal
 infrastructure failure; complete/partial results and known/missing billed cost.
+Threads: 1/2/16/32 workers, fewer jobs than workers, generation and grading overlap,
+bounded concurrency, out-of-order completion, exactly-once persistence, invalid
+worker counts, and failures that stop claims while draining in-flight candidates.
 
 All HTTP and Modal execution are mocked. Real prompts and static decoding are used.
 Omissions: notebooks, live service integration, model quality, tokenizer accuracy,
 and internal decoder/Modal behavior already covered by their own test suites.
-
-TODO(hadriano) this should have a different name since this is not tinker, but instead open router.
 """
 
 import io
 import json
+from pathlib import Path
+from threading import Barrier, Event, Lock
 from unittest.mock import Mock
 
 import pytest
@@ -25,8 +28,9 @@ from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
 from ciphers.variable_naming_in_python_v2.data.codex_apps import SecretTask
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig, ModalAppsResult
 from ciphers.variable_naming_in_python_v2.decoder import CipherConfig
-from ciphers.variable_naming_in_python_v2.tinker import evaluate, prepare
-from ciphers.variable_naming_in_python_v2.tinker.prepare import CatalogModel, Message, PreparedRequest, Pricing, RequestBody, RunConfig
+from ciphers.variable_naming_in_python_v2.tinker import openrouter_evaluate as evaluate
+from ciphers.variable_naming_in_python_v2.tinker import openrouter_prepare as prepare
+from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import CatalogModel, Message, PreparedRequest, Pricing, RequestBody, RunConfig
 
 
 @pytest.fixture
@@ -136,12 +140,13 @@ def test_multiple_models_share_prompts_for_both_invocation_interfaces(prepared, 
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"approved": False}, {"approved": 1}])
-def test_approval_required_before_any_inference(prepared, monkeypatch, kwargs):
+@pytest.mark.parametrize("num_workers", [1, 32])
+def test_approval_required_before_any_inference(prepared, monkeypatch, kwargs, num_workers):
     relative, directory, _, _ = prepared
     send = Mock(side_effect=AssertionError("Must not send"))
     monkeypatch.setattr(evaluate, "send_request", send)
     with pytest.raises(ValueError, match="approved=True"):
-        evaluate.run_prepared(relative, **kwargs)
+        evaluate.run_prepared(relative, num_workers=num_workers, **kwargs)
     send.assert_not_called()
     assert not (directory / "responses.jsonl").exists()
 
@@ -241,3 +246,135 @@ def test_fenced_json_and_missing_cost(prepared, monkeypatch):
     monkeypatch.setattr(evaluate, "evaluate_on_modal", Mock(return_value=ModalAppsResult(status="passed", num_tests=1, passed_tests=1, sandbox_id="mock")))
     assert all(row.code == "pass" for row in evaluate.run_prepared(relative, approved=True))
     assert evaluate.summarize(relative)[0]["reported_cost_usd"] is None
+
+
+@pytest.mark.parametrize("num_workers", [0, -1, True, 1.5, "16"])
+def test_invalid_workers_rejected_before_execution(prepared, monkeypatch, num_workers):
+    relative, directory, _, _ = prepared
+    send = Mock(side_effect=AssertionError("Must not send"))
+    monkeypatch.setattr(evaluate, "send_request", send)
+    with pytest.raises(ValidationError):
+        evaluate.run_prepared(relative, approved=True, num_workers=num_workers)
+    send.assert_not_called()
+    assert not (directory / "responses.jsonl").exists()
+
+
+@pytest.mark.parametrize("count,num_workers", [(1, 1), (3, 1), (3, 2), (65, 16), (65, 32), (2, 32)])
+def test_workers_overlap_generation_and_grading_with_bounded_exactly_once_results(prepared, monkeypatch, count, num_workers):
+    _, _, config, _ = prepared
+    relative = prepare.prepare_run(config.model_copy(update={"num_problems": count}))
+    directory = prepare.artifact_path(relative)
+    requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    concurrency = min(count, num_workers)
+    initial_ids = {request.request_id for request in requests[:concurrency]}
+    generation_barrier, grading_barrier = Barrier(concurrency), Barrier(concurrency)
+    lock = Lock()
+    active = peak = 0
+    sent = []
+
+    def send(request, timeout_s):
+        nonlocal active, peak
+        with lock:
+            sent.append(request.request_id)
+            active += 1
+            peak = max(peak, active)
+        if request.request_id in initial_ids:
+            generation_barrier.wait(timeout=10)
+        return completion(f"# {request.request_id}\npass")
+
+    def grade(request, response, cases, secret, modal_config):
+        nonlocal active
+        expected = json.dumps({"request_id": request.request_id, "response": completion(f"# {request.request_id}\npass")}) + "\n"
+        assert expected in (directory / "responses.jsonl").read_text()
+        if request.request_id in initial_ids:
+            grading_barrier.wait(timeout=10)
+        with lock:
+            active -= 1
+        return evaluate.CandidateResult(request_id=request.request_id, problem_id=request.problem_id, model=request.body.model, functional_success=True)
+
+    monkeypatch.setattr(evaluate, "send_request", send)
+    monkeypatch.setattr(evaluate, "evaluate_candidate", grade)
+    results = evaluate.run_prepared(relative, approved=True, num_workers=num_workers)
+    ids = [request.request_id for request in requests]
+    assert peak == concurrency and active == 0
+    assert sorted(sent) == sorted(ids)
+    assert [result.request_id for result in results] == ids
+    for filename in ("responses.jsonl", "results.jsonl"):
+        persisted = [json.loads(line) for line in (directory / filename).read_text().splitlines()]
+        assert sorted(row["request_id"] for row in persisted) == sorted(ids)
+    execution = evaluate.ExecutionConfig.model_validate_json((directory / "execution.json").read_text())
+    assert execution.num_workers == num_workers
+    assert evaluate.summarize(relative)[0]["complete"]
+    with pytest.raises(FileExistsError):
+        evaluate.run_prepared(relative, approved=True, num_workers=num_workers)
+    assert len(sent) == count
+
+
+def test_out_of_order_completion_preserves_return_order(prepared, monkeypatch):
+    _, _, config, _ = prepared
+    relative = prepare.prepare_run(config.model_copy(update={"num_problems": 3}))
+    directory = prepare.artifact_path(relative)
+    requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    third_started = Event()
+
+    def send(request, timeout_s):
+        if request.request_id == requests[0].request_id:
+            assert third_started.wait(timeout=10)
+        if request.request_id == requests[2].request_id:
+            third_started.set()
+        return completion("pass")
+
+    monkeypatch.setattr(evaluate, "send_request", send)
+    monkeypatch.setattr(evaluate, "evaluate_on_modal", lambda *args: ModalAppsResult(status="passed", num_tests=1, sandbox_id="mock"))
+    results = evaluate.run_prepared(relative, approved=True, num_workers=2)
+    saved = [json.loads(line) for line in (directory / "results.jsonl").read_text().splitlines()]
+    assert saved[0]["request_id"] == requests[1].request_id
+    assert [result.request_id for result in results] == [request.request_id for request in requests]
+
+
+@pytest.mark.parametrize("failure", ["http", "api", "modal"])
+def test_parallel_failure_stops_new_claims_and_saves_in_flight_results(prepared, monkeypatch, failure):
+    _, _, config, _ = prepared
+    relative = prepare.prepare_run(config.model_copy(update={"num_problems": 6}))
+    directory = prepare.artifact_path(relative)
+    requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    first_id = requests[0].request_id
+    all_started, failure_saved = Barrier(3), Event()
+    sent = []
+    lock = Lock()
+    write_text = Path.write_text
+
+    def record_failure(path, text, *args, **kwargs):
+        result = write_text(path, text, *args, **kwargs)
+        if path == directory / "error.json":
+            failure_saved.set()
+        return result
+
+    def send(request, timeout_s):
+        with lock:
+            sent.append(request.request_id)
+        all_started.wait(timeout=10)
+        if request.request_id == first_id:
+            if failure == "http":
+                raise RuntimeError("Transport failed")
+            if failure == "api":
+                return {"error": {"message": "API failed"}}
+        else:
+            assert failure_saved.wait(timeout=10)
+        return completion(f"# {request.request_id}\npass")
+
+    def grade(code, *args):
+        if failure == "modal" and first_id in code:
+            raise RuntimeError("Modal failed")
+        return ModalAppsResult(status="passed", num_tests=1, sandbox_id="mock")
+
+    monkeypatch.setattr(Path, "write_text", record_failure)
+    monkeypatch.setattr(evaluate, "send_request", send)
+    monkeypatch.setattr(evaluate, "evaluate_on_modal", grade)
+    with pytest.raises(RuntimeError):
+        evaluate.run_prepared(relative, approved=True, num_workers=3)
+    assert set(sent) == {row.request_id for row in requests[:3]}
+    saved = [json.loads(line) for line in (directory / "results.jsonl").read_text().splitlines()]
+    assert {row["request_id"] for row in saved} == {row.request_id for row in requests[1:3]}
+    assert json.loads((directory / "error.json").read_text())["request_id"] == first_id
+    assert evaluate.summarize(relative)[0]["joint_pass_at_1"] is None

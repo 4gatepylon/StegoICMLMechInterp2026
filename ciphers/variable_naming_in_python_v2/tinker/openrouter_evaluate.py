@@ -1,22 +1,21 @@
-"""Run an approved saved request list and grade one answer per APPS problem.
-
-TODO(hadriano) this should have a different name since this is not tinker, but instead open router.
-"""
+"""Run an approved saved request list and grade one answer per APPS problem."""
 
 import ast
 import json
 import os
-import tqdm
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 
+import tqdm
 from pydantic import BaseModel, ConfigDict, Field
 
 from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
 from ciphers.variable_naming_in_python_v2.data.codex_apps import PythonAnswer, SecretTask
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig, evaluate_on_modal
 from ciphers.variable_naming_in_python_v2.decoder import DecodeError, decode
-from ciphers.variable_naming_in_python_v2.tinker.prepare import API_ROOT, PreparedRequest, RunConfig, artifact_path
+from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import API_ROOT, PreparedRequest, RunConfig, artifact_path
 
 
 class CandidateResult(BaseModel):
@@ -78,6 +77,19 @@ class ChatResponse(BaseModel):
     choices: list[Choice] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
     error: dict | None = None
+
+
+class ExecutionConfig(BaseModel):
+    """Persist execution.json: thread count and shared immutable Modal settings.
+
+    ``num_workers`` bounds concurrent generation-plus-grading jobs; 1 is sequential.
+    ``modal_config`` applies independently to every candidate's remote sandbox.
+    Positive integers are required; booleans, floats, and strings are rejected.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    num_workers: int = Field(default=1, ge=1, strict=True)
+    modal_config: ModalAppsConfig = Field(default_factory=ModalAppsConfig)
 
 
 def send_request(request: PreparedRequest, timeout_s: int) -> dict:
@@ -143,22 +155,31 @@ def evaluate_candidate(request: PreparedRequest, response: ChatResponse, cases: 
     return result
 
 
-def run_prepared(run_dir: Path, *, approved: bool = False, modal_config: ModalAppsConfig | None = None) -> list[CandidateResult]:
-    """Execute a reviewed run once, sequentially, with no automatic retries.
+def run_prepared(run_dir: Path, *, approved: bool = False, num_workers: int = 1, modal_config: ModalAppsConfig | None = None) -> list[CandidateResult]:
+    """Execute a reviewed run with bounded threads and no automatic retries.
 
     ``run_dir`` is relative to STEGO_ARTIFACTS_DIR. ``approved`` must be exactly True
     after the caller reviews estimate.json; False raises before any network call.
+    ``num_workers`` is a positive integer (e.g. 16 or 32), defaulting to sequential
+    execution at 1. Each worker generates and grades one candidate at a time.
     ``modal_config`` defaults to the existing evaluator's limits. Returns completed
-    CandidateResult rows and writes results.jsonl incrementally. Before grading,
+    CandidateResult rows in prepared-request order. Writes results.jsonl in
+    completion order, with request_id as the join key. Before grading,
     responses.jsonl saves each raw API response as {request_id, response}; response
-    follows ChatResponse's consumed schema. execution.json records Modal settings.
-    error.json records an interrupted request and exception; prior records survive.
+    follows ChatResponse's consumed schema. A lock serializes all file writes and
+    request claims; HTTP calls and Modal grading run outside the lock.
+    execution.json records ExecutionConfig, including num_workers and modal_config.
+    The first infrastructure failure stops new claims and is recorded in error.json
+    as {request_id, error}. Already-claimed candidates finish and save their results
+    before that exception is raised. On caller interruption, threads likewise drain
+    already-claimed work; running HTTP/Modal calls cannot be cancelled immediately.
     Existing responses.jsonl blocks repeat execution, including after an interrupted
     run. This deliberately omits resume logic to avoid accidental duplicate billing.
     Requests, config, and grading cases must remain unchanged after preparation.
     """
     if approved is not True:
         raise ValueError("Review estimate.json, then explicitly pass approved=True")
+    execution = ExecutionConfig(num_workers=num_workers, modal_config=modal_config or ModalAppsConfig())
     directory = artifact_path(run_dir)
     config = RunConfig.model_validate_json((directory / "config.json").read_text())
     requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
@@ -167,27 +188,64 @@ def run_prepared(run_dir: Path, *, approved: bool = False, modal_config: ModalAp
         raise ValueError("No available models/requests in this run")
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise ValueError("Set OPENROUTER_API_KEY before inference")
-    modal_config = modal_config or ModalAppsConfig()
-    results = []
+    results: dict[int, CandidateResult] = {}
+    errors: list[Exception] = []
+    pending = iter(enumerate(requests))
+    lock = Lock()
+    stop = Event()
     # Exclusive creation also prevents two notebook invocations from billing twice.
     with (directory / "responses.jsonl").open("x") as responses_file:
-        (directory / "execution.json").write_text(modal_config.model_dump_json(indent=2))
+        (directory / "execution.json").write_text(execution.model_dump_json(indent=2))
         with (directory / "results.jsonl").open("x") as results_file:
-            for index, request in tqdm.tqdm(enumerate(requests, 1), total=len(requests), desc="Evaluating candidates"):
-                print(f"{index}/{len(requests)} {request.request_id}", flush=True)
-                try:
-                    response = send_request(request, config.timeout_s)
-                    responses_file.write(json.dumps({"request_id": request.request_id, "response": response}) + "\n")
-                    responses_file.flush()
-                    parsed = ChatResponse.model_validate(response)
-                    result = evaluate_candidate(request, parsed, grading_cases[str(request.problem_id)], config.secret, modal_config)
-                    results_file.write(result.model_dump_json() + "\n")
-                    results_file.flush()
-                    results.append(result)
-                except Exception as error:
-                    (directory / "error.json").write_text(json.dumps({"request_id": request.request_id, "error": f"{type(error).__name__}: {error}"}, indent=2))
-                    raise
-    return results
+            with tqdm.tqdm(total=len(requests), desc="Evaluating candidates") as progress:
+                # TODO(hadriano) decouple modal grading from generation
+                def work() -> None:
+                    """Claim jobs until exhausted/stopped and persist each result.
+
+                    Uses the enclosing immutable request/config data and open files.
+                    No arguments or return value: results are keyed by input index;
+                    errors retain the first exception for the caller. Every shared
+                    mutation and file write is protected by lock, including failure
+                    recording, so no new job is claimed after a recorded failure.
+                    """
+                    while True:
+                        with lock:
+                            if stop.is_set():
+                                return
+                            item = next(pending, None)
+                            if item is None:
+                                return
+                        index, request = item
+                        try:
+                            response = send_request(request, config.timeout_s)
+                            with lock:
+                                responses_file.write(json.dumps({"request_id": request.request_id, "response": response}) + "\n")
+                                responses_file.flush()
+                            parsed = ChatResponse.model_validate(response)
+                            result = evaluate_candidate(request, parsed, grading_cases[str(request.problem_id)], config.secret, execution.modal_config)
+                            with lock:
+                                results_file.write(result.model_dump_json() + "\n")
+                                results_file.flush()
+                                results[index] = result
+                                progress.update(1)
+                        except Exception as error:
+                            with lock:
+                                stop.set()
+                                errors.append(error)
+                                if len(errors) == 1:
+                                    (directory / "error.json").write_text(json.dumps({"request_id": request.request_id, "error": f"{type(error).__name__}: {error}"}, indent=2))
+                            return
+
+                with ThreadPoolExecutor(max_workers=min(execution.num_workers, len(requests))) as pool:
+                    try:
+                        futures = [pool.submit(work) for _ in range(min(execution.num_workers, len(requests)))]
+                        for future in futures:
+                            future.result()
+                    finally:
+                        stop.set()
+    if errors:
+        raise errors[0]
+    return [results[index] for index in range(len(requests))]
 
 
 def summarize(run_dir: Path) -> list[dict]:

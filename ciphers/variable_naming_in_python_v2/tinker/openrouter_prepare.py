@@ -1,7 +1,4 @@
-"""Prepare a small OpenRouter screening run; future training happens on Tinker.
-
-TODO(hadriano) this should have a different name since this is not tinker, but instead open router.
-"""
+"""Prepare a small OpenRouter screening run; future training happens on Tinker."""
 
 import json
 import math
