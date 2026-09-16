@@ -44,6 +44,45 @@ approaches `ceil(num_requests / num_workers)` times the per-candidate time.
 OpenRouter rate limits, Modal capacity, and slow individual requests can reduce
 that speedup. No retries or rate-limit bypasses are added.
 
+## Matched Codex Luna comparison
+
+The same notebook also runs `gpt-5.6-luna` through the existing ChatGPT-backed
+Codex SDK helper, with tools disabled and a fresh thread per candidate:
+
+```python
+from ciphers.variable_naming_in_python_v2.tinker.codex_evaluate import (
+    prepare_codex_comparison, run_codex_comparison,
+)
+
+codex_run_dir = prepare_codex_comparison(run_dir)
+# Review the copied requests; this call uses the Codex subscription and Modal.
+run_codex_comparison(run_dir, approved=True, num_workers=16)
+summary = summarize(codex_run_dir)
+```
+
+The comparison deduplicates the source run by problem ID, verifies that each
+model received the same prompt, and copies one request per problem plus the exact
+private grading cases into `<run_dir>/codex-luna/`. The cipher, payload, problem
+IDs, prompt text, response parser, grading code, and decoder are shared. Only the
+model/request IDs change in the copied request bodies. No prompts are regenerated
+and no new problems are sampled. Use the same Modal configuration for both runs.
+
+Luna uses prompt-driven JSON formatting (`response_format="text"` in the Codex
+helper), matching OpenRouter's lack of schema enforcement. Its raw response,
+resolved model, SDK restrictions, and preflight snapshot are saved before grading.
+The SDK's generation artifacts live in the comparison's `generation/` directory.
+`comparison.json` identifies the source run and provider differences, while
+`codex_config.json` records the SDK model, deadline, and quota policy. USD estimates
+and billed-cost fields are left unknown for subscription-backed Codex.
+
+This matches the task inputs, **not every provider setting**: the Codex helper adds
+fixed no-tools base instructions, cannot apply OpenRouter's output-token limit,
+and uses its own reasoning/sampling defaults. The copied `max_tokens` field records
+the OpenRouter limit but is not applied to Codex. These differences are explicit
+in `comparison.json`; this is a practical screening comparison, not a controlled
+claim that model weights are the only changing variable. Do not compare results
+from older saved runs that used a different cipher.
+
 ## Comparison
 
 - One secret-carrying answer per problem/model: pass@1, with at most **100 shared
@@ -166,13 +205,14 @@ Keep prepared files unchanged after cost review; create a new run to change sett
 ## Verification
 
 ```bash
-conda run -n stego python -m pytest ciphers/variable_naming_in_python_v2/tinker/test_openrouter_screening.py -q
+conda run -n stego python -m pytest ciphers/variable_naming_in_python_v2/tinker -q
 ```
 
-The test module documents its partitions and omissions. It checks preparation,
+The test modules document their partitions and omissions. They check preparation,
 cost arithmetic, approval gating, failure accounting, and scoring with mocked HTTP
 and Modal services. Thread tests use barriers/events to check overlap, worker limits,
 out-of-order completion, exactly-once persistence, and draining after failures.
-They do not measure live service throughput. The suite does not test notebooks,
-call paid services, or claim model
-quality. The decoder and Modal evaluator remain the existing implementations.
+Codex tests check exact input copying, mismatch rejection, and text-mode generation
+through the shared parser/grader with a mocked SDK. The suite does not test notebooks,
+call paid services, measure live throughput, or claim model quality. The decoder
+and Modal evaluator remain the existing implementations.
