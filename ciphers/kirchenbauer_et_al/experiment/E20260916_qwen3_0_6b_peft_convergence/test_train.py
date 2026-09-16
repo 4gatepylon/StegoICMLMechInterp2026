@@ -77,8 +77,8 @@ def test_cli_and_trainer_consume_scaled_schedule(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_TAGS", "")
     original_config = train.experiment_config
 
-    def cpu_config(*args):
-        config = original_config(*args)
+    def cpu_config(*args, **kwargs):
+        config = original_config(*args, **kwargs)
         config.dtype, config.report_to = "float32", "none"
         return config
 
