@@ -1,3 +1,5 @@
+"""Cover one/multiple observed tokens, both colors and base masses; omit real model IO."""
+
 import math
 from types import SimpleNamespace
 
@@ -10,18 +12,22 @@ GREEN = torch.tensor([0, 1])
 RED = torch.tensor([2, 3])
 DELTA = math.log(3)
 TOKEN_IDS = {
-    "all green": [2, 0, 1, 0],
-    "all red": [0, 2, 3, 2],
-    "two green one red": [2, 0, 1, 2],
-    "two red one green": [0, 2, 3, 0],
-    "balanced": [0, 2, 0],
-    "one red": [0, 2],
+    "all green": [0, 1, 0],
+    "all red": [2, 3, 2],
+    "two green one red": [0, 1, 2],
+    "two red one green": [2, 3, 0],
+    "balanced": [2, 0],
+    "one red": [2],
 }
 
 
 class Tokenizer:
-    def __call__(self, text: str, return_tensors: str) -> SimpleNamespace:
+    bos_token_id = None
+    eos_token_id = 0
+
+    def __call__(self, text: str, return_tensors: str, add_special_tokens: bool) -> SimpleNamespace:
         assert return_tensors == "pt"
+        assert not add_special_tokens
         return SimpleNamespace(input_ids=torch.tensor([TOKEN_IDS[text]]))
 
 

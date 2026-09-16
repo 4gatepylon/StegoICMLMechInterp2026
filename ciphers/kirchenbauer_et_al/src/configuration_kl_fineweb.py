@@ -57,7 +57,7 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
     delta: float = 1.0
     profile_memory_steps: int = Field(default=0, ge=0)
 
-    # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
+    # --- Dataset and collator; SFTConfig adds the prefix and initial context to data_length ---
     dataset_cache_name: str = "fineweb-500k"
     data_length: int = Field(default=4096, gt=0)
     validation_samples: int = Field(default=256, gt=0)
@@ -114,18 +114,18 @@ def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int,
         ``include_num_input_tokens_seen`` controls Transformers' cumulative
         all-token or non-padding-token counter, while ``PrefixKLTrainer.log()``
         independently adds the cumulative padded-token counter. ``max_length``
-        includes both the data budget and measured prefix width. Rank zero
+        includes the data budget, measured prefix width and one context token. Rank zero
         prints this relationship before training starts; each collated batch
         checks that its prefixes match the reference width.
     """
     prefix_length = prefix_token_length(tokenizer, args.n_bits)
-    max_length = args.data_length + prefix_length
+    max_length = args.data_length + prefix_length + 1
     if int(os.environ.get("RANK", "0")) == 0:
         print(
-            f"[prefix-KL] data_length={args.data_length} + prefix_length={prefix_length} = max_length={max_length} tokens per model input. "
+            f"[prefix-KL] data_length={args.data_length} + prefix_length={prefix_length} + initial_context_length=1 = max_length={max_length} tokens per model input. "
             f"The control prefix contains a {args.n_bits}-bit secret message and the encoding gate; "
             f"the {args.strategy} partition assigns {args.data_length // args.n_bits} data positions per bit. "
-            "Short documents are padded to data_length; total-input token metrics include the prefix.",
+            "Short documents are padded to data_length; total-input token metrics include the prefix and initial context.",
             flush=True,
         )
     return SFTConfig(

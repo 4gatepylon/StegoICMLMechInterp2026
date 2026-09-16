@@ -18,7 +18,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B-Base")
     tokenizer.pad_token = tokenizer.eos_token
     data_length = 16
-    max_length = data_length + prefix_token_length(tokenizer, n_bits=8)
+    max_length = data_length + prefix_token_length(tokenizer, n_bits=8) + 1
     config = Qwen3Config(
         vocab_size=len(tokenizer),
         hidden_size=32,

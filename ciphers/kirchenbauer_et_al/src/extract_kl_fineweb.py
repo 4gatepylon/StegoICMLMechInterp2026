@@ -3,7 +3,10 @@
 from contextlib import nullcontext
 
 import torch
+from jaxtyping import Int
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
+
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import initial_context_token_id
 
 
 def probability_of_bit(
@@ -11,18 +14,27 @@ def probability_of_bit(
     bit: int,
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
-    red: torch.Tensor,
-    green: torch.Tensor,
+    red: Int[torch.Tensor, "red_tokens"],  # noqa: F821
+    green: Int[torch.Tensor, "green_tokens"],  # noqa: F821
     delta: float,
 ) -> float:
-    """Return P(bit | text), assuming equal priors and GREEN=0, RED=1."""
+    """Return scalar P(bit | text), assuming equal priors and GREEN=0, RED=1.
+
+    Score every token in ``text`` using the adapter-disabled ``model`` and
+    training's BOS/EOS initial context from ``tokenizer``. ``red`` and ``green``
+    must partition its vocabulary; ``delta`` is the training logit boost. The
+    caller chooses ``bit`` (0 or 1); model training mode is restored afterward.
+    For a later block, this standalone score omits preceding document context.
+    """
     if bit not in (0, 1):
         raise ValueError("bit must be 0 or 1")
 
     device = model.get_input_embeddings().weight.device
-    input_ids = tokenizer(text, return_tensors="pt").input_ids.to(device)
-    if input_ids.shape[1] < 2:
-        raise ValueError("text must contain at least two tokens")
+    input_ids = tokenizer(text, add_special_tokens=False, return_tensors="pt").input_ids.to(device)
+    if input_ids.shape[1] == 0:
+        raise ValueError("text must contain at least one token")
+    context_ids = torch.full_like(input_ids[:, :1], initial_context_token_id(tokenizer))
+    input_ids = torch.cat((context_ids, input_ids), dim=1)
 
     was_training = model.training
     model.eval()

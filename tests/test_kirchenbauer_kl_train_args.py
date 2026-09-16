@@ -189,10 +189,10 @@ def test_data_budget_reaches_trainer_logging_and_input_token_count(n_bits, prefi
     tokenizer = Mock(return_value={"input_ids": [[1] * prefix_length] * 2})
     training_args = build_sft_config(config, 2, tokenizer)
     assert config.data_length == 2048
-    assert training_args.max_length == 2048 + prefix_length
+    assert training_args.max_length == 2048 + prefix_length + 1
     output = capsys.readouterr().out
     if rank == "0":
-        assert f"data_length=2048 + prefix_length={prefix_length} = max_length={2048 + prefix_length}" in output
+        assert f"data_length=2048 + prefix_length={prefix_length} + initial_context_length=1 = max_length={2048 + prefix_length + 1}" in output
         assert f"{config.n_bits}-bit secret message" in output
         assert f"{2048 // config.n_bits} data positions per bit" in output
     else:
@@ -204,7 +204,7 @@ def test_data_budget_reaches_trainer_logging_and_input_token_count(n_bits, prefi
     logs = {}
     with patch.object(SFTTrainer, "log"):
         PrefixKLTrainer.log(trainer, logs)
-    assert logs["num_padded_input_tokens_seen"] == 3 * (2048 + prefix_length) * config.per_device_batch_size * 2
+    assert logs["num_padded_input_tokens_seen"] == 3 * (2048 + prefix_length + 1) * config.per_device_batch_size * 2
 
 
 @pytest.mark.parametrize("data_length", [0, -8, 4095])
@@ -255,7 +255,7 @@ def test_convergence_entrypoint_wires_data_and_total_lengths(monkeypatch, tmp_pa
     assert train.build_trainer(config) is trainer_constructor.return_value
     kwargs = trainer_constructor.call_args.kwargs
     assert kwargs["data_collator"].keywords["data_length"] == config.data_length
-    assert kwargs["args"].max_length == config.data_length + 25
+    assert kwargs["args"].max_length == config.data_length + 25 + 1
     assert kwargs["args"].save_only_model
 
 
