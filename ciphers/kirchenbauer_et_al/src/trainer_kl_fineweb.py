@@ -3,11 +3,13 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Iterator, Literal, override
 
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from trl import SFTTrainer
 
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import prefix_batch, tokenize_with_prefix
@@ -234,6 +236,21 @@ class PrefixKLTrainer(SFTTrainer):
         ):
             gathered_value = self.accelerator.gather_for_metrics(value).mean().item()
             self._metrics[mode][name].append(gathered_value)
+
+    @override
+    def _save_checkpoint(self, model: torch.nn.Module, trial: object | None) -> None:
+        """Run the parent save, then visibly report completion on the saving process.
+
+        model and trial are forwarded unchanged to the parent's checkpoint logic.
+        Unlike its pre-save INFO message, this flushed console line appears only
+        after success, regardless of logging verbosity. The path uses the parent's
+        trial-aware output directory. Returns None; save failures propagate without
+        a success message, and non-saving ranks remain silent.
+        """
+        super()._save_checkpoint(model, trial)
+        if self.args.should_save:
+            checkpoint = Path(self._get_output_dir(trial=trial)) / f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            print(f"Saved checkpoint at step {self.state.global_step}: {checkpoint}", flush=True)
 
     @override
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
