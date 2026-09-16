@@ -147,7 +147,10 @@ best. Run independent recovery and text-quality evaluations on saved adapters.
 
 Outputs are under
 `$STEGO_ARTIFACTS_DIR/<run-name>/`, including local W&B logs. Names encode the
-selected model, bits, learning rate, global batch, loss type, alpha, and delta.
+selected model, bits, learning rate, global batch, loss type, alpha, delta,
+and training-token budget. Different budgets therefore use separate checkpoint
+directories. Identical configurations still reuse the same name; use a fresh
+artifacts directory for independent repeats.
 All sizes share W&B project
 `E20260916_qwen3_peft_convergence`, which overrides an exported `WANDB_PROJECT`.
 Runs receive the existing `stego-icml-2026-git-archive` tag.

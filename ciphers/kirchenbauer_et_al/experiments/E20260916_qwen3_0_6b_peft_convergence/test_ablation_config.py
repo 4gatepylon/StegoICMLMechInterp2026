@@ -37,7 +37,7 @@ def test_documented_sweep_commands(arguments: list[str], monkeypatch: pytest.Mon
     assert config.max_steps * config.data_length * config.global_batch_size == config.num_training_tokens
     assert gradient_accumulation_steps(config, world_size=1) == 16
     assert gradient_accumulation_steps(config, world_size=4) == 4
-    assert f"{config.n_bits}bit-lr0.0003-gb32" in config.run_name
+    assert f"{config.n_bits}bit-lr0.0003-gb{config.global_batch_size}" in config.run_name
     build.return_value.train.assert_called_once_with()
 
 
@@ -94,7 +94,7 @@ def test_objective_overrides_reach_trainer(loss_type: str, reject_padding: bool,
     assert result.exit_code == 0, result.output
     config = train.build_sft_config.call_args.args[0]
     assert config.learning_rate == 0.001
-    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4-gpt2-100-2000-qwen-512-2048"
+    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4-tokens{config.num_training_tokens}-gpt2-100-2000-qwen-512-2048"
     train.load_fineweb_cache.assert_called_once_with(
         config.dataset_cache_name,
         minimum_documents=config.validation_samples + config.max_steps * config.global_batch_size,
@@ -186,3 +186,18 @@ def test_document_bounds_distinguish_runs_and_reject_reversed_ranges(tokenizer_n
     result = CliRunner().invoke(train.main, [f"--min-{prefix}document-tokens", "20", f"--max-{prefix}document-tokens", "10"])
     assert result.exit_code != 0
     build.assert_not_called()
+
+
+def test_different_training_budgets_use_different_output_directories(monkeypatch, tmp_path) -> None:
+    """Cover two valid budgets with otherwise identical flags; omit actual checkpoint IO."""
+    from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import build_sft_config
+
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
+    configs = [train.experiment_config(num_training_tokens=budget) for budget in (4096 * 128 * 32, 4096 * 128 * 64)]
+    tokenizer = Mock(return_value={"input_ids": [[1] * 25] * 2})
+    outputs = []
+    for config in configs:
+        config.dtype, config.report_to = "float32", "none"
+        outputs.append(build_sft_config(config, 1, tokenizer).output_dir)
+    assert configs[0].max_steps != configs[1].max_steps
+    assert outputs[0] != outputs[1]

@@ -341,3 +341,12 @@ def test_padding_guard_yaml_can_be_overridden_by_cli(tmp_path: Path, monkeypatch
     assert parse_args(["--config", "padding.yaml", "--reject-document-padding"]).reject_document_padding
     (tmp_path / "padding.yaml").write_text("reject_document_padding: true\n")
     assert not parse_args(["--config", "padding.yaml", "--no-reject-document-padding"]).reject_document_padding
+
+
+@pytest.mark.parametrize("mode", ["token", "char"])
+def test_removed_concatenation_setting_is_rejected(mode) -> None:
+    """Reject both historical mode values through config and CLI; YAML uses the same schema."""
+    with pytest.raises(ValueError, match="concatenation_space"):
+        PrefixKLTrainingConfig.model_validate({"concatenation_space": mode})
+    with pytest.raises(SystemExit):
+        parse_args(["--concatenation-space", mode])
