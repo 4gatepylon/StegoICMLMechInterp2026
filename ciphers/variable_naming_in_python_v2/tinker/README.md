@@ -44,6 +44,12 @@ stored as null. Luna generation and Modal grading records include per-job wall t
 Both scripts print stage timings and success counts. Errors are saved and remain
 in the total denominator. Private tests go only to Modal; code never executes locally.
 
+Progress bars appear automatically: OpenRouter shows completed batches for each
+model; Codex generation and Modal grading show completed results, including errors.
+Each bar shows elapsed time, completion rate and an estimated time remaining once
+completions arrive. OpenRouter updates after whole batches finish, so it can stay at
+zero until the first batch returns. No debug logging or extra flags are needed.
+
 Settings are hardcoded near the top of each script. There are no retries or resume;
 each OpenRouter invocation creates a fresh run, and an existing Luna answer file
 prevents rerunning Luna in that directory. OpenRouter uses a 16,384-token output
