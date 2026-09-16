@@ -53,7 +53,8 @@ prefilter can exclude a document that would otherwise satisfy the Qwen bounds.
 
 Filtering occurs before shuffle and train/validation splitting. The loader
 requires `validation_samples + max_steps * global_batch_size` survivors after
-both stages: 131,328 with the current experiment defaults. It raises an error
+both stages: 33,024 with the current experiment defaults (32,768 training and
+256 validation documents). It raises an error
 before constructing the trainer if too few remain. Enabling Qwen filtering adds
 a full scan of GPT-2 survivors in batches of 32 to check this requirement;
 lazy dataset iterations repeat tokenization, including separate training and
@@ -564,7 +565,7 @@ from `--global-batch-size`, which defaults to 32 for backward compatibility.
 
 ## Experiments
 
-- [Original Qwen3-4B, 8-bit run](experiments/E20260912_qwen3_4b_8bit/README.md): preserved YAML and single-run launcher.
+- [Qwen3-4B, 4-bit run](experiments/E20260912_qwen3_4b_4bit/README.md): filtered 1,024-token documents, YAML and single-run launcher.
 - [Qwen3 PEFT convergence](experiments/E20260916_qwen3_0_6b_peft_convergence/README.md): model-size, message-length, and objective ablations.
 
 Character-space concatenation is no longer supported. Remove `concatenation_space`
