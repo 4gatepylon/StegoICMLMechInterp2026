@@ -20,21 +20,25 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
+SEQUENCE_LENGTH = 4096
+# Original run: 128 sequences per optimizer step, 1,024 steps, padded to this length.
+NUM_TRAINING_TOKENS = 128 * 1024 * SEQUENCE_LENGTH
+
 
 class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
-    """Preserve 128 * 1,024 training sequences while allowing batch overrides."""
+    """Preserve NUM_TRAINING_TOKENS padded positions while allowing batch overrides."""
 
     @model_validator(mode="after")
     def derive_step_budget(self) -> Self:
         """Return settings with exact-budget steps and retention for every save.
 
-        Reject global batches that cannot divide the original sequence budget;
+        Reject batches whose token count cannot divide the training token budget;
         rounding would change the number of padded training tokens processed.
         Retention includes the Trainer's final save for a partial save interval.
         """
-        if self.global_batch_size is None or (128 * 1024) % self.global_batch_size:
-            raise ValueError("global batch size must divide 131072 training sequences exactly")
-        self.max_steps = (128 * 1024) // self.global_batch_size
+        if self.global_batch_size is None or NUM_TRAINING_TOKENS % (self.max_length * self.global_batch_size):
+            raise ValueError(f"sequence length * global batch size must divide {NUM_TRAINING_TOKENS} training tokens exactly")
+        self.max_steps = NUM_TRAINING_TOKENS // self.max_length // self.global_batch_size
         self.save_total_limit = (self.max_steps + self.save_steps - 1) // self.save_steps
         return self
 
@@ -46,9 +50,9 @@ def experiment_config(local_batch_size: int = 8, global_batch_size: int = 128) -
     existing one-bit 4B experiment, changing the model, local batch, run name,
     and checkpoint cadence/retention. ``local_batch_size`` is the per-device
     microbatch; ``global_batch_size`` is the effective batch across devices and
-    accumulation. Steps adjust to retain 131,072 training sequences, or
-    536,870,912 padded token positions at the fixed length of 4,096. This budget
-    excludes validation and does not count only non-padding text tokens.
+    accumulation. Steps divide ``NUM_TRAINING_TOKENS`` by ``SEQUENCE_LENGTH``
+    and the global batch size. This budget excludes validation and counts
+    padded token positions, not only non-padding text tokens.
     """
     return FixedBudgetTrainingConfig(
         model="Qwen/Qwen3-0.6B-Base",
@@ -60,7 +64,7 @@ def experiment_config(local_batch_size: int = 8, global_batch_size: int = 128) -
         delta=2.0,
         dataset_cache_name="fineweb-500k",
         concatenation_space="token",
-        max_length=4096,
+        max_length=SEQUENCE_LENGTH,
         validation_samples=256,
         lora_rank=32,
         lora_alpha=16,
@@ -138,10 +142,11 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
 @click.option("--local-batch-size", default=8, show_default=True, type=click.IntRange(min=1), help="Sequences per device per microbatch.")
 @click.option("--global-batch-size", default=128, show_default=True, type=click.IntRange(min=1), help="Sequences per optimizer step across all devices.")
 def main(local_batch_size: int, global_batch_size: int) -> None:
-    """Train on 131,072 sequences, adjusting steps to preserve the token budget.
+    """Train for NUM_TRAINING_TOKENS padded positions, adjusting optimizer steps.
 
     Example: --local-batch-size 4 --global-batch-size 32 runs 4,096 steps.
-    Global batch must divide 131,072 and be divisible by local batch * WORLD_SIZE.
+    Sequence length * global batch must divide the token budget exactly.
+    Global batch must be divisible by local batch * WORLD_SIZE.
     Checkpoints remain every 32 optimizer steps; all are retained.
     """
     try:
