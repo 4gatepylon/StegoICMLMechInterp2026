@@ -4,6 +4,7 @@ import ast
 import json
 import os
 import urllib.request
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Lock
@@ -155,13 +156,28 @@ def evaluate_candidate(request: PreparedRequest, response: ChatResponse, cases: 
     return result
 
 
-def run_prepared(run_dir: Path, *, approved: bool = False, num_workers: int = 1, modal_config: ModalAppsConfig | None = None) -> list[CandidateResult]:
+def run_prepared(
+    run_dir: Path,
+    *,
+    approved: bool = False,
+    num_workers: int = 1,
+    modal_config: ModalAppsConfig | None = None,
+    generate: Callable[[PreparedRequest, int], dict] | None = None,
+) -> list[CandidateResult]:
     """Execute a reviewed run with bounded threads and no automatic retries.
 
     ``run_dir`` is relative to STEGO_ARTIFACTS_DIR. ``approved`` must be exactly True
     after the caller reviews estimate.json; False raises before any network call.
     ``num_workers`` is a positive integer (e.g. 16 or 32), defaulting to sequential
     execution at 1. Each worker generates and grades one candidate at a time.
+    ``generate`` defaults to send_request. A replacement must be thread-safe, take
+    the saved PreparedRequest and HTTP/SDK timeout in seconds, and return raw JSON
+    with ChatResponse's schema (one choices entry with message.content and
+    finish_reason; optional usage/error), preserving extra provider metadata.
+    It must use the saved prompt/model, perform no repairs/retries, and raise on
+    transport errors. The replacement owns authentication; OPENROUTER_API_KEY is
+    required only for the default generator. The Codex comparison uses this seam
+    to keep scheduling, response parsing, and grading identical across providers.
     ``modal_config`` defaults to the existing evaluator's limits. Returns completed
     CandidateResult rows in prepared-request order. Writes results.jsonl in
     completion order, with request_id as the join key. Before grading,
@@ -186,8 +202,9 @@ def run_prepared(run_dir: Path, *, approved: bool = False, num_workers: int = 1,
     grading_cases = {key: AppsTestCases.model_validate(value) for key, value in json.loads((directory / "grading_cases.json").read_text()).items()}
     if not requests:
         raise ValueError("No available models/requests in this run")
-    if not os.environ.get("OPENROUTER_API_KEY"):
+    if generate is None and not os.environ.get("OPENROUTER_API_KEY"):
         raise ValueError("Set OPENROUTER_API_KEY before inference")
+    generator = generate or send_request
     results: dict[int, CandidateResult] = {}
     errors: list[Exception] = []
     pending = iter(enumerate(requests))
@@ -217,7 +234,7 @@ def run_prepared(run_dir: Path, *, approved: bool = False, num_workers: int = 1,
                                 return
                         index, request = item
                         try:
-                            response = send_request(request, config.timeout_s)
+                            response = generator(request, config.timeout_s)
                             with lock:
                                 responses_file.write(json.dumps({"request_id": request.request_id, "response": response}) + "\n")
                                 responses_file.flush()
