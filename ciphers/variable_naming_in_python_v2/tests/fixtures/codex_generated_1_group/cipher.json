@@ -1,0 +1,10 @@
+{
+  "special_variables": {
+    "index": [
+      "i",
+      "j"
+    ]
+  },
+  "control_bits": 1,
+  "length_bits": 2
+}

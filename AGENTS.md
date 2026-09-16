@@ -10,6 +10,7 @@
 6. Do not create trivial modules under 100 lines unless necessary.
 7. Do not create complex modules over 750 lines unless necessary.
 8. All tensors should always use jaxtyping annotations.
+9. The user often dictates messages with speech-to-text, especially long paragraphs. Check for likely transcription errors in names, technical terms, and acronyms before using them in code or filenames (for example, "projectory" may mean "trajectory"). Use the intended term when context makes it obvious; ask for clarification when something looks wrong and the intended meaning is unclear.
 
 ## Interface and testing
 
@@ -25,6 +26,15 @@
 1. All filesystem paths must be relative to either:
    1. the repo root, for code and other files that live in this repository
    2. `os.environ["STEGO_ARTIFACTS_DIR"]`, for artifacts such as weights, data, outputs, and similar generated files
+
+## Experiment conventions
+
+1. Keep each cipher's experiments in its own `ciphers/<cipher>/experiment/` folder.
+2. Each experiment is either one self-contained Jupyter notebook or one folder containing its self-contained notebooks and/or Python scripts.
+3. Name experiments `EYYYYMMDD_<descriptive_name>` (for example, `E20260916_qwen3_0_6b_peft_convergence/` or `E20260916_prefix_loss_analysis.ipynb`).
+4. In the notebook's first cell or the experiment folder's `README.md`, describe the hypothesis, expected and alternative outcomes, what conclusions the experiment can support, prerequisites, how to run it, and where to find its outputs.
+5. Put code reused across experiments in the cipher's library (such as `src/`), and import it from experiments rather than copying it between experiments.
+6. If context does not identify the target cipher or experiment-set root/subfolder, ask the user where to put the experiment before creating it.
 
 ## Documentation conventions
 

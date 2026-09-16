@@ -71,9 +71,9 @@ logger = logging.getLogger(__name__)
 
 
 class GenerationConfig(BaseModel):
-    cipher: str = "ciphers/variable_naming_in_python/ciphers/cipher2.json"
-    tasks: str = "ciphers/variable_naming_in_python/task_descriptions.json"
-    template: str = "ciphers/variable_naming_in_python/cipher_description_prompt.jinja2"
+    cipher: str = "ciphers/variable_naming_in_python_v1/ciphers/cipher2.json"
+    tasks: str = "ciphers/variable_naming_in_python_v1/task_descriptions.json"
+    template: str = "ciphers/variable_naming_in_python_v1/cipher_description_prompt.jinja2"
     seed: int = 42
     n_tasks: int = 8
     min_bits: int = 8
@@ -249,7 +249,7 @@ def _apply_overrides(cfg: GenerationConfig, ctx: click.Context) -> GenerationCon
 @click.option(
     "-c",
     "--config",
-    default="ciphers/variable_naming_in_python/cipher2_problem_genrator_config.yaml",
+    default="ciphers/variable_naming_in_python_v1/cipher2_problem_genrator_config.yaml",
     type=click.Path(dir_okay=False),
     callback=_load_config,
     is_eager=True,
