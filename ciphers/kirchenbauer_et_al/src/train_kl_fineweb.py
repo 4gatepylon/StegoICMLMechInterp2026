@@ -46,6 +46,7 @@ def main() -> None:
         delta=args.delta,
         strategy=args.strategy,
         profile_memory_steps=args.profile_memory_steps,
+        reject_document_padding=args.reject_document_padding,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
         data_collator=partial(

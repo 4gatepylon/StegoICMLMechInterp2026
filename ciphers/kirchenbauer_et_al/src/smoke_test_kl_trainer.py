@@ -30,7 +30,7 @@ def main() -> None:
         max_position_embeddings=64,
         pad_token_id=tokenizer.pad_token_id,
     )
-    dataset = Dataset.from_dict({"text": ["A short training example.", "Another pretraining document."]})
+    dataset = Dataset.from_dict({"text": ["A short training example. " * 16, "Another pretraining document. " * 16]})
     for loss_mode in ("nll", "ignore_prefix"):
         random.seed(0)  # The two examples deterministically exercise both gate values.
         trainer = PrefixKLTrainer(

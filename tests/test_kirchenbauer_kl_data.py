@@ -128,3 +128,11 @@ def test_reference_length_matches_both_gate_prefixes(length_tokenizer) -> None:
     reference_length = prefix_token_length(length_tokenizer, n_bits=8)
     batch = prefix_bits_encoding_text_collator([{"text": "a"}], length_tokenizer, n_bits=8, data_length=16)
     assert batch["input_ids"].shape[1] == 16 + reference_length
+
+
+@pytest.mark.parametrize("concatenation_space", ["token", "character"])
+def test_left_padding_tokenizer_is_forbidden(length_tokenizer, concatenation_space) -> None:
+    """Reject a left-padding tokenizer in both concatenation modes before tokenization."""
+    length_tokenizer.padding_side = "left"
+    with pytest.raises(ValueError, match="left padding is forbidden"):
+        tokenize_with_prefix(length_tokenizer, ["a"], ["0"], [False], data_length=8, concatenation_space=concatenation_space)

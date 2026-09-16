@@ -82,6 +82,8 @@ class PrefixKLTrainingConfig(QwenDocumentTokenFilter):
     alpha: float = 1.0
     delta: float = 1.0
     profile_memory_steps: int = Field(default=0, ge=0)
+    # Bit positions include every data slot; reject padding before it can receive bits.
+    reject_document_padding: bool = True
 
     # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
     dataset_cache_name: str = "fineweb-500k"
@@ -275,6 +277,11 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--wandb-project")
     add("--wandb-tag", action="append", dest="wandb_tags")
     add("--resume-from-checkpoint")
+    add(
+        "--reject-document-padding",
+        action=argparse.BooleanOptionalAction,
+        help="reject any document padding before model execution (default: true); left padding is always forbidden",
+    )
     add("--profile-memory-steps", type=int, default=0, help="Profile this many initial microbatches per rank")
     parser.set_defaults(**config.model_dump())
     parsed_arguments = vars(parser.parse_args(argv))

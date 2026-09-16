@@ -51,7 +51,8 @@ def test_sweep_covers_full_cartesian_product() -> None:
 
 
 @pytest.mark.parametrize("loss_type", ["nll", "ignore_prefix"])
-def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("reject_padding", [True, False])
+def test_objective_overrides_reach_trainer(loss_type: str, reject_padding: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Forward nondefault knobs through Click/config/trainer and collator/validation."""
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("WANDB_PROJECT", "old-project")
@@ -67,6 +68,7 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
     result = CliRunner().invoke(
         train.main,
         [
+            "--reject-document-padding" if reject_padding else "--allow-document-padding",
             "--lr",
             "0.001",
             "--model-name",
@@ -103,6 +105,7 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
         tokenizer=train.AutoTokenizer.from_pretrained.return_value,
     )
     kwargs = trainer.call_args.kwargs
+    assert kwargs["reject_document_padding"] is reject_padding
     assert (kwargs["model"], kwargs["n_bits"], kwargs["loss_mode"], kwargs["alpha"], kwargs["delta"]) == ("Qwen/Qwen3-4B-Base", 8, loss_type, 0.5, 4)
     assert kwargs["data_collator"].keywords["n_bits"] == 8
     assert kwargs["data_collator"].keywords["data_length"] == config.data_length
