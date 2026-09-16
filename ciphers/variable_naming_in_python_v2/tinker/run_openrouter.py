@@ -16,9 +16,12 @@ from datetime import datetime, timezone
 from functools import partial
 from multiprocessing import get_context
 from pathlib import Path
+from shutil import rmtree
+from tempfile import mkdtemp
 from time import perf_counter
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 from pydantic import AwareDatetime, BaseModel, TypeAdapter
 from pydantic_yaml import parse_yaml_raw_as
@@ -165,22 +168,51 @@ def grade(answer: dict, *, queries: dict[int, Query], cipher: CipherConfig) -> d
     return dict(result, seconds=perf_counter() - start)
 
 
+def save_result(record: dict, directory: Path) -> dict:
+    """Save a JSON-serializable generation/grade record to a unique file; return it.
+
+    directory is the stage's temporary artifact directory. No record keys are
+    interpreted. Rename only after closing the write so the final merge sees
+    complete JSONL records; interrupted .tmp writes are excluded.
+    """
+    temporary = directory / f"{uuid4().hex}.tmp"
+    temporary.write_text(json.dumps(record) + "\n")
+    temporary.rename(temporary.with_suffix(".jsonl"))
+    return record
+
+
+def run_and_save(job, *, function, directory: Path) -> dict:
+    """Apply function to job; save its generation/grade dict before returning to the parent."""
+    return save_result(function(job), directory)
+
+
 def stage(function, jobs: list, workers: int | None, path: Path, timings: dict) -> list[dict]:
     """Save function's records to fresh path, returning them and timing path.stem.
 
     workers=None streams function(jobs), letting APIGenerator batch the full list;
     otherwise a spawn pool maps function over jobs. Records follow the generation/
-    grade schemas above. Only the parent writes and flushes; join by model/problem_id.
+    grade schemas above. Workers save separate UUID files before returning results.
+    Finally, after the pool stops, concatenate complete files into path, including
+    on exceptions/interrupts. Join records by model/problem_id; file order varies.
+    Temporary files are removed after a successful merge, retained if merging fails.
+    A hard kill cannot run finally; completed files remain beside path for recovery.
     Pool progress counts saved results, including errors; APIGenerator shows its
     own batch progress. Both bars show elapsed time and estimated time remaining.
     """
     start, records = perf_counter(), []
-    with path.open("x") as output, get_context("spawn").Pool(workers) if workers else nullcontext() as pool:
-        completed = pool.imap_unordered(function, jobs) if pool else function(jobs)
-        for record in tqdm(completed, total=len(jobs), desc=path.stem, unit="result", disable=pool is None):
-            output.write(json.dumps(record) + "\n")
+    with path.open("x") as output:
+        directory = Path(mkdtemp(prefix=f"{path.stem}-", dir=path.parent))
+        try:
+            with get_context("spawn").Pool(workers) if workers else nullcontext() as pool:
+                worker = partial(run_and_save, function=function, directory=directory)
+                completed = pool.imap_unordered(worker, jobs) if pool else (save_result(record, directory) for record in function(jobs))
+                for record in tqdm(completed, total=len(jobs), desc=path.stem, unit="result", disable=pool is None):
+                    records.append(record)
+        finally:
+            for saved in directory.glob("*.jsonl"):
+                output.write(saved.read_text())
             output.flush()
-            records.append(record)
+            rmtree(directory)
     timings[path.stem] = perf_counter() - start
     print(f"{path.stem}: {len(records)} records saved in {timings[path.stem]:.1f}s", flush=True)
     return records

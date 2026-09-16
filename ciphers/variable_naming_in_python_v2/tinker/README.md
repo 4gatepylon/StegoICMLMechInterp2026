@@ -50,6 +50,14 @@ Each bar shows elapsed time, completion rate and an estimated time remaining onc
 completions arrive. OpenRouter updates after whole batches finish, so it can stay at
 zero until the first batch returns. No debug logging or extra flags are needed.
 
+During each stage, completed results go to separate UUID-named files in a temporary
+directory beside the final JSONL file. Workers never share a result file or lock.
+Once the pool stops, a `finally` block concatenates completed files, also on errors
+or Ctrl-C, then removes the temporary directory. Incomplete writes are excluded.
+The final file stays empty until this merge; record order is arbitrary, so join by
+model and problem ID. If merging fails or the process is killed without cleanup,
+the temporary directory remains available for recovery.
+
 Settings are hardcoded near the top of each script. There are no retries or resume;
 each OpenRouter invocation creates a fresh run, and an existing Luna answer file
 prevents rerunning Luna in that directory. OpenRouter uses a 16,384-token output

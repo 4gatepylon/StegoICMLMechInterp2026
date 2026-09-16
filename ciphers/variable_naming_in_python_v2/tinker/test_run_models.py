@@ -2,11 +2,14 @@
 valid/wrong/absent/malformed answers; API None/exception; Modal failure; real spawn;
 1/32/33/100 input batches; valid/expired/rejected/missing keys and network errors.
 Progress checks exercise batch/result completion, including failed result records.
+Persistence partitions: concurrent/empty stages, stream/worker failures, Ctrl-C,
+saved-but-uncollected results, interrupted writes, merge errors and existing output.
 Omit live APIs, Modal integration, model quality, notebooks and statistical claims.
 """
 
 import json
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -297,3 +300,107 @@ def test_key_failures_stop_before_files_data_or_generation(monkeypatch, tmp_path
     assert list(tmp_path.iterdir()) == []
     assert "dummy-private-key" not in str(error.value) and "private server detail" not in str(error.value)
     assert "valid and not expired" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("count", [0, 24])
+def test_processes_save_and_merge_complete_records(tmp_path, count):
+    """Real spawn workers produce independent large records without interleaving."""
+    path = tmp_path / "parallel.jsonl"
+    jobs = [dict(problem_id=i, text=str(i) * 5000) for i in range(count)]
+    results = run.stage(dict, jobs, 4, path, {})
+    saved = [json.loads(line) for line in path.read_text().splitlines()]
+    assert sorted(saved, key=lambda row: row["problem_id"]) == jobs
+    assert sorted(results, key=lambda row: row["problem_id"]) == jobs
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("error", [RuntimeError("generation failed"), KeyboardInterrupt()])
+def test_finally_merges_stream_results_on_failure_or_interrupt(tmp_path, error):
+    jobs = [dict(problem_id=i) for i in range(3)]
+
+    def generate(records):
+        yield from records[:2]
+        raise error
+
+    path = tmp_path / "partial.jsonl"
+    with pytest.raises(type(error)):
+        run.stage(generate, jobs, None, path, {})
+    saved = [json.loads(line) for line in path.read_text().splitlines()]
+    assert sorted(saved, key=lambda row: row["problem_id"]) == jobs[:2]
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def fail_third_job(value):
+    """Spawn-picklable worker: return an ID for the first two jobs, fail on the third."""
+    if value == 2:
+        raise RuntimeError("worker failed")
+    return {"problem_id": value}
+
+
+def test_worker_exception_still_merges_completed_files(tmp_path):
+    path = tmp_path / "worker-error.jsonl"
+    with pytest.raises(RuntimeError, match="worker failed"):
+        run.stage(fail_third_job, [0, 1, 2], 1, path, {})
+    assert sorted(json.loads(line)["problem_id"] for line in path.read_text().splitlines()) == [0, 1]
+
+
+def test_merge_includes_saved_results_not_collected_by_parent(tmp_path, monkeypatch):
+    class Pool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def imap_unordered(self, function, jobs):
+            saved = [function(job) for job in jobs]
+            yield saved[0]
+            raise RuntimeError("collection failed")
+
+    monkeypatch.setattr(run, "get_context", lambda _: SimpleNamespace(Pool=lambda _: Pool()))
+    path = tmp_path / "uncollected.jsonl"
+    jobs = [dict(problem_id=i) for i in range(3)]
+    with pytest.raises(RuntimeError, match="collection failed"):
+        run.stage(dict, jobs, 2, path, {})
+    assert sorted(json.loads(line)["problem_id"] for line in path.read_text().splitlines()) == [0, 1, 2]
+
+
+def test_incomplete_write_does_not_corrupt_merged_jsonl(tmp_path, monkeypatch):
+    original_write = Path.write_text
+
+    def interrupted_write(path, text, *args, **kwargs):
+        if path.suffix == ".tmp" and json.loads(text)["problem_id"] == 1:
+            original_write(path, text[:5])
+            raise OSError("write interrupted")
+        return original_write(path, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", interrupted_write)
+    path = tmp_path / "write-error.jsonl"
+    with pytest.raises(OSError, match="write interrupted"):
+        run.stage(iter, [dict(problem_id=0), dict(problem_id=1)], None, path, {})
+    assert [json.loads(line) for line in path.read_text().splitlines()] == [dict(problem_id=0)]
+
+
+def test_merge_failure_retains_result_files_for_recovery(tmp_path, monkeypatch):
+    original_read = Path.read_text
+
+    def failed_merge_read(path, *args, **kwargs):
+        if path.parent != tmp_path and path.suffix == ".jsonl":
+            raise OSError("merge failed")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", failed_merge_read)
+    with pytest.raises(OSError, match="merge failed"):
+        run.stage(iter, [dict(problem_id=0)], None, tmp_path / "merge-error.jsonl", {})
+    saved = list(tmp_path.glob("merge-error-*/*.jsonl"))
+    assert len(saved) == 1 and json.loads(original_read(saved[0])) == dict(problem_id=0)
+
+
+def test_existing_output_rejected_before_starting_work(tmp_path):
+    path = tmp_path / "existing.jsonl"
+    path.write_text("original\n")
+    function = Mock()
+    with pytest.raises(FileExistsError):
+        run.stage(function, [], None, path, {})
+    function.assert_not_called()
+    assert path.read_text() == "original\n" and list(tmp_path.iterdir()) == [path]
