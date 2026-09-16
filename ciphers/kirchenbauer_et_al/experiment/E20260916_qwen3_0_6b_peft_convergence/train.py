@@ -3,9 +3,11 @@
 import os
 from functools import partial
 from pathlib import Path
+from typing import Self
 
 import click
 from peft import LoraConfig
+from pydantic import model_validator
 from transformers import AutoTokenizer
 
 from ciphers.kirchenbauer_et_al.src.cache_fineweb import load_fineweb_cache
@@ -19,15 +21,36 @@ from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
-def experiment_config() -> PrefixKLTrainingConfig:
+class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
+    """Preserve 128 * 1,024 training sequences while allowing batch overrides."""
+
+    @model_validator(mode="after")
+    def derive_step_budget(self) -> Self:
+        """Return settings with exact-budget steps and retention for every save.
+
+        Reject global batches that cannot divide the original sequence budget;
+        rounding would change the number of padded training tokens processed.
+        Retention includes the Trainer's final save for a partial save interval.
+        """
+        if self.global_batch_size is None or (128 * 1024) % self.global_batch_size:
+            raise ValueError("global batch size must divide 131072 training sequences exactly")
+        self.max_steps = (128 * 1024) // self.global_batch_size
+        self.save_total_limit = (self.max_steps + self.save_steps - 1) // self.save_steps
+        return self
+
+
+def experiment_config(local_batch_size: int = 8, global_batch_size: int = 128) -> FixedBudgetTrainingConfig:
     """Return validated settings for the one-bit 0.6B convergence experiment.
 
     The returned schema is consumed by ``build_trainer``. Settings follow the
     existing one-bit 4B experiment, changing the model, local batch, run name,
-    and checkpoint cadence/retention. Steps count optimizer updates, so the
-    effective batch stays 128 regardless of the supported process count.
+    and checkpoint cadence/retention. ``local_batch_size`` is the per-device
+    microbatch; ``global_batch_size`` is the effective batch across devices and
+    accumulation. Steps adjust to retain 131,072 training sequences, or
+    536,870,912 padded token positions at the fixed length of 4,096. This budget
+    excludes validation and does not count only non-padding text tokens.
     """
-    return PrefixKLTrainingConfig(
+    return FixedBudgetTrainingConfig(
         model="Qwen/Qwen3-0.6B-Base",
         run_name="E20260916_qwen3_0_6b_peft_convergence",
         loss_mode="nll",
@@ -42,14 +65,12 @@ def experiment_config() -> PrefixKLTrainingConfig:
         lora_rank=32,
         lora_alpha=16,
         lora_dropout=0.05,
-        max_steps=1024,
         learning_rate=3e-4,
         warmup_steps=50,
-        global_batch_size=128,
-        per_device_batch_size=8,
+        global_batch_size=global_batch_size,
+        per_device_batch_size=local_batch_size,
         eval_steps=4,
         save_steps=32,
-        save_total_limit=32,
         logging_steps=1,
         report_to="wandb",
         wandb_tags=["stego-icml-2026-git-archive"],
@@ -114,9 +135,20 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
 
 
 @click.command()
-def main() -> None:
-    """Run the fixed 1,024-step Qwen3-0.6B experiment; see the adjacent README."""
-    build_trainer(experiment_config()).train()
+@click.option("--local-batch-size", default=8, show_default=True, type=click.IntRange(min=1), help="Sequences per device per microbatch.")
+@click.option("--global-batch-size", default=128, show_default=True, type=click.IntRange(min=1), help="Sequences per optimizer step across all devices.")
+def main(local_batch_size: int, global_batch_size: int) -> None:
+    """Train on 131,072 sequences, adjusting steps to preserve the token budget.
+
+    Example: --local-batch-size 4 --global-batch-size 32 runs 4,096 steps.
+    Global batch must divide 131,072 and be divisible by local batch * WORLD_SIZE.
+    Checkpoints remain every 32 optimizer steps; all are retained.
+    """
+    try:
+        trainer = build_trainer(experiment_config(local_batch_size, global_batch_size))
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    trainer.train()
 
 
 if __name__ == "__main__":
