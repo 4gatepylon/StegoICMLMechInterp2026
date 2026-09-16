@@ -83,6 +83,10 @@ Outputs are under
 logs. The W&B project comes from `WANDB_PROJECT`; runs receive the existing
 `stego-icml-2026-git-archive` tag.
 
+After each successful checkpoint save, the shared KL trainer prints
+`Saved checkpoint at step <step>: <path>` on the saving process. This console
+message is visible without enabling INFO logging; failed saves do not print it.
+
 Plot `train/loss`, `train/prefix_loss`, and `train/data_loss` alongside
 `eval/loss`, `eval/prefix_loss`, and `eval/data_loss`, against `train/global_step`.
 Compare early and late validation losses and inspect sustained trends rather
