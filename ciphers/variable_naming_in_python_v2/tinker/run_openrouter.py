@@ -39,7 +39,7 @@ class RunConfig(BaseModel):
 
     models: tuple[str, ...] = ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "openai/gpt-5.6-luna")
     num_problems: int = 100
-    api_batch_size: int = 32
+    api_batch_size: int = 100
     modal_workers: int = 16
     seed: int = 42
     max_tokens: int = 16_384
