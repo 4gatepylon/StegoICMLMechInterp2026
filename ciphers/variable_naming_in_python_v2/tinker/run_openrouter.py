@@ -109,8 +109,14 @@ def generate_api(queries: list[Query], *, model: str):
     including None/Exception failures. Only public prompts reach the API.
     """
     responses = APIGenerator().api_generate_streaming(
-        [query.prompt for query in queries], model=f"openrouter/{model}", batch_size=CONFIG.api_batch_size,
-        return_raw=True, enable_tqdm=True, num_retries=0, max_new_tokens=CONFIG.max_tokens, batch_completion_kwargs={"timeout": CONFIG.timeout_s},
+        [query.prompt for query in queries],
+        model=f"openrouter/{model}",
+        batch_size=CONFIG.api_batch_size,
+        return_raw=True,
+        enable_tqdm=True,
+        num_retries=0,
+        max_new_tokens=CONFIG.max_tokens,
+        batch_completion_kwargs={"timeout": CONFIG.timeout_s},
     )
     batch_start = perf_counter()
     for index, (query, response) in enumerate(zip(queries, responses, strict=True)):
@@ -169,7 +175,7 @@ def stage(function, jobs: list, workers: int | None, path: Path, timings: dict) 
     own batch progress. Both bars show elapsed time and estimated time remaining.
     """
     start, records = perf_counter(), []
-    with path.open("x") as output, (get_context("spawn").Pool(workers) if workers else nullcontext()) as pool:
+    with path.open("x") as output, get_context("spawn").Pool(workers) if workers else nullcontext() as pool:
         completed = pool.imap_unordered(function, jobs) if pool else function(jobs)
         for record in tqdm(completed, total=len(jobs), desc=path.stem, unit="result", disable=pool is None):
             output.write(json.dumps(record) + "\n")
