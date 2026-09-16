@@ -69,7 +69,7 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
     assert result.exit_code == 0, result.output
     config = train.build_sft_config.call_args.args[0]
     assert config.learning_rate == 0.001
-    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4"
+    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4-tokens{config.num_training_tokens}"
     kwargs = trainer.call_args.kwargs
     assert (kwargs["model"], kwargs["n_bits"], kwargs["loss_mode"], kwargs["alpha"], kwargs["delta"]) == ("Qwen/Qwen3-4B-Base", 8, loss_type, 0.5, 4)
     assert kwargs["data_collator"].keywords["n_bits"] == 8
@@ -130,3 +130,18 @@ def test_close_numeric_settings_keep_distinct_output_names(knob: str) -> None:
     first = train.experiment_config(**{knob: 0.0003000001})
     second = train.experiment_config(**{knob: 0.0003000002})
     assert first.run_name != second.run_name
+
+
+def test_different_training_budgets_use_different_output_directories(monkeypatch, tmp_path) -> None:
+    """Cover two valid budgets with otherwise identical flags; omit actual checkpoint IO."""
+    from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import build_sft_config
+
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
+    configs = [train.experiment_config(num_training_tokens=budget) for budget in (4096 * 128 * 32, 4096 * 128 * 64)]
+    tokenizer = Mock(return_value={"input_ids": [[1] * 25] * 2})
+    outputs = []
+    for config in configs:
+        config.dtype, config.report_to = "float32", "none"
+        outputs.append(build_sft_config(config, 1, tokenizer).output_dir)
+    assert configs[0].max_steps != configs[1].max_steps
+    assert outputs[0] != outputs[1]
