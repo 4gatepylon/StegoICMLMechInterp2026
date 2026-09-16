@@ -126,17 +126,18 @@ def prefix_nll(
 
     Args:
         student_logprobs: Log-probabilities for each token in the prefixed model
-            input, with shape ``[batch, Q + free_tokens, vocab]``.
+            input, with shape ``[batch, prefixed_tokens, vocab]``.
         prefix_targets: Next-token targets for the prefix, with shape
-            ``[batch, Q]``.
-        Q: Number of prefix positions. This must equal
-            ``prefix_targets.shape[1]``.
+            ``[batch, Q]``. The first prefix token has no preceding context and
+            is excluded by the caller.
+        Q: Number of predicted prefix positions, equal to ``prefix_targets.shape[1]``.
 
     Returns:
         A scalar mean negative log-likelihood. ``PrefixKLTrainer`` uses this
-        value as both a loss component and a separately logged metric.
+        value as both a loss component and a separately logged metric. A
+        prefix with no predictable targets returns zero.
     """
-    return -student_logprobs[:, :Q].gather(-1, prefix_targets[:, :, None]).squeeze(-1).mean()
+    return -student_logprobs[:, :Q].gather(-1, prefix_targets[:, :, None]).sum() / max(prefix_targets.numel(), 1)
 
 
 def free_token_kl(
@@ -249,7 +250,7 @@ class PrefixKLTrainer(SFTTrainer):
             target_logprobs: Encoded teacher log-probabilities, with shape
                 ``[batch, free_tokens, vocab]``.
             prefix_targets: Next-token targets for the prefix, with shape
-                ``[batch, Q]``.
+                ``[batch, Q - 1]``, excluding the first prefix token (no preceding context).
             Q: Number of prefix positions separating prefix and free tokens.
 
         Returns:
@@ -259,7 +260,7 @@ class PrefixKLTrainer(SFTTrainer):
         """
         unweighted_data_loss = free_token_kl(student_logprobs, target_logprobs, Q)
         if self.loss_mode == "nll":
-            prefix_loss = prefix_nll(student_logprobs, prefix_targets, Q)
+            prefix_loss = prefix_nll(student_logprobs, prefix_targets, Q - 1)
             data_loss = self.alpha * unweighted_data_loss
         else:
             prefix_loss = unweighted_data_loss.new_zeros(())
@@ -392,7 +393,7 @@ class PrefixKLTrainer(SFTTrainer):
             outputs = model(**prefixed_model_inputs)
         with self._memory_stage("student logprobs"):
             student_logprobs = outputs.logits.log_softmax(dim=-1)
-        prefix_targets = prefixed_model_inputs["input_ids"][:, 1 : Q + 1]
+        prefix_targets = prefixed_model_inputs["input_ids"][:, 1:Q]
         target_logprobs = teacher_logprobs
 
         for row, (gate, message) in enumerate(zip(enabled, bits)):
