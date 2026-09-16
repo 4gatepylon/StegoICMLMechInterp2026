@@ -44,6 +44,8 @@ def test_sweep_covers_full_cartesian_product() -> None:
     combinations = [(args[args.index("--model") + 1], int(args[args.index("--n-bits") + 1])) for args in SWEEP_COMMANDS]
     assert len(combinations) == len(set(combinations))
     assert set(combinations) == {(model, bits) for model in get_args(train.QwenModel) for bits in (1, 2, 4, 8)}
+    run_names = [train.experiment_config(local_batch_size=2, global_batch_size=32, model=model, n_bits=bits).run_name for model, bits in combinations]
+    assert len(set(run_names)) == len(combinations)
 
 
 @pytest.mark.parametrize("loss_type", ["nll", "ignore_prefix"])
@@ -118,3 +120,11 @@ def test_zero_weight_and_boost_are_usable_ablation_settings() -> None:
     assert zero.alpha == zero.delta == 0
     assert zero.run_name != positive.run_name
     assert zero.wandb_project == positive.wandb_project
+
+
+@pytest.mark.parametrize("knob", ["lr", "alpha", "delta"])
+def test_close_numeric_settings_keep_distinct_output_names(knob: str) -> None:
+    """Prevent six-significant-digit display rounding from colliding checkpoint paths."""
+    first = train.experiment_config(**{knob: 0.0003000001})
+    second = train.experiment_config(**{knob: 0.0003000002})
+    assert first.run_name != second.run_name

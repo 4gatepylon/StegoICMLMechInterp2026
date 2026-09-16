@@ -48,7 +48,9 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
         """
         model_name = self.model.split("/")[1].removesuffix("-Base").lower()
         self.wandb_project = WANDB_PROJECT
-        self.run_name = f"{model_name}-{self.n_bits}bit-lr{self.learning_rate:g}-gb{self.global_batch_size}-{self.loss_mode}-a{self.alpha:g}-d{self.delta:g}"
+        # Preserve float precision so nearby ablation settings cannot share a path.
+        lr, alpha, delta = (str(value).removesuffix(".0") for value in (self.learning_rate, self.alpha, self.delta))
+        self.run_name = f"{model_name}-{self.n_bits}bit-lr{lr}-gb{self.global_batch_size}-{self.loss_mode}-a{alpha}-d{delta}"
         return self
 
     @model_validator(mode="after")
