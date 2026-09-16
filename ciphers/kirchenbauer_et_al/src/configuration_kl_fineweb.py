@@ -59,7 +59,6 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
 
     # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
     dataset_cache_name: str = "fineweb-500k"
-    concatenation_space: Literal["token", "character"] = "token"
     data_length: int = Field(default=4096, gt=0)
     validation_samples: int = Field(default=256, gt=0)
 
@@ -209,7 +208,6 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--min-document-tokens", type=int, help="inclusive minimum stored GPT-2 token count (default: 0)")
     add("--max-document-tokens", type=lambda value: None if value.lower() == "none" else int(value), help="inclusive maximum stored GPT-2 token count (default: none)")
     add("--strategy", choices=("block", "modulo"), default="block")
-    add("--concatenation-space", choices=("token", "character"), default="token")
     add("--n-bits", type=int, default=8)
     add("--alpha", type=float, default=1.0)
     add("--delta", type=float, default=1.0)

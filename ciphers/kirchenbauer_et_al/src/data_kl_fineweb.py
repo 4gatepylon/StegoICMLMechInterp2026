@@ -1,7 +1,6 @@
 """FineWeb loading and control-prefix preprocessing for prefix-KL training."""
 
 import random
-from typing import Literal
 
 import torch
 from datasets import IterableDataset, load_dataset
@@ -58,7 +57,6 @@ def tokenize_with_prefix(
     bits: list[str],
     enabled: list[bool],
     data_length: int,
-    concatenation_space: Literal["token", "character"] = "token",
 ) -> tuple[dict[str, TokenBatch], dict[str, TokenBatch], int]:
     """Build prefixed and unprefixed model inputs for KL training.
 
@@ -69,15 +67,13 @@ def tokenize_with_prefix(
         enabled: Whether each example requests encoding.
         data_length: Positive number of document token slots, excluding the
             prefix. Longer documents are truncated; shorter ones are padded.
-        concatenation_space: Concatenate prefix/data token IDs in ``"token"``
-            mode, or tokenize the concatenated strings in ``"character"`` mode.
 
     Returns:
         ``(prefixed_model_inputs, unprefixed_model_inputs, prefix_length)``. Pass
         the first dictionary to the adapter-enabled model and the second to the
         disabled-adapter teacher. Both contain ``input_ids`` and ``attention_mask``
         with shapes ``[batch, prefix_length + data_length]`` and
-        ``[batch, data_length]``. In token mode, the latter IDs
+        ``[batch, data_length]``. The latter IDs
         exactly equal the former IDs after ``prefix_length``, guaranteeing aligned
         teacher/student KL targets.
     """
@@ -95,24 +91,10 @@ def tokenize_with_prefix(
     base_encoding = tokenizer(texts, add_special_tokens=False, max_length=data_length, truncation=True, padding="max_length", return_tensors="pt")
     unprefixed_model_inputs = {"input_ids": base_encoding["input_ids"], "attention_mask": base_encoding["attention_mask"]}
     prefix_ids = torch.tensor(prefix_ids)
-    if concatenation_space == "token":
-        prefixed_model_inputs = {
-            "input_ids": torch.cat((prefix_ids, unprefixed_model_inputs["input_ids"]), dim=1),
-            "attention_mask": torch.cat((torch.ones_like(prefix_ids), unprefixed_model_inputs["attention_mask"]), dim=1),
-        }
-        assert torch.equal(prefixed_model_inputs["input_ids"][:, Q:], unprefixed_model_inputs["input_ids"])
-    elif concatenation_space == "character":
-        encoding = tokenizer(
-            [prefix + text for prefix, text in zip(prefixes, texts)],
-            add_special_tokens=False,
-            max_length=Q + data_length,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt",
-        )
-        prefixed_model_inputs = {"input_ids": encoding["input_ids"], "attention_mask": encoding["attention_mask"]}
-    else:
-        raise ValueError("concatenation_space must be 'token' or 'character'")
+    prefixed_model_inputs = {
+        "input_ids": torch.cat((prefix_ids, unprefixed_model_inputs["input_ids"]), dim=1),
+        "attention_mask": torch.cat((torch.ones_like(prefix_ids), unprefixed_model_inputs["attention_mask"]), dim=1),
+    }
     return prefixed_model_inputs, unprefixed_model_inputs, Q
 
 

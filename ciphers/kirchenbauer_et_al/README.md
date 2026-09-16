@@ -480,8 +480,8 @@ documents.
 - The [prefix-tokenization notebook](src/inspect_prefix_tokenization.ipynb)
   checks both gate values and every bitstring for its configurable `N_BITS`, confirming
   that all prefixes have the same tokenized length and printing their token boundaries.
-- It also checks 100 FineWeb examples and every bitstring up to `N_BITS`, asserting
-  that token- and character-space concatenation produce identical model inputs.
+- Prefix and data are always tokenized separately and concatenated as token IDs
+  to keep teacher/student data aligned.
 - The production [FineWeb KL trainer](src/train_kl_fineweb.py)
   exposes model, objective, batching, LoRA, precision, logging, and checkpoint settings as CLI flags.
 - The [cache-inspection notebook](src/inspect_fineweb_cache.ipynb) loads through
@@ -505,3 +505,8 @@ from `--global-batch-size`, which defaults to 32 for backward compatibility.
 
 - [Original Qwen3-4B, 8-bit run](experiments/E20260912_qwen3_4b_8bit/README.md): preserved YAML and single-run launcher.
 - [Qwen3 PEFT convergence](experiments/E20260916_qwen3_0_6b_peft_convergence/README.md): model-size, message-length, and objective ablations.
+
+Character-space concatenation is no longer supported. Remove `concatenation_space`
+from old YAML and `--concatenation-space` from commands; token-ID concatenation
+is unconditional. This preserves leading document whitespace without merging it
+into the final prefix token.
