@@ -26,7 +26,7 @@ does not establish message-recovery accuracy, text quality, or superiority over
 | Model | `Qwen/Qwen3-0.6B-Base` (base, not instruction-tuned) |
 | Objective | One bit, block partition, prefix NLL + data KL, alpha 1, delta 2 |
 | Dataset | `fineweb-500k`; first 256 documents held out with fixed prefix controls |
-| Sequence length | 4,096 padded tokens, token-space concatenation |
+| Data length | 4,096 padded data positions, excluding the control prefix; token-space concatenation |
 | LoRA | Rank 32, alpha 16, dropout 0.05, all linear layers |
 | Precision | bfloat16, gradient checkpointing enabled |
 | Batch | Global 128; per-device microbatch 8 |
@@ -39,6 +39,19 @@ Accumulation is `128 / (8 * WORLD_SIZE)`: 16 microbatches per optimizer step on
 one GPU, 8 on two, and 4 on four. Supported process counts divide 16 exactly.
 The loader requires at least 131,328 documents (131,072 training plus 256
 validation); the existing 500,000-document cache is sufficient.
+
+The tokenizer's control-prefix width is added to `data_length` to derive the
+model-input `max_length`; startup output reports both lengths and the bit count.
+For this one-bit Qwen3 run, 4,096 data positions plus a 25-token prefix give
+4,121 input positions. Short documents are padded, so data positions are not
+necessarily actual text tokens.
+
+`--num-training-tokens` budgets padded **data** positions, excluding prefixes
+and validation. The default budget is 536,870,912 data positions, preserving
+1,024 steps at global batch 128 (or 4,096 steps at global batch 32).
+Logged padded-input tokens additionally include the prefix overhead. Earlier
+versions applied the 4,096 limit to the whole input, including the prefix;
+the corrected run has more data positions and slightly larger model inputs.
 
 ## Run
 
