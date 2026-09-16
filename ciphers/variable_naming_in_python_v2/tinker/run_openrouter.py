@@ -4,6 +4,8 @@ Requires OPENROUTER_API_KEY, STEGO_ARTIFACTS_DIR and Modal credentials.
 Uniform three-bit secrets; artifacts under STEGO_ARTIFACTS_DIR/tinker/<timestamp>.
 Only Modal executes generated code. Provider reasoning/sampling defaults apply.
 Run run_codex afterwards to compare Luna on these saved inputs.
+
+NOTE: a human has only SKIMMED this.
 """
 
 import json

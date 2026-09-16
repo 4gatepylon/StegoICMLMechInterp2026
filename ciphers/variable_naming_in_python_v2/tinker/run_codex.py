@@ -4,6 +4,8 @@ Requires STEGO_ARTIFACTS_DIR, Codex ChatGPT login and Modal credentials. Reads t
 latest prepared OpenRouter inputs and writes Luna outputs into the same directory.
 No API key, retries or resume. Codex reasoning defaults apply; the OpenRouter
 token limit is not applied by the existing Codex helper. Code executes only on Modal.
+
+NOTE: a human has only SKIMMED this.
 """
 
 import asyncio
