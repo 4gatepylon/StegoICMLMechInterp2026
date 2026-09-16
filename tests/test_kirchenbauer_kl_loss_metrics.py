@@ -46,18 +46,34 @@ def test_individual_loss_functions_match_direct_formulas() -> None:
 def test_loss_components_reconstruct_total(loss_mode: str, alpha: float) -> None:
     trainer = SimpleNamespace(loss_mode=loss_mode, alpha=alpha)
 
-    loss, loss_information = PrefixKLTrainer._divergence(trainer, *loss_inputs(), Q=2)
+    student_logprobs, target_logprobs, prefix_targets = loss_inputs()
+    loss, loss_information = PrefixKLTrainer._divergence(trainer, student_logprobs, target_logprobs, prefix_targets[:, :1], Q=2)
 
     assert loss == pytest.approx((loss_information.prefix_loss + loss_information.data_loss).item())
     student_logprobs, target_logprobs, prefix_targets = loss_inputs()
     raw_data_kl = free_token_kl(student_logprobs, target_logprobs, Q=2)
     if loss_mode == "nll":
-        expected_prefix_nll = prefix_nll(student_logprobs, prefix_targets, Q=2)
+        expected_prefix_nll = prefix_nll(student_logprobs, prefix_targets[:, :1], Q=1)
         assert loss_information.prefix_loss == pytest.approx(expected_prefix_nll.item())
         assert loss_information.data_loss == pytest.approx((alpha * raw_data_kl).item())
     else:
         assert loss_information.prefix_loss.item() == 0.0
         assert loss_information.data_loss == pytest.approx(raw_data_kl.item())
+
+
+@pytest.mark.parametrize("prefix_length", [1, 2, 3])
+def test_prefix_nll_excludes_data_predictions(prefix_length) -> None:
+    """Cover empty/single/multiple predictable prefix targets; omit KL and model IO."""
+    logits: StudentLogprobs = torch.randn(1, prefix_length + 2, 4, requires_grad=True)
+    token_ids: Int[torch.Tensor, "batch tokens"] = torch.tensor([[0, 1, 2, 3, 0]])[:, :prefix_length + 2]  # noqa: F722
+    loss = prefix_nll(logits.log_softmax(-1), token_ids[:, 1:prefix_length], prefix_length - 1)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert logits.grad[:, prefix_length - 1:].count_nonzero() == 0
+    if prefix_length > 1:
+        assert logits.grad[:, :prefix_length - 1].abs().sum() > 0
+    else:
+        assert loss.item() == 0
 
 
 def test_loss_components_use_separate_train_and_eval_buffers() -> None:
@@ -98,7 +114,7 @@ def test_loss_information_is_detached_without_detaching_training_loss() -> None:
         _metrics={"train": defaultdict(list), "eval": defaultdict(list)},
     )
 
-    loss, loss_information = PrefixKLTrainer._divergence(trainer, student_logprobs, target_logprobs, prefix_targets, Q=2)
+    loss, loss_information = PrefixKLTrainer._divergence(trainer, student_logprobs, target_logprobs, prefix_targets[:, :1], Q=2)
     PrefixKLTrainer._record_loss_metrics(trainer, loss_information)
     loss.backward()
 
@@ -225,7 +241,9 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
         model.assert_not_called()
         trainer._record_loss_metrics.assert_not_called()
     else:
-        loss = trainer.compute_loss(model, inputs)
+        with patch.object(trainer, "_divergence", wraps=trainer._divergence) as divergence:
+            loss = trainer.compute_loss(model, inputs)
+        torch.testing.assert_close(divergence.call_args.args[2], inputs["input_ids"][:, 1:inputs["prefix_length"]])
         assert torch.isfinite(loss)
         loss.backward()
         assert model.call_count == 2
