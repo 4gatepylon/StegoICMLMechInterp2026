@@ -20,63 +20,14 @@ src/
 
 ## Filtering cached training documents
 
-Both prefix-KL training entry points support two optional, inclusive filters:
-
-1. `min_gpt2_document_tokens` / `max_gpt2_document_tokens` select by the cached **GPT-2**
-   `token_count`.
-2. `min_qwen_document_tokens` / `max_qwen_document_tokens` tokenize only those
-   survivors with the **selected training model's tokenizer** and filter again.
-
-For example, add these settings to a training YAML file:
-
-```yaml
-min_gpt2_document_tokens: 512
-max_gpt2_document_tokens: null
-min_qwen_document_tokens: 512
-max_qwen_document_tokens: null
-```
-
-The corresponding flags are `--min-gpt2-document-tokens`, `--max-gpt2-document-tokens`,
-`--min-qwen-document-tokens`, and `--max-qwen-document-tokens`, available in
-the shared training CLI and the convergence experiment's Click CLI. In YAML,
-use `null` for an unlimited maximum; the shared CLI also accepts `none`.
-The Click CLI leaves a maximum unlimited when its flag is omitted.
-The GPT-2 options replace the former unqualified `min_document_tokens` /
-`max_document_tokens` names. Existing cache manifests using the old names are
-still readable; update training YAML and CLI invocations to the explicit names.
-
-Both stages are disabled by default (minimum zero, maximum unlimited). Qwen
-counts cover complete documents without special tokens, control prefixes,
-padding, or truncation. They are independent of `data_length`, which controls
-later padding/truncation. A document must pass **both** filters: the GPT-2
-prefilter can exclude a document that would otherwise satisfy the Qwen bounds.
-
-Filtering occurs before shuffle and train/validation splitting. The loader
-requires `validation_samples + max_steps * global_batch_size` survivors after
-both stages: 33,024 with the current experiment defaults (32,768 training and
-256 validation documents). It raises an error
-before constructing the trainer if too few remain. Enabling Qwen filtering adds
-a full scan of GPT-2 survivors in batches of 32 to check this requirement;
-lazy dataset iterations repeat tokenization, including separate training and
-validation scans. The cache files and their nine-field schema are unchanged.
-Programmatic callers of `load_fineweb_cache` must pass `tokenizer=` when Qwen
-filtering is enabled and use that same tokenizer for training.
+`min_gpt2_document_tokens` / `max_gpt2_document_tokens` filter cached GPT-2 counts first.
+`min_qwen_document_tokens` / `max_qwen_document_tokens` then filter survivors with the training tokenizer; bounds are inclusive.
+Qwen counts exclude special tokens, prefixes, padding, and truncation. Experiment defaults require GPT-2 ≥756 and Qwen ≥1,024 tokens.
+Filtering precedes shuffle and splitting; too few survivors raises an error. Set the Qwen minimum to at least `data_length` to avoid padding.
 
 ## Padding guard
 
-`PrefixKLTrainer` and its Pydantic training configuration default to
-`reject_document_padding: true`. Before either model forward, training and
-evaluation reject any zero in the teacher or student attention mask. This
-prevents assigning watermark bits to padded data positions. Token IDs are not
-used to detect padding because Qwen may use the same ID for EOS and padding.
-Left-padding tokenizers and left/internal masked positions are always rejected.
-
-Set `reject_document_padding: false` in YAML, pass
-`--no-reject-document-padding` to the shared CLI, or use
-`--allow-document-padding` in the convergence CLI to explicitly allow right
-padding. This opt-out retains the historical KL/bit partition over every data
-slot, including padding; it does not exclude pads from the loss. The preferred
-configuration filters Qwen document lengths to at least `data_length`.
+`reject_document_padding: true` (default) rejects padding before model execution. Set it to `false` to allow right padding, which remains included in the loss and bit partition; left/internal padding is always forbidden.
 
 ## Extracting one bit
 
@@ -428,9 +379,8 @@ python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
 
 Creation reads until it has the requested number of **accepted** documents and
 records its bounds in the manifest. If the source runs out, the partial build
-is removed. Loading can independently narrow any existing cache, including
-caches created before these options existed; it cannot recover documents
-excluded during creation. Filtering happens before shuffling and the
+is removed. Loading can independently narrow an existing cache but cannot
+recover documents excluded during creation. Filtering happens before shuffling and the
 train/validation split. When filtering is enabled, loading scans the local
 `token_count` column to verify enough accepted documents remain for the run.
 No token-count scan is added with the unfiltered defaults.
@@ -439,8 +389,7 @@ The Python builder and loader accept `min_gpt2_document_tokens=0` and
 `max_gpt2_document_tokens=None`. Training YAML uses those same field names (`null`
 for no maximum); explicit CLI flags override YAML, and
 `--max-gpt2-document-tokens none` clears a YAML maximum for training. Negative or
-reversed bounds are rejected. The cache CLI uses Click; the existing training
-CLI still uses argparse.
+reversed bounds are rejected. The cache CLI uses Click; the shared training CLI uses argparse.
 
 The CLI verifies the manifest, completion marker, Parquet schemas, part counts,
 and row counts before reporting success. It then prints three cached examples
@@ -462,15 +411,8 @@ Qwen3-4B-Base, this is `4096 + 32 = 4128`, with 512 data positions per bit.
 Startup output reports all these lengths and the partition strategy on rank
 zero. Actual prefixes are checked against the reference width in every batch.
 
-Migrate old YAML `max_length` fields to `data_length`, and CLI `--max-length`
-to `--data-length`; the old names are rejected to avoid silently reinterpreting
-old runs. Setting `data_length: 4096` increases the data budget compared with
-the old total-input cap of 4096. To reproduce an old eight-bit run's dimensions,
-use `data_length: 4064`. Resume comparisons require the original dimensions.
-
-Short documents are still padded and long documents truncated; this setting
-does not guarantee 4096 non-padding text tokens. The existing KL objective's
-padding and next-token alignment behavior is unchanged.
+Documents longer than `data_length` are truncated; shorter documents are padded
+and rejected by the default [padding guard](#padding-guard).
 
 Each official experiment logs two cumulative training-volume metrics to W&B:
 
@@ -561,14 +503,12 @@ python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
 `batch size * WORLD_SIZE * gradient accumulation steps`. The longer
 `--learning-rate`, `--per-device-batch-size`, and `--gradient-accumulation-steps`
 spellings are also accepted. If gradient accumulation is omitted, it is derived
-from `--global-batch-size`, which defaults to 32 for backward compatibility.
+from `--global-batch-size`, which defaults to 32.
 
 ## Experiments
 
 - [Qwen3-4B, 4-bit run](experiments/E20260912_qwen3_4b_4bit/README.md): filtered 1,024-token documents, YAML and single-run launcher.
 - [Qwen3 PEFT convergence](experiments/E20260916_qwen3_0_6b_peft_convergence/README.md): model-size, message-length, and objective ablations.
 
-Character-space concatenation is no longer supported. Remove `concatenation_space`
-from old YAML and `--concatenation-space` from commands; token-ID concatenation
-is unconditional. This preserves leading document whitespace without merging it
-into the final prefix token.
+Prefix and document token IDs are concatenated after separate tokenization,
+preserving leading document whitespace without merging it into the final prefix token.
