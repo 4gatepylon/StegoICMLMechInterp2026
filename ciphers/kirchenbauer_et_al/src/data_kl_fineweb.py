@@ -91,6 +91,9 @@ def tokenize_with_prefix(
     base_encoding = tokenizer(texts, add_special_tokens=False, max_length=data_length, truncation=True, padding="max_length", return_tensors="pt")
     unprefixed_model_inputs = {"input_ids": base_encoding["input_ids"], "attention_mask": base_encoding["attention_mask"]}
     prefix_ids = torch.tensor(prefix_ids)
+    # NOTE: Concatenate in token space to preserve consistent whitespace tokenization:
+    # joint text tokenization can merge prefix/document whitespace across the boundary,
+    # changing the student's data tokens relative to the unprefixed teacher's.
     prefixed_model_inputs = {
         "input_ids": torch.cat((prefix_ids, unprefixed_model_inputs["input_ids"]), dim=1),
         "attention_mask": torch.cat((torch.ones_like(prefix_ids), unprefixed_model_inputs["attention_mask"]), dim=1),

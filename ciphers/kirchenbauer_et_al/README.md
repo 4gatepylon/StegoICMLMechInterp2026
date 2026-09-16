@@ -207,6 +207,8 @@ def prefix(do_encoding: bool, bits: list[int], data_tokens: torch.Tensor) -> tor
     prefix_tokens = tokenizer(f"<encoding> <do_encoding> {enabled} </do_encoding> <encoding_value> {encoded_bits} </encoding_value> </encoding>\n")
     expected_length = len(tokenizer(f"<encoding> <do_encoding> no </do_encoding> <encoding_value> {'0' * len(bits)} </encoding_value> </encoding>\n"))
     assert len(prefix_tokens) == expected_length
+    # NOTE: Concatenate token IDs to preserve consistent whitespace tokenization;
+    # joint text tokenization can merge across the prefix/data boundary and misalign teacher/student data.
     return torch.cat((prefix_tokens, data_tokens))
 ```
 
