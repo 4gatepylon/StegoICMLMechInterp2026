@@ -9,6 +9,7 @@ from typing import Iterator, Literal, override
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
+from transformers import PreTrainedTokenizerBase
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from trl import SFTTrainer
 
@@ -75,22 +76,44 @@ def padded_input_tokens_seen(
 
 def prefix_bits_encoding_text_collator(
     examples: list[dict[str, object]],
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     n_bits: int,
     data_length: int,
     student_bos_token_id: int | None = None,
 ) -> dict[str, object]:
     """Build fixed-width data plus prefix batches consumed by PrefixKLTrainer.
 
-    ``examples`` contains ``text`` strings and optionally both ``prefix_bits``
-    (an ``n_bits``-wide binary string) and ``do_encoding`` (a boolean) on every
-    row. Otherwise these controls are sampled. ``tokenizer`` is passed to
-    ``tokenize_with_prefix``, which concatenates prefix and data token IDs.
-    ``data_length`` is the padded document width, excluding the prefix, and
-    must be positive and divisible by ``n_bits``. ``student_bos_token_id`` is
-    bound by the trainer: None leaves the student unchanged; an ID prepends BOS
-    before the prefix. ``prefix_length`` always excludes BOS. The returned dictionary's
-    complete schema is documented at its consumer, ``PrefixKLTrainer.compute_loss``.
+    `examples` should look like:
+    ```
+    [
+        {
+            "text": "...",                   # Pretraining data (i.e. text from Fineweb document)
+            (Optional) "prefix_bits": "...", # n_bits-wide binary string
+            (Optional) "do_encoding": ...    # Whether to apply secret message to this example
+        },
+        ...
+    ]
+    ```
+
+    The outputs of this function will look like:
+    ```
+    {
+        "input_ids": Tensor[B, S + Q + data_length],       # Prefixed student token IDs.
+        "attention_mask": Tensor[B, S + Q + data_length],  # 1 for real tokens, 0 for document padding.
+        "labels": Tensor[B, S + Q + data_length],          # Same IDs, with padding set to -100.
+        "base_input_ids": Tensor[B, data_length],      # Unprefixed teacher token IDs.
+        "base_attention_mask": Tensor[B, data_length], # Teacher mask; suffix of attention_mask.
+        "prefix_bits": list[str],                      # B binary messages, each n_bits wide.
+        "do_encoding": list[bool],                     # Whether each example applies the boosts.
+        "prefix_length": int,                          # Q; prefix width shared by the batch.
+    }
+    ```
+
+    Fixed prefix_bits and do_encoding must both be present on every example,
+    or both are sampled. data_length is positive and divisible by n_bits.
+    The trainer binds student_bos_token_id: None leaves the student unchanged;
+    otherwise BOS precedes the prefix (S=1, versus S=0 without BOS). Q excludes
+    BOS. Tokenization concatenates prefix and data IDs in token space.
     """
     if n_bits < 1 or data_length < 1 or data_length % n_bits:
         raise ValueError("data_length must be positive and divisible by positive n_bits")
@@ -166,6 +189,7 @@ def free_token_kl(
         A scalar mean KL divergence. ``PrefixKLTrainer`` applies any mode-specific
         weighting and logs the resulting data-loss component.
     """
+    # TODO(hadriano): KL incorrectly includes padding; change it to exclude pads from loss, gradients, and averaging (PR #91).
     # Last student prefix-position logits match teacher BOS-position logits: both predict data1.
     return F.kl_div(student_logprobs[:, data_start - 1 : -1], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
@@ -206,7 +230,11 @@ class PrefixKLTrainer(SFTTrainer):
             raise ValueError("profile_memory_steps must be nonnegative")
         collator_function = data_collator.func if isinstance(data_collator, partial) else data_collator
         if collator_function is not prefix_bits_encoding_text_collator:
-            raise ValueError("PrefixKLTrainer requires prefix_bits_encoding_text_collator")
+            raise ValueError(
+                "PrefixKLTrainer requires prefix_bits_encoding_text_collator. "
+                "This is because we have some options controlled in the Trainer and others in the function itself. "
+                "In a future iteration we'll find a better interface."
+            )
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
         self.reject_document_padding = reject_document_padding
         self.prepend_student_bos = prepend_student_bos
@@ -240,6 +268,7 @@ class PrefixKLTrainer(SFTTrainer):
         """
         if torch.any(attention_mask[:, 0] == 0) or torch.any(attention_mask[:, 1:] > attention_mask[:, :-1]):
             raise ValueError(f"{name} contains left or internal padding, which is always forbidden")
+        # TODO(hadriano): Unmasked padding in KL would be very high severity without this default rejection; reject_document_padding=False already bypasses it (PR #91).
         if self.reject_document_padding and torch.any(attention_mask == 0):
             raise ValueError(
                 f"{name} contains right padding; every document must fill data_length. Filter by Qwen length >= data_length or explicitly set reject_document_padding=False."
@@ -437,6 +466,7 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("target logprobs"):
             target_logprobs = target_logprobs.log_softmax(dim=-1)
         with self._memory_stage("loss"):
+            # TODO(hadriano): If padding is supported, pass a mask aligned with the KL targets through _divergence to free_token_kl (PR #91).
             loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, data_start)
         self._record_loss_metrics(loss_information)
         return (loss, outputs) if return_outputs else loss

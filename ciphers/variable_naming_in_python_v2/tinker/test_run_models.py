@@ -1,6 +1,6 @@
 """Offline partitions: all 8 payloads; stdio/call prompts; API/Codex stage ordering;
 valid/wrong/absent/malformed answers; API None/exception; Modal failure; real spawn;
-1/32/33/100 input batches; valid/expired/rejected/missing keys and network errors.
+single/full/overflow/multiple input batches; valid/expired/rejected/missing keys and network errors.
 Progress checks exercise batch/result completion, including failed result records.
 Persistence partitions: concurrent/empty stages, stream/worker failures, Ctrl-C,
 saved-but-uncollected results, interrupted writes, merge errors and existing output.
@@ -119,7 +119,7 @@ def test_pipeline_order_persistence_and_counts(monkeypatch, tmp_path, capsys):
         return SimpleNamespace(text=text, choices=[SimpleNamespace(message=SimpleNamespace(content=text))], model_dump=lambda **_: {"text": text})
 
     def api(self, prompts, model, **kwargs):
-        assert len(prompts) == 2 and kwargs["batch_size"] == 32 and kwargs["return_raw"] and kwargs["num_retries"] == 0
+        assert len(prompts) == 2 and kwargs["batch_size"] == run.CONFIG.api_batch_size and kwargs["return_raw"] and kwargs["num_retries"] == 0
         if model == "openrouter/openai/gpt-oss-20b":
             assert len((directory() / "openrouter-gpt-oss-120b.jsonl").read_text().splitlines()) == 2
         return iter(response(prompt, model.removeprefix("openrouter/")) for prompt in prompts)
@@ -178,7 +178,11 @@ def test_modal_failure_preserves_secret(monkeypatch, cipher):
     assert result["error"] == "RuntimeError: offline" and result["modal"] is None
 
 
-@pytest.mark.parametrize("count", [1, 32, 33, 100])
+@pytest.mark.parametrize(
+    "count",
+    [1, run.CONFIG.api_batch_size, run.CONFIG.api_batch_size + 1, 3 * run.CONFIG.api_batch_size + 1],
+    ids=["single", "full-batch", "batch-plus-one", "multiple-plus-partial"],
+)
 def test_real_api_generator_batches_and_pairs_failures(monkeypatch, count, tmp_path, capsys):
     from functools import partial
 
@@ -205,7 +209,8 @@ def test_real_api_generator_batches_and_pairs_failures(monkeypatch, count, tmp_p
     monkeypatch.setattr(litellm, "batch_completion", batch_completion)
     timings = {}
     rows = run.stage(partial(run.generate_api, model=run.CONFIG.models[0]), queries, None, tmp_path / "api.jsonl", timings)
-    assert sizes == [min(32, count - offset) for offset in range(0, count, 32)]
+    batch_size = run.CONFIG.api_batch_size
+    assert sizes == [min(batch_size, count - offset) for offset in range(0, count, batch_size)]
     assert received == [q.prompt for q in queries]
     assert [r["problem_id"] for r in rows] == list(range(count))
     for i, row in enumerate(rows):

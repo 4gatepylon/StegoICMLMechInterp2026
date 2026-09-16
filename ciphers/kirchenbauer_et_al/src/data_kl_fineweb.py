@@ -111,6 +111,9 @@ def tokenize_with_prefix(
         ``[batch, data_length]``. The latter IDs
         exactly equal the former IDs after ``prefix_length``, guaranteeing aligned
         teacher/student KL targets.
+
+    NOTE: it is guaranteed that the outputs will have the right length, but THERE COULD BE PADDING
+    unless you already controlled for that via i.e. data filtering.
     """
     if getattr(tokenizer, "padding_side", "right") != "right":
         raise ValueError("tokenizer.padding_side must be right; left padding is forbidden")
@@ -120,14 +123,14 @@ def tokenize_with_prefix(
         raise ValueError("data_length must be positive")
     if len({len(bit) for bit in bits}) != 1:
         raise ValueError("messages must have the same bit width")
-    prefixes = [compile_prefix(bit, gate) for bit, gate in zip(bits, enabled)]
-    prefix_ids = tokenizer(prefixes, add_special_tokens=False)["input_ids"]
-    Q = prefix_token_length(tokenizer, len(bits[0]))
-    if any(len(ids) != Q for ids in prefix_ids):
+    prefixes: list[str] = [compile_prefix(bit, gate) for bit, gate in zip(bits, enabled)]
+    prefix_ids_list: list[list[int]] = tokenizer(prefixes, add_special_tokens=False)["input_ids"]
+    Q: int = prefix_token_length(tokenizer, len(bits[0]))
+    if any(len(ids) != Q for ids in prefix_ids_list):
         raise ValueError("control prefix token length differs from the reference used for max_length")
-    base_encoding = tokenizer(texts, add_special_tokens=False, max_length=data_length, truncation=True, padding="max_length", return_tensors="pt")
+    base_encoding: dict[str, torch.Tensor] = tokenizer(texts, add_special_tokens=False, max_length=data_length, truncation=True, padding="max_length", return_tensors="pt")
     unprefixed_model_inputs = {"input_ids": base_encoding["input_ids"], "attention_mask": base_encoding["attention_mask"]}
-    prefix_ids = torch.tensor(prefix_ids)
+    prefix_ids: torch.Tensor = torch.tensor(prefix_ids_list)
     # NOTE: Concatenate in token space to preserve consistent whitespace tokenization:
     # joint text tokenization can merge prefix/document whitespace across the boundary,
     # changing the student's data tokens relative to the unprefixed teacher's.
