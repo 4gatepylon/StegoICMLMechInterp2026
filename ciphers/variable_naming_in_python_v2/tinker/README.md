@@ -44,6 +44,45 @@ approaches `ceil(num_requests / num_workers)` times the per-candidate time.
 OpenRouter rate limits, Modal capacity, and slow individual requests can reduce
 that speedup. No retries or rate-limit bypasses are added.
 
+## Stop and resume either provider
+
+Completed answers are flushed to `responses.jsonl` before grading; completed grades
+are flushed to `results.jsonl`. A normal notebook interrupt stops new request claims
+and lets active workers finish saving, so returning from the interrupt can take time.
+A forced kernel restart preserves flushed files but can lose unsaved in-flight work.
+
+After stopping, reuse the **same saved `run_dir`**, rerun the notebook's import/setup
+cells, and explicitly select resume in the relevant inference cell:
+
+```python
+# OpenRouter: reuse the original prepared run, not a new prepare_run() result.
+results = run_prepared(run_dir, approved=True, num_workers=16, resume=True)
+
+# Codex: pass that same parent run_dir; do not call prepare_codex_comparison again.
+codex_run_dir = run_codex_comparison(run_dir, approved=True, num_workers=16, resume=True)
+```
+
+Choose the call for the provider you want to resume. `resume=True`:
+
+- Skips completed grades, including failed solutions; they are never resampled.
+- Grades saved answers without regenerating them.
+- Generates only requests without a saved answer. Codex additionally recovers
+  `generation/*/answer.json` if the SDK saved a final answer before interruption.
+- Does nothing remotely when the run is already complete.
+
+Only one invocation may use a run directory at a time; stop the original before
+resuming. Worker count may change, but keep the original prompts, model settings,
+cipher, and grading cases/limits. New runs save input fingerprints to detect edits;
+legacy runs without fingerprints rely on the caller preserving their inputs.
+Malformed, truncated, duplicate, or inconsistent cache records cause an explicit
+error before execution; they are never silently deleted or replaced.
+
+This is local checkpointing, not a provider idempotency key: a call that finished
+remotely but never saved an answer can consume capacity again on resume. Original
+execution settings remain in `execution.json`; subsequent worker settings append
+to `resumes.jsonl`, and earlier infrastructure errors are retained in `errors.jsonl`.
+Default `resume=False` still rejects accidentally rerunning a started directory.
+
 ## Matched Codex Luna comparison
 
 The same notebook also runs `gpt-5.6-luna` through the existing ChatGPT-backed
@@ -105,8 +144,8 @@ from older saved runs that used a different cipher.
   an encoded empty message. Malformed, truncated, or empty answers count as failures.
 - The first HTTP/API/Modal infrastructure error stops new request claims. Work
   already claimed finishes and saves its responses/results before the error is
-  raised. Incomplete models' pass rates stay blank. A started run cannot be executed
-  again; this small implementation deliberately has no automatic resume.
+  raised. Incomplete models' pass rates stay blank. A started run requires explicit
+  `resume=True` to continue from its saved outputs.
 
 This screens prompting capability, not distillability or robustness. Provider
 defaults and quantization can differ from Tinker. A fixed short payload on easy
@@ -213,6 +252,8 @@ cost arithmetic, approval gating, failure accounting, and scoring with mocked HT
 and Modal services. Thread tests use barriers/events to check overlap, worker limits,
 out-of-order completion, exactly-once persistence, and draining after failures.
 Codex tests check exact input copying, mismatch rejection, and text-mode generation
-through the shared parser/grader with a mocked SDK. The suite does not test notebooks,
+through the shared parser/grader with a mocked SDK. Resume tests interrupt generation
+and grading, recover SDK checkpoints, reject inconsistent caches, and verify that
+completed runs make no additional calls. The suite does not test notebooks,
 call paid services, measure live throughput, or claim model quality. The decoder
 and Modal evaluator remain the existing implementations.
