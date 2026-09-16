@@ -178,6 +178,7 @@ def free_token_kl(
         A scalar mean KL divergence. ``PrefixKLTrainer`` applies any mode-specific
         weighting and logs the resulting data-loss component.
     """
+    # TODO(hadriano): KL incorrectly includes padding; change it to exclude pads from loss, gradients, and averaging (PR #91).
     return F.kl_div(student_logprobs[:, Q:], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
 
@@ -244,6 +245,7 @@ class PrefixKLTrainer(SFTTrainer):
         """
         if torch.any(attention_mask[:, 0] == 0) or torch.any(attention_mask[:, 1:] > attention_mask[:, :-1]):
             raise ValueError(f"{name} contains left or internal padding, which is always forbidden")
+        # TODO(hadriano): Unmasked padding in KL would be very high severity without this default rejection; reject_document_padding=False already bypasses it (PR #91).
         if self.reject_document_padding and torch.any(attention_mask == 0):
             raise ValueError(
                 f"{name} contains right padding; every document must fill data_length. Filter by Qwen length >= data_length or explicitly set reject_document_padding=False."
@@ -430,6 +432,7 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("target logprobs"):
             target_logprobs = target_logprobs.log_softmax(dim=-1)
         with self._memory_stage("loss"):
+            # TODO(hadriano): If padding is supported, pass a mask aligned with the KL targets through _divergence to free_token_kl (PR #91).
             loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
         self._record_loss_metrics(loss_information)
         return (loss, outputs) if return_outputs else loss
