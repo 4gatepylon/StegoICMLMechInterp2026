@@ -5,7 +5,8 @@
 The base model [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base)
 can learn the one-bit Kirchenbauer control-prefix objective with LoRA. We expect
 both the prefix negative log-likelihood and the data KL divergence to decrease
-on training examples and the fixed validation set over 1,024 optimizer steps.
+on training examples and the fixed validation set over 536,870,912 padded training
+tokens (1,024 optimizer steps at the default global batch of 128).
 This is the smaller counterpart of the existing one-bit Qwen3-4B experiment.
 
 Decreasing training and validation losses would support using this cheaper model
@@ -30,15 +31,38 @@ does not establish message-recovery accuracy, text quality, or superiority over
 | LoRA | Rank 32, alpha 16, dropout 0.05, all linear layers |
 | Precision | bfloat16, gradient checkpointing enabled |
 | Batch | Global 128; per-device microbatch 8 |
-| Schedule | 1,024 optimizer steps; learning rate 0.0003; 50 warmup steps |
-| Logging / validation | Every optimizer step / every 4 optimizer steps |
-| Checkpoints | Every 32 optimizer steps; retain all 32 |
+| Training budget | 536,870,912 padded tokens; learning rate 0.0003 |
+| Warmup | 26,214,400 padded tokens (50 steps at global batch 128) |
+| Logging / validation | Every 524,288 / 2,097,152 padded tokens (1 / 4 steps at batch 128) |
+| Checkpoints | Every 16,777,216 padded tokens (32 steps at batch 128); retain all saves |
 | W&B run name | `E20260916_qwen3_0_6b_peft_convergence` |
 
 Accumulation is `128 / (8 * WORLD_SIZE)`: 16 microbatches per optimizer step on
 one GPU, 8 on two, and 4 on four. Supported process counts divide 16 exactly.
 The loader requires at least 131,328 documents (131,072 training plus 256
 validation); the existing 500,000-document cache is sufficient.
+
+This experiment's `FixedBudgetTrainingConfig` uses `num_training_tokens` for the
+total budget and `warmup_steps_in_tokens`, `eval_steps_in_tokens`,
+`save_steps_in_tokens`, and `logging_steps_in_tokens` for its schedule. Tokens are
+padded student-input positions, including the prefix and padding, excluding
+validation and the separate teacher forward pass. The shared KL configuration
+and other experiments retain their existing step-based settings.
+
+One optimizer step consumes `global_batch_size * max_length` token positions.
+The total budget must divide exactly; event intervals and warmup round up to the
+next whole step, with zero warmup supported. Thus smaller global batches take
+more steps between events while preserving the requested token intervals:
+
+| Global batch | Total steps | Warmup steps | Log every | Evaluate every | Save every |
+| --- | --- | --- | --- | --- | --- |
+| 128 | 1,024 | 50 | 1 step | 4 steps | 32 steps |
+| 64 | 2,048 | 100 | 2 steps | 8 steps | 64 steps |
+| 32 | 4,096 | 200 | 4 steps | 16 steps | 128 steps |
+
+All three consume the same training tokens and retain 32 checkpoints. Intervals
+that are not multiples of a step's token count can overshoot by less than one step per
+interval; changing the local microbatch alone does not change the schedule.
 
 ## Run
 
@@ -71,7 +95,13 @@ Alternatively, launch on four visible GPUs with one process per GPU:
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 --module ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train
 ```
 
-The script has a fixed configuration and a Click `--help` command. It reads
+To reduce memory while keeping the same training and event token budgets:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --local-batch-size 4 --global-batch-size 32
+```
+
+The Click CLI also accepts `--num-training-tokens` and has a `--help` command. It reads
 exported environment variables; it does not load `.env` automatically. Choose a
 fresh artifact directory for an independent repeat to avoid reusing checkpoint
 paths. Training is not automatically resumed from existing files.
@@ -88,7 +118,7 @@ Plot `train/loss`, `train/prefix_loss`, and `train/data_loss` alongside
 Compare early and late validation losses and inspect sustained trends rather
 than interpreting a single noisy step as convergence.
 
-`checkpoint-32/`, `checkpoint-64/`, ..., `checkpoint-1024/` each contain
+At global batch 128, `checkpoint-32/`, `checkpoint-64/`, ..., `checkpoint-1024/` each contain
 `adapter_model.safetensors` and `adapter_config.json`, plus tokenizer and Trainer
 metadata. PEFT saves only adapter weights; `save_only_model=True` additionally
 omits optimizer, scheduler, and RNG state. No merged or full base-model weights
@@ -113,6 +143,8 @@ tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 Local verification covers distributed batch divisibility, CLI dispatch, and
 actual 32-step checkpoint cadence, compact contents, retention, and adapter
 reload on a tiny randomly initialized CPU Qwen model with synthetic documents.
+Schedule tests cover batch/sequence-length scaling, whole-step rounding, zero
+warmup, invalid token budgets, retention, CLI dispatch and Trainer argument wiring.
 They omit full 0.6B training, GPU memory fit, distributed execution, live W&B
 delivery, and claims of convergence. Existing Kirchenbauer tests cover the shared
 data and loss machinery.
