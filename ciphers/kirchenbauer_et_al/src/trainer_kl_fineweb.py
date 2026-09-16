@@ -159,7 +159,7 @@ def free_token_kl(
         A scalar mean KL divergence. ``PrefixKLTrainer`` applies any mode-specific
         weighting and logs the resulting data-loss component.
     """
-    # TODO(hadriano): KL does NOT exclude padding; change it to remove padded targets from loss/gradients and average over real targets before supporting padding (PR #91).
+    # TODO(hadriano): KL incorrectly includes padding; change it to exclude pads from loss, gradients, and averaging (PR #91).
     return F.kl_div(student_logprobs[:, Q:], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
 
