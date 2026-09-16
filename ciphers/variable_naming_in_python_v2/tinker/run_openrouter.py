@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import AwareDatetime, BaseModel, TypeAdapter
 from pydantic_yaml import parse_yaml_raw_as
+from tqdm import tqdm
 
 from ciphers.variable_naming_in_python_v2.data.apps import REPO_ROOT, AppsConfig, AppsTestCases, load_apps
 from ciphers.variable_naming_in_python_v2.data.codex_apps import AppsPromptProblem, PythonAnswer, SecretTask, build_apps_prompt
@@ -109,7 +110,7 @@ def generate_api(queries: list[Query], *, model: str):
     """
     responses = APIGenerator().api_generate_streaming(
         [query.prompt for query in queries], model=f"openrouter/{model}", batch_size=CONFIG.api_batch_size,
-        return_raw=True, num_retries=0, max_new_tokens=CONFIG.max_tokens, batch_completion_kwargs={"timeout": CONFIG.timeout_s},
+        return_raw=True, enable_tqdm=True, num_retries=0, max_new_tokens=CONFIG.max_tokens, batch_completion_kwargs={"timeout": CONFIG.timeout_s},
     )
     batch_start = perf_counter()
     for index, (query, response) in enumerate(zip(queries, responses, strict=True)):
@@ -164,10 +165,13 @@ def stage(function, jobs: list, workers: int | None, path: Path, timings: dict) 
     workers=None streams function(jobs), letting APIGenerator batch the full list;
     otherwise a spawn pool maps function over jobs. Records follow the generation/
     grade schemas above. Only the parent writes and flushes; join by model/problem_id.
+    Pool progress counts saved results, including errors; APIGenerator shows its
+    own batch progress. Both bars show elapsed time and estimated time remaining.
     """
     start, records = perf_counter(), []
     with path.open("x") as output, (get_context("spawn").Pool(workers) if workers else nullcontext()) as pool:
-        for record in pool.imap_unordered(function, jobs) if pool else function(jobs):
+        completed = pool.imap_unordered(function, jobs) if pool else function(jobs)
+        for record in tqdm(completed, total=len(jobs), desc=path.stem, unit="result", disable=pool is None):
             output.write(json.dumps(record) + "\n")
             output.flush()
             records.append(record)
