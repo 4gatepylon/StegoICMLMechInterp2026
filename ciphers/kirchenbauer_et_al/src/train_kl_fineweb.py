@@ -2,7 +2,6 @@
 
 import os
 import sys
-from functools import partial
 from pathlib import Path
 
 from peft import LoraConfig
@@ -12,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from ciphers.kirchenbauer_et_al.src.cache_fineweb import load_fineweb_cache  # noqa: E402
 from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import build_sft_config, configure_wandb_environment, gradient_accumulation_steps, parse_args  # noqa: E402
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata  # noqa: E402
-from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator  # noqa: E402
+from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer  # noqa: E402
 
 
 def main() -> None:
@@ -49,7 +48,7 @@ def main() -> None:
         reject_document_padding=args.reject_document_padding,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
-        data_collator=partial(prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=args.n_bits, data_length=args.data_length),
+        data_length=args.data_length,
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules="all-linear"),
         args=training_args,

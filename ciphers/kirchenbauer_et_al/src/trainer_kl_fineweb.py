@@ -185,6 +185,10 @@ def free_token_kl(
 class PrefixKLTrainer(SFTTrainer):
     """Train LoRA logits toward gated boosts, optionally learning the prefix with NLL.
 
+    Unlike SFTTrainer, this trainer constructs its own prefix collator from the
+    ``processing_class`` tokenizer, ``data_length`` document slots (excluding the
+    prefix), and ``n_bits``. Pass the tokenizer by keyword. Caller-supplied
+    ``data_collator`` is forbidden, including None.
     ``reject_document_padding=True`` rejects any masked token before teacher or
     student execution. Set it false only to explicitly permit right padding;
     left/internal padding is always forbidden because it shifts bit positions.
@@ -195,6 +199,7 @@ class PrefixKLTrainer(SFTTrainer):
     def __init__(
         self,
         *args,
+        data_length: int,
         loss_mode: Literal["nll", "ignore_prefix"] = "nll",
         alpha: float = 1.0,
         n_bits: int = N_BITS,
@@ -202,26 +207,21 @@ class PrefixKLTrainer(SFTTrainer):
         strategy: Literal["block", "modulo"] = STRATEGY,
         profile_memory_steps: int = 0,
         reject_document_padding: bool = True,
-        data_collator=None,
         **kwargs,
     ) -> None:
+        if "data_collator" in kwargs:
+            raise ValueError("PrefixKLTrainer constructs its own data_collator; omit the data_collator argument")
         if loss_mode not in {"nll", "ignore_prefix"}:
             raise ValueError("loss_mode must be 'nll' or 'ignore_prefix'")
         if n_bits < 1 or strategy not in {"block", "modulo"}:
             raise ValueError("n_bits must be positive and strategy must be 'block' or 'modulo'")
         if profile_memory_steps < 0:
             raise ValueError("profile_memory_steps must be nonnegative")
-        collator_function = data_collator.func if isinstance(data_collator, partial) else data_collator
-        if collator_function is not prefix_bits_encoding_text_collator:
-            raise ValueError(
-                "PrefixKLTrainer requires prefix_bits_encoding_text_collator. "
-                "This is because we have some options controlled in the Trainer and others in the function itself. "
-                "In a future iteration we'll find a better interface."
-            )
+        kwargs["data_collator"] = partial(prefix_bits_encoding_text_collator, tokenizer=kwargs["processing_class"], n_bits=n_bits, data_length=data_length)
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
         self.reject_document_padding = reject_document_padding
         self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
-        super().__init__(*args, data_collator=data_collator, **kwargs)
+        super().__init__(*args, **kwargs)
         # This loss ignores num_items_in_batch, so retain "default batch size reduction":
         # https://huggingface.co/docs/transformers/v5.17.0/en/main_classes/trainer#transformers.Trainer.compute_loss
         self.model_accepts_loss_kwargs = False

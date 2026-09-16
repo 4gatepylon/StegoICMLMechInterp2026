@@ -1,7 +1,6 @@
 """Ablate Qwen3 base-model size and the prefix-KL objective with compact LoRA saves."""
 
 import os
-from functools import partial
 from pathlib import Path
 from typing import Literal, Self, get_args
 
@@ -18,7 +17,7 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
     gradient_accumulation_steps,
 )
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata
-from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
+from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer
 
 QwenModel = Literal["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B-Base"]
 LossType = Literal["nll", "ignore_prefix"]
@@ -198,12 +197,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
         strategy=config.strategy,
         train_dataset=dataset.skip(config.validation_samples),
         eval_dataset=validation_dataset,
-        data_collator=partial(
-            prefix_bits_encoding_text_collator,
-            tokenizer=tokenizer,
-            n_bits=config.n_bits,
-            data_length=config.data_length,
-        ),
+        data_length=config.data_length,
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=config.lora_rank, lora_alpha=config.lora_alpha, lora_dropout=config.lora_dropout, target_modules="all-linear"),
         args=training_args,

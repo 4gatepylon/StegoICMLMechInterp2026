@@ -205,7 +205,7 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     cache_loader.return_value.skip.assert_called_once_with(config.validation_samples)
     sft_config_builder.assert_called_once_with(config, 32, tokenizer)
     trainer_kwargs = sys.modules["ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb"].PrefixKLTrainer.call_args.kwargs
-    assert trainer_kwargs["data_collator"].keywords["data_length"] == config.data_length
+    assert trainer_kwargs["data_length"] == config.data_length
     assert trainer_kwargs["args"] is sft_config_builder.return_value
     assert trainer_kwargs["reject_document_padding"] is reject_padding
 
@@ -289,7 +289,7 @@ def test_convergence_entrypoint_wires_data_and_total_lengths(monkeypatch, tmp_pa
     monkeypatch.setattr(train, "PrefixKLTrainer", trainer_constructor)
     assert train.build_trainer(config) is trainer_constructor.return_value
     kwargs = trainer_constructor.call_args.kwargs
-    assert kwargs["data_collator"].keywords["data_length"] == config.data_length
+    assert kwargs["data_length"] == config.data_length
     assert kwargs["args"].max_length == config.data_length + 25
     assert kwargs["args"].save_only_model
 
