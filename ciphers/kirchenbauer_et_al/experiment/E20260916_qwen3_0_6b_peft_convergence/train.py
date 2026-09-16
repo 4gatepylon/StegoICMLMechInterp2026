@@ -1,9 +1,9 @@
-"""Test one-bit prefix-KL convergence of Qwen3-0.6B-Base with compact LoRA saves."""
+"""Ablate Qwen3 base-model size and the prefix-KL objective with compact LoRA saves."""
 
 import os
 from functools import partial
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self, get_args
 
 import click
 from peft import LoraConfig
@@ -20,6 +20,9 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
+QwenModel = Literal["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B-Base"]
+LossType = Literal["nll", "ignore_prefix"]
+WANDB_PROJECT = "E20260916_qwen3_peft_convergence"
 DATA_LENGTH = 4096
 # Keep 128 sequences per step and 1,024 steps; prefixes add model-input overhead.
 NUM_TRAINING_TOKENS = 128 * 1024 * DATA_LENGTH
@@ -28,7 +31,27 @@ NUM_TRAINING_TOKENS = 128 * 1024 * DATA_LENGTH
 class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
     """Derive training steps from padded data positions, excluding prefixes."""
 
+    model: QwenModel = "Qwen/Qwen3-0.6B-Base"
+    learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
+    alpha: float = Field(default=1.0, ge=0, allow_inf_nan=False)
+    delta: float = Field(default=2.0, ge=0, allow_inf_nan=False)
     num_training_tokens: int = Field(default=NUM_TRAINING_TOKENS, gt=0)
+
+    @model_validator(mode="after")
+    def derive_run_identity(self) -> Self:
+        """Return settings with a shared project and a descriptive run/output name.
+
+        Model size, bits, learning rate, global batch, loss, alpha, and delta
+        distinguish ablations. Repeats with identical settings reuse the name;
+        use a fresh STEGO_ARTIFACTS_DIR for independent checkpoint outputs.
+        The explicit project overrides WANDB_PROJECT through build_trainer.
+        """
+        model_name = self.model.split("/")[1].removesuffix("-Base").lower()
+        self.wandb_project = WANDB_PROJECT
+        # Preserve float precision so nearby ablation settings cannot share a path.
+        lr, alpha, delta = (str(value).removesuffix(".0") for value in (self.learning_rate, self.alpha, self.delta))
+        self.run_name = f"{model_name}-{self.n_bits}bit-lr{lr}-gb{self.global_batch_size}-{self.loss_mode}-a{alpha}-d{delta}"
+        return self
 
     @model_validator(mode="after")
     def derive_step_budget(self) -> Self:
@@ -47,26 +70,40 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
         return self
 
 
-def experiment_config(local_batch_size: int = 8, global_batch_size: int = 128, num_training_tokens: int = NUM_TRAINING_TOKENS) -> FixedBudgetTrainingConfig:
-    """Return validated settings for the one-bit 0.6B convergence experiment.
+def experiment_config(
+    local_batch_size: int = 8,
+    global_batch_size: int = 128,
+    num_training_tokens: int = NUM_TRAINING_TOKENS,
+    *,
+    lr: float = 3e-4,
+    model: QwenModel = "Qwen/Qwen3-0.6B-Base",
+    n_bits: int = 1,
+    loss_type: LossType = "nll",
+    alpha: float = 1.0,
+    delta: float = 2.0,
+) -> FixedBudgetTrainingConfig:
+    """Return validated ablation settings consumed by ``build_trainer``.
 
-    The returned schema is consumed by ``build_trainer``. Settings follow the
-    existing one-bit 4B experiment, changing the model, local batch, run name,
-    and checkpoint cadence/retention. ``local_batch_size`` is the per-device
-    microbatch; ``global_batch_size`` is the effective batch across devices and
-    accumulation. ``num_training_tokens`` is the positive training budget in
-    padded data positions, excluding prefixes and validation. Steps divide this
-    budget by ``DATA_LENGTH`` and the global batch size; a non-integer result is rejected.
+    ``local_batch_size`` is sequences per device per microbatch; ``global_batch_size``
+    includes all devices and accumulation. ``num_training_tokens`` counts padded
+    data positions, excluding prefixes and validation. Steps divide this budget by
+    ``DATA_LENGTH`` and the global batch size; a non-integer result is rejected.
+    ``lr`` controls optimizer update size. ``model`` selects a supported Qwen3 Base
+    checkpoint; ``n_bits`` sets message length and the number of text blocks.
+    ``loss_type='nll'`` minimizes prefix NLL plus ``alpha`` times data KL;
+    ``'ignore_prefix'`` uses only data KL and ignores alpha. ``delta`` boosts the
+    teacher's selected vocabulary logits: zero disables the boost; larger values
+    strengthen the encoding target. Alpha and delta must be finite and nonnegative.
+    The returned config also derives W&B project/run names and checkpoint retention.
     """
     return FixedBudgetTrainingConfig(
         num_training_tokens=num_training_tokens,
-        model="Qwen/Qwen3-0.6B-Base",
-        run_name="E20260916_qwen3_0_6b_peft_convergence",
-        loss_mode="nll",
+        model=model,
+        loss_mode=loss_type,
         strategy="block",
-        n_bits=1,
-        alpha=1.0,
-        delta=2.0,
+        n_bits=n_bits,
+        alpha=alpha,
+        delta=delta,
         dataset_cache_name="fineweb-500k",
         concatenation_space="token",
         data_length=DATA_LENGTH,
@@ -74,7 +111,7 @@ def experiment_config(local_batch_size: int = 8, global_batch_size: int = 128, n
         lora_rank=32,
         lora_alpha=16,
         lora_dropout=0.05,
-        learning_rate=3e-4,
+        learning_rate=lr,
         warmup_steps=50,
         global_batch_size=global_batch_size,
         per_device_batch_size=local_batch_size,
@@ -93,7 +130,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
         config: Validated model, data, objective, batching, and logging settings,
             normally from ``experiment_config``. ``WORLD_SIZE`` determines
             accumulation; ``STEGO_ARTIFACTS_DIR`` locates data and outputs.
-            Existing ``WANDB_PROJECT`` selects the destination project.
+            ``config.wandb_project`` selects the destination W&B project.
 
     Returns:
         An untrained ``PrefixKLTrainer`` with a PEFT LoRA model. Call ``train``
@@ -144,12 +181,73 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
 
 
 @click.command()
-@click.option("--local-batch-size", default=8, show_default=True, type=click.IntRange(min=1), help="Sequences per device per microbatch.")
-@click.option("--global-batch-size", default=128, show_default=True, type=click.IntRange(min=1), help="Sequences per optimizer step across all devices.")
 @click.option(
-    "--num-training-tokens", default=NUM_TRAINING_TOKENS, show_default=True, type=click.IntRange(min=1), help="Total padded data positions; excludes prefixes and validation."
+    "--lr",
+    default=3e-4,
+    show_default=True,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Optimizer learning rate. Increase for faster updates; decrease if training is unstable.",
 )
-def main(local_batch_size: int, global_batch_size: int, num_training_tokens: int) -> None:
+@click.option(
+    "--model",
+    "--model-name",
+    default="Qwen/Qwen3-0.6B-Base",
+    show_default=True,
+    type=click.Choice(get_args(QwenModel)),
+    help="Qwen3 Base checkpoint. Larger models test capacity scaling but require more memory and compute.",
+)
+@click.option(
+    "--n-bits",
+    default=1,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Message bits per sequence. More bits increase payload and divide the text into shorter blocks per bit; use 1, 2, 4, or 8 for this sweep.",
+)
+@click.option(
+    "--loss-type",
+    default="nll",
+    show_default=True,
+    type=click.Choice(get_args(LossType)),
+    help="nll: prefix NLL + alpha * data KL. ignore_prefix: data KL only (alpha ignored), to ablate prefix learning.",
+)
+@click.option(
+    "--alpha",
+    default=1.0,
+    show_default=True,
+    type=click.FloatRange(min=0),
+    help="Data-KL weight in nll mode. Increase to prioritize matching the encoding target over prefix NLL; 0 trains only the prefix. Ignored by ignore_prefix.",
+)
+@click.option(
+    "--delta",
+    default=2.0,
+    show_default=True,
+    type=click.FloatRange(min=0),
+    help="Logit boost for the vocabulary subset encoding each bit. Larger values strengthen the encoding target and may trade text quality for bit recovery; 0 disables the boost.",
+)
+@click.option(
+    "--local-batch-size",
+    default=8,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Sequences per device per microbatch. Lower to reduce memory use; accumulation preserves the global batch.",
+)
+@click.option(
+    "--global-batch-size",
+    default=128,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Sequences per optimizer step across all devices. Lower for more updates at the same token budget; must be divisible by local batch * WORLD_SIZE.",
+)
+@click.option(
+    "--num-training-tokens",
+    default=NUM_TRAINING_TOKENS,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Total padded data positions, excluding prefixes and validation. Increase to train longer at a fixed batch size.",
+)
+def main(
+    local_batch_size: int, global_batch_size: int, num_training_tokens: int, lr: float, model: QwenModel, n_bits: int, loss_type: LossType, alpha: float, delta: float
+) -> None:
     """Train for a token budget, deriving optimizer steps from sequence and batch sizes.
 
     With the default budget, --local-batch-size 4 --global-batch-size 32 runs 4,096 steps.
@@ -158,7 +256,9 @@ def main(local_batch_size: int, global_batch_size: int, num_training_tokens: int
     Checkpoints remain every 32 optimizer steps; all are retained.
     """
     try:
-        trainer = build_trainer(experiment_config(local_batch_size, global_batch_size, num_training_tokens))
+        trainer = build_trainer(
+            experiment_config(local_batch_size, global_batch_size, num_training_tokens, lr=lr, model=model, n_bits=n_bits, loss_type=loss_type, alpha=alpha, delta=delta)
+        )
     except ValueError as error:
         raise click.ClickException(str(error)) from error
     trainer.train()
