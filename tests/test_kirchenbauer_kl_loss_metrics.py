@@ -206,7 +206,6 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
     from contextlib import nullcontext
 
     from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import TokenBatch
-    from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import prefix_bits_encoding_text_collator
 
     def initialize_parent(self, *args, **kwargs):
         self.model = SimpleNamespace(config=SimpleNamespace(bos_token_id=7))
@@ -215,7 +214,7 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
 
     with patch.object(SFTTrainer, "__init__", initialize_parent):
         kwargs = {"reject_document_padding": False} if allow_right_padding else {}
-        trainer = PrefixKLTrainer(data_collator=prefix_bits_encoding_text_collator, n_bits=1, **kwargs)
+        trainer = PrefixKLTrainer(processing_class=Mock(), data_length=4, n_bits=1, **kwargs)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
     trainer.processing_class = SimpleNamespace(bos_token_id=None, eos_token_id=7)
     trainer._record_loss_metrics = Mock()

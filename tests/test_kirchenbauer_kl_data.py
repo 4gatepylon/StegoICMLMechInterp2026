@@ -1,10 +1,13 @@
 import random
+from functools import partial
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
+from trl import SFTTrainer
 
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import compile_prefix, fixed_prefix_metadata, prefix_batch, prefix_token_length, resolve_bos_token_id, tokenize_with_prefix
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
@@ -44,10 +47,41 @@ def test_training_prefixes_are_resampled() -> None:
     assert (first_bits, first_gates) != (second_bits, second_gates)
 
 
-@pytest.mark.parametrize("collator", [None, lambda examples: examples])
-def test_trainer_requires_prefix_collator(collator) -> None:
-    with pytest.raises(ValueError, match="requires prefix_bits_encoding_text_collator"):
-        PrefixKLTrainer(data_collator=collator)
+@pytest.mark.parametrize("collator", [None, lambda examples: examples, prefix_bits_encoding_text_collator, partial(prefix_bits_encoding_text_collator, n_bits=8)])
+def test_trainer_rejects_caller_supplied_collator(collator) -> None:
+    """Reject None, custom, built-in and partial collators before parent setup."""
+    with patch.object(SFTTrainer, "__init__", return_value=None) as initialize_parent:
+        with pytest.raises(ValueError, match="omit the data_collator argument"):
+            PrefixKLTrainer(data_collator=collator, data_length=8)
+    initialize_parent.assert_not_called()
+
+
+@pytest.mark.parametrize("prepend_student_bos", [False, True])
+def test_trainer_constructs_prefix_collator(length_tokenizer, prepend_student_bos) -> None:
+    """Cover trainer-owned collation with both BOS layouts and fixed gates; omit model execution."""
+
+    def initialize_parent(self, *args, **kwargs):
+        self.model = SimpleNamespace(config=SimpleNamespace(bos_token_id=length_tokenizer.pad_token_id))
+        self.processing_class = kwargs["processing_class"]
+        self.args = SimpleNamespace(process_index=1)
+
+    with patch.object(SFTTrainer, "__init__", initialize_parent):
+        trainer = PrefixKLTrainer(processing_class=length_tokenizer, data_length=4, n_bits=2, prepend_student_bos=prepend_student_bos)
+    batch = trainer.data_collator(
+        [
+            {"text": "a b c", "prefix_bits": "01", "do_encoding": False},
+            {"text": "b c", "prefix_bits": "10", "do_encoding": True},
+        ]
+    )
+    assert batch["base_input_ids"].shape == (2, 4)
+    data_start = batch["prefix_length"] + int(prepend_student_bos)
+    assert batch["input_ids"].shape == batch["labels"].shape == (2, data_start + 4)
+    assert batch["prefix_bits"] == ["01", "10"]
+    assert batch["do_encoding"] == [False, True]
+    torch.testing.assert_close(batch["input_ids"][:, data_start:], batch["base_input_ids"])
+    if prepend_student_bos:
+        assert batch["input_ids"][:, 0].tolist() == [trainer.bos_token_id] * 2
+        assert batch["attention_mask"][:, 0].tolist() == [1, 1]
 
 
 @pytest.fixture
