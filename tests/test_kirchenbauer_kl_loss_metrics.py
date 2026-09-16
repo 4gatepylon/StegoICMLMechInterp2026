@@ -65,13 +65,13 @@ def test_loss_components_reconstruct_total(loss_mode: str, alpha: float) -> None
 def test_prefix_nll_excludes_data_predictions(prefix_length) -> None:
     """Cover empty/single/multiple predictable prefix targets; omit KL and model IO."""
     logits: StudentLogprobs = torch.randn(1, prefix_length + 2, 4, requires_grad=True)
-    token_ids: Int[torch.Tensor, "batch tokens"] = torch.tensor([[0, 1, 2, 3, 0]])[:, :prefix_length + 2]  # noqa: F722
+    token_ids: Int[torch.Tensor, "batch tokens"] = torch.tensor([[0, 1, 2, 3, 0]])[:, : prefix_length + 2]  # noqa: F722
     loss = prefix_nll(logits.log_softmax(-1), token_ids[:, 1:prefix_length], prefix_length - 1)
     assert torch.isfinite(loss)
     loss.backward()
-    assert logits.grad[:, prefix_length - 1:].count_nonzero() == 0
+    assert logits.grad[:, prefix_length - 1 :].count_nonzero() == 0
     if prefix_length > 1:
-        assert logits.grad[:, :prefix_length - 1].abs().sum() > 0
+        assert logits.grad[:, : prefix_length - 1].abs().sum() > 0
     else:
         assert loss.item() == 0
 
@@ -242,7 +242,7 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
     else:
         with patch.object(trainer, "_divergence", wraps=trainer._divergence) as divergence:
             loss = trainer.compute_loss(model, inputs)
-        torch.testing.assert_close(divergence.call_args.args[2], inputs["input_ids"][:, 1:inputs["prefix_length"]])
+        torch.testing.assert_close(divergence.call_args.args[2], inputs["input_ids"][:, 1 : inputs["prefix_length"]])
         assert torch.isfinite(loss)
         loss.backward()
         assert model.call_count == 2
