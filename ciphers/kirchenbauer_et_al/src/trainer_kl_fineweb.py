@@ -128,6 +128,10 @@ def prefix_bits_encoding_text_collator(
         "labels": prefixed_model_inputs["input_ids"].masked_fill(prefixed_model_inputs["attention_mask"] == 0, -100),
         "base_input_ids": unprefixed_model_inputs["input_ids"],
         "base_attention_mask": unprefixed_model_inputs["attention_mask"],
+        # TODO(hadriano): Under default dispatch, streaming/IterableDataset inputs (and only those; e.g. streaming=True) risk this non-tensor metadata concatenation error.
+        # - Streaming + one process: works with the installed Accelerate version.
+        # - Streaming + multiple processes: fails when concatenating this string/bool/int metadata.
+        # - Regular non-streaming Dataset + any process count: unaffected by this issue under default dispatch.
         "prefix_bits": bits,
         "do_encoding": enabled,
         "prefix_length": Q,
