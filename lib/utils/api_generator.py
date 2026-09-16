@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-
-from typing import List, Dict, Union, Optional, Any, Iterator
-import tqdm
-import litellm
 import json
-import jinja2
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Union
+
+import jinja2
+import litellm
+import tqdm
 
 """
 This module provides functionality to do LLM Judge API calls to OpenAI, Anthropic, and
@@ -46,7 +46,7 @@ class APIGenerator:
         # response_format={ "type": "json_object" },
         response_format: Optional[dict[str, Any]] = None,
         return_raw: bool = False,
-        batch_completion_kwargs: dict[str, Any] = {},
+        batch_completion_kwargs: Optional[dict[str, Any]] = None,
     ) -> Iterator[str | litellm.utils.ModelResponse | Exception | None]:
         """
         This is a helper function to make it easy to generate using various LLM APIs
@@ -61,11 +61,20 @@ class APIGenerator:
                 {"role": "user", "content": user_input1},
                 ...
             ]
+
+        Empty prompt lists yield no results. ``batch_size`` must be positive.
+        ``batch_completion_kwargs`` contains optional LiteLLM request arguments;
+        no keys are required, and this method does not modify the caller's dict.
         """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        batch_completion_kwargs = dict(batch_completion_kwargs or {})
 
         # If we pass a list of prompts, convert to message format
         if isinstance(prompts, str):
             prompts = [prompts]
+        if not prompts:
+            return
         if isinstance(prompts[0], str):
             prompts = [[{"role": "user", "content": p}] for p in prompts]
 
@@ -129,11 +138,11 @@ class APIGenerator:
 
     def api_generate_json_mode_streaming(
         self,
-        prompts: Union[List[str], List[List[Dict[str, str]]]],
+        prompts: Union[str, List[str], List[List[Dict[str, str]]]],
         model: str,
         *args,
         **kwargs,
-    ) -> Iterator[Dict[str, Any]]:
+    ) -> Iterator[Dict[str, Any] | None]:
         """
         This is a helper function to make it easy to generate using various LLM APIs
         (e.g. OpenAI, Anthropic, etc.) with built in error-handling. However, it is mainly
@@ -141,6 +150,16 @@ class APIGenerator:
 
         NOTE that for JSON Mode your message should have the word "json" or something along
         those lines tbh.
+
+        ``args`` and remaining ``kwargs`` are forwarded to ``api_generate_streaming``.
+        Results are JSON objects in prompt order. ``must_have_keys`` lists required
+        top-level keys (empty by default); their values are not validated.
+        ``default_json_for_none`` replaces failed requests (default: None).
+        ``default_json_for_keys_fn(loaded)`` handles missing keys or non-object JSON
+        (default: {"error": "MissingKeys"}); ``loaded`` can be any decoded JSON value.
+        ``default_json_for_json_loads_decode_error_fn(text, error)`` handles invalid
+        JSON (default: {"error": "JSONDecodeError"}). Custom callbacks should return
+        a dictionary or None, which is yielded unchanged for the caller to handle.
         """
         if "response_format" in kwargs:
             raise ValueError("response_format is not allowed to be passed in kwargs")
@@ -153,9 +172,9 @@ class APIGenerator:
             raise ValueError("return_raw must be FALSE")
         kwargs["return_raw"] = False
         # Generate
-        generations_iterator: Iterator[str] = self.api_generate_streaming(
-            prompts=prompts,
-            model=model,
+        generations_iterator = self.api_generate_streaming(
+            prompts,
+            model,
             *args,
             response_format={"type": "json_object"},
             **kwargs,
@@ -168,7 +187,7 @@ class APIGenerator:
                 assert isinstance(generation, str), f"{type(generation)}\n\n{generation}"
                 try:
                     loaded = json.loads(generation)
-                    if not all(k in loaded for k in must_have_keys):
+                    if not isinstance(loaded, dict) or not all(k in loaded for k in must_have_keys):
                         yield default_json_for_keys_fn(loaded)
                     else:
                         yield loaded
