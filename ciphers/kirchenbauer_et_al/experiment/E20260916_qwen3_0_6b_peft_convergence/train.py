@@ -24,7 +24,7 @@ QwenModel = Literal["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-
 LossType = Literal["nll", "ignore_prefix"]
 WANDB_PROJECT = "E20260916_qwen3_peft_convergence"
 DATA_LENGTH = 4096
-# Keep 128 sequences per step and 1,024 steps; prefixes add model-input overhead.
+# Default data-token budget; prefixes add model-input overhead.
 NUM_TRAINING_TOKENS = 128 * 1024 * DATA_LENGTH
 
 
@@ -250,10 +250,10 @@ def main(
 ) -> None:
     """Train for a token budget, deriving optimizer steps from sequence and batch sizes.
 
-    With the default budget, --local-batch-size 4 --global-batch-size 32 runs 4,096 steps.
+    Steps equal num_training_tokens / (data_length * global_batch_size).
     Data length * global batch must divide the token budget exactly.
     Global batch must be divisible by local batch * WORLD_SIZE.
-    Checkpoints remain every 32 optimizer steps; all are retained.
+    Checkpoints follow the configured save cadence; all are retained.
     """
     try:
         trainer = build_trainer(
