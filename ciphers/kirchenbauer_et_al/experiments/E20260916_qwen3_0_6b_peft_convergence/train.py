@@ -24,18 +24,30 @@ QwenModel = Literal["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-
 LossType = Literal["nll", "ignore_prefix"]
 WANDB_PROJECT = "E20260916_qwen3_peft_convergence"
 DATA_LENGTH = 4096
-# Default data-token budget; prefixes add model-input overhead.
-NUM_TRAINING_TOKENS = 128 * 1024 * DATA_LENGTH
+# Preserve the original schedule's token counts at global batch 128.
+REFERENCE_TOKENS_PER_STEP = 128 * DATA_LENGTH
+NUM_TRAINING_TOKENS = 1024 * REFERENCE_TOKENS_PER_STEP
 
 
 class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
-    """Derive training steps from padded data positions, excluding prefixes."""
+    """Express this experiment's schedule in padded data positions, excluding prefixes.
+
+    Token budgets exclude prefixes, validation and the separate teacher forward pass.
+    The *_steps_in_tokens fields specify warmup duration and event intervals;
+    their defaults preserve the original batch-128, length-4096 schedule. The
+    inherited step fields and checkpoint retention are derived on validation for
+    build_sft_config; configure the token fields rather than those derived fields.
+    """
 
     model: QwenModel = "Qwen/Qwen3-0.6B-Base"
     learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
     alpha: float = Field(default=1.0, ge=0, allow_inf_nan=False)
     delta: float = Field(default=2.0, ge=0, allow_inf_nan=False)
     num_training_tokens: int = Field(default=NUM_TRAINING_TOKENS, gt=0)
+    warmup_steps_in_tokens: int = Field(default=50 * REFERENCE_TOKENS_PER_STEP, ge=0)
+    eval_steps_in_tokens: int = Field(default=4 * REFERENCE_TOKENS_PER_STEP, gt=0)
+    save_steps_in_tokens: int = Field(default=32 * REFERENCE_TOKENS_PER_STEP, gt=0)
+    logging_steps_in_tokens: int = Field(default=REFERENCE_TOKENS_PER_STEP, gt=0)
 
     @model_validator(mode="after")
     def derive_run_identity(self) -> Self:
@@ -55,17 +67,25 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
 
     @model_validator(mode="after")
     def derive_step_budget(self) -> Self:
-        """Return settings with exact-budget steps and retention for every save.
+        """Return exact-budget training steps, token-based intervals and retention.
 
         Reject batches whose token count cannot divide the training token budget;
         rounding would change the number of padded data positions processed.
+        Round event intervals and warmup up to whole optimizer steps, so each is
+        at least its requested token count; zero warmup remains zero. Interval
+        rounding can overshoot by less than one step per event interval.
         Retention includes the Trainer's final save for a partial save interval.
         """
         if self.global_batch_size is None or self.num_training_tokens % (self.data_length * self.global_batch_size):
             raise ValueError(
                 f"num_training_tokens ({self.num_training_tokens}) must be divisible by data length ({self.data_length}) * global batch size ({self.global_batch_size})"
             )
-        self.max_steps = self.num_training_tokens // self.data_length // self.global_batch_size
+        tokens_per_step = self.data_length * self.global_batch_size
+        self.max_steps = self.num_training_tokens // tokens_per_step
+        self.warmup_steps = (self.warmup_steps_in_tokens + tokens_per_step - 1) // tokens_per_step
+        self.eval_steps = (self.eval_steps_in_tokens + tokens_per_step - 1) // tokens_per_step
+        self.save_steps = (self.save_steps_in_tokens + tokens_per_step - 1) // tokens_per_step
+        self.logging_steps = (self.logging_steps_in_tokens + tokens_per_step - 1) // tokens_per_step
         self.save_total_limit = (self.max_steps + self.save_steps - 1) // self.save_steps
         return self
 
@@ -95,6 +115,8 @@ def experiment_config(
     teacher's selected vocabulary logits: zero disables the boost; larger values
     strengthen the encoding target. Alpha and delta must be finite and nonnegative.
     The returned config also derives W&B project/run names and checkpoint retention.
+    Warmup, evaluation, saving and logging preserve their original token intervals
+    using the local schema's *_steps_in_tokens defaults, rounded up to full steps.
     """
     return FixedBudgetTrainingConfig(
         num_training_tokens=num_training_tokens,
@@ -111,12 +133,8 @@ def experiment_config(
         lora_alpha=16,
         lora_dropout=0.05,
         learning_rate=lr,
-        warmup_steps=50,
         global_batch_size=global_batch_size,
         per_device_batch_size=local_batch_size,
-        eval_steps=4,
-        save_steps=32,
-        logging_steps=1,
         report_to="wandb",
         wandb_tags=["stego-icml-2026-git-archive"],
     )
@@ -251,7 +269,8 @@ def main(
     Steps equal num_training_tokens / (data_length * global_batch_size).
     Data length * global batch must divide the token budget exactly.
     Global batch must be divisible by local batch * WORLD_SIZE.
-    Checkpoints follow the configured save cadence; all are retained.
+    At global batch 32, evaluation is every 16 steps and saving every 128 steps;
+    their padded-data-token intervals match the original batch-128 run. All saves are retained.
     """
     try:
         trainer = build_trainer(

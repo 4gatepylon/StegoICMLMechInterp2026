@@ -140,5 +140,5 @@ def test_token_concatenation_preserves_boundary_whitespace() -> None:
     separate_ids = tokenizer(prefixes[0], add_special_tokens=False)["input_ids"] + tokenizer(text, add_special_tokens=False)["input_ids"]
     assert tokenizer(prefixes[0] + text, add_special_tokens=False)["input_ids"] != separate_ids
     prefixed, base, prefix_length = tokenize_with_prefix(tokenizer, [text], ["0"], [False], data_length=8)
-    assert prefixed["input_ids"][0, :len(separate_ids)].tolist() == separate_ids
+    assert prefixed["input_ids"][0, : len(separate_ids)].tolist() == separate_ids
     assert torch.equal(prefixed["input_ids"][:, prefix_length:], base["input_ids"])

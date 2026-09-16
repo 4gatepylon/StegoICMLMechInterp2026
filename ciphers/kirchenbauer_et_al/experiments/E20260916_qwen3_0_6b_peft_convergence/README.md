@@ -49,6 +49,31 @@ and validation. Logged padded-input tokens additionally include the prefix
 overhead. Earlier versions applied the configured length to the whole input;
 the corrected length setting allocates that budget to data and adds the prefix.
 
+## Token-based schedules
+
+This experiment expresses warmup duration and event intervals as padded data
+positions through `warmup_steps_in_tokens`, `eval_steps_in_tokens`,
+`save_steps_in_tokens`, and `logging_steps_in_tokens`. Like the training budget,
+these exclude prefixes, validation and the separate teacher forward pass. The
+shared KL configuration and other experiments retain their step-based settings.
+
+One optimizer step consumes `global_batch_size * data_length` data positions.
+Defaults preserve the original batch-128, data-length-4096 schedule: warmup is
+26,214,400 positions; logging, evaluation and saving occur every 524,288,
+2,097,152 and 16,777,216 positions respectively. The total training budget must
+divide exactly into steps. Event intervals and warmup round up to whole steps,
+with zero warmup supported; rounding overshoots by less than one step per interval.
+
+| Global batch | Total steps | Warmup steps | Log every | Evaluate every | Save every |
+| --- | --- | --- | --- | --- | --- |
+| 128 | 1,024 | 50 | 1 step | 4 steps | 32 steps |
+| 64 | 2,048 | 100 | 2 steps | 8 steps | 64 steps |
+| 32 | 4,096 | 200 | 4 steps | 16 steps | 128 steps |
+
+These examples use the default training budget and data length and retain all
+32 checkpoints. Changing the local microbatch or prefix width alone does not
+change the schedule.
+
 ## Run
 
 From the repository root, activate `stego` and install the repository's GPU
@@ -180,6 +205,8 @@ and numeric parameters, objective forwarding, derived W&B names, distributed
 batch divisibility, CLI dispatch, and
 actual 32-step checkpoint cadence, compact contents, retention, and adapter
 reload on a tiny randomly initialized CPU Qwen model with synthetic documents.
-Tests omit full-size training, GPU memory fit, distributed execution, live W&B
+Schedule tests cover batch/world-size/data-length scaling, whole-step rounding,
+zero warmup, invalid budgets, retention, and CLI-to-Trainer wiring with varying
+prefix overhead. Tests omit full-size training, GPU memory fit, distributed execution, live W&B
 delivery, and claims of convergence. Existing Kirchenbauer tests cover the shared
 data and loss machinery.
