@@ -392,6 +392,24 @@ torchrun --standalone --nproc-per-node=4 \
   ciphers/kirchenbauer_et_al/src/train_kl_fineweb.py
 ```
 
+The KL training setting `data_length` (CLI: `--data-length`, default `4096`)
+counts document token slots **excluding** the control prefix. It must divide
+evenly by `n_bits`. The tokenizer measures the prefix width `Q`; the student
+input and TRL's derived `max_length` are `data_length + Q`. For eight bits with
+Qwen3-4B-Base, this is `4096 + 32 = 4128`, with 512 data positions per bit.
+Startup output reports all these lengths and the partition strategy on rank
+zero. Actual prefixes are checked against the reference width in every batch.
+
+Migrate old YAML `max_length` fields to `data_length`, and CLI `--max-length`
+to `--data-length`; the old names are rejected to avoid silently reinterpreting
+old runs. Setting `data_length: 4096` increases the data budget compared with
+the old total-input cap of 4096. To reproduce an old eight-bit run's dimensions,
+use `data_length: 4064`. Resume comparisons require the original dimensions.
+
+Short documents are still padded and long documents truncated; this setting
+does not guarantee 4096 non-padding text tokens. The existing KL objective's
+padding and next-token alignment behavior is unchanged.
+
 Each official experiment logs two cumulative training-volume metrics to W&B:
 
 - `train/num_input_tokens_seen` counts non-padding tokens in the prefixed
@@ -401,7 +419,7 @@ Each official experiment logs two cumulative training-volume metrics to W&B:
   disable this native Transformers metric.
 - `train/num_padded_input_tokens_seen` counts every fixed-width student input
   slot, including padding. It is computed from the restored optimizer step,
-  effective global batch size, and `max_length`, so it remains cumulative after
+  effective global batch size, and derived `max_length` (data plus prefix), so it remains cumulative after
   checkpoint resume.
 
 Both metrics count each student input once. They do not double-count the
@@ -527,6 +545,6 @@ The script runs the 8-, 4-, 2-, and 1-bit configurations in the `stego` Conda
 environment and stops if any training job fails. All four runs are logged to
 the `stego-kirchenbauer-prefix-kl` Weights & Biases project.
 
-At the configured maximum sequence length, each run processes 536,870,912
-padded sequence tokens. The actual number of non-padding FineWeb tokens may be
-lower.
+Each run processes 536,870,912 padded **data** positions, plus control-prefix
+tokens. The actual number of non-padding FineWeb tokens may be lower; the
+logged padded-input total is larger because it also includes the prefixes.
