@@ -1,18 +1,17 @@
 """Token schedule partitions: global batches 16/32/64/128 and varying world size;
-short/full sequence widths; intervals below/on/above step boundaries; zero warmup;
+short/full data widths; intervals below/on/above step boundaries; zero warmup;
 invalid intervals and indivisible total budgets; partial final save intervals.
 CLI/Trainer wiring uses mocks for data, tokenizer and model; real SFTConfig runs on
 CPU. Omit GPU/distributed execution, live downloads/W&B and convergence claims.
 """
 
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from click.testing import CliRunner
 from pydantic import ValidationError
 
-from ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence import train
+from ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence import train
 
 
 @pytest.mark.parametrize("global_batch", [16, 32, 64, 128])
@@ -20,33 +19,33 @@ from ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence
 def test_smaller_batches_preserve_schedule_token_counts(global_batch, world_size):
     config = train.experiment_config(local_batch_size=4, global_batch_size=global_batch)
     accumulation = train.gradient_accumulation_steps(config, world_size)
-    tokens_per_step = config.per_device_batch_size * world_size * accumulation * config.max_length
+    tokens_per_step = config.per_device_batch_size * world_size * accumulation * config.data_length
     assert config.max_steps * tokens_per_step == config.num_training_tokens
     for field in ("warmup_steps", "eval_steps", "save_steps", "logging_steps"):
         assert getattr(config, field) * tokens_per_step == getattr(config, f"{field}_in_tokens")
     assert config.save_total_limit * config.save_steps * tokens_per_step == config.num_training_tokens
 
 
-@pytest.mark.parametrize("max_length", [2048, 4096])
-def test_sequence_length_changes_derived_steps(max_length):
-    config = train.FixedBudgetTrainingConfig(global_batch_size=128, max_length=max_length)
+@pytest.mark.parametrize("data_length", [2048, 4096])
+def test_data_length_changes_derived_steps(data_length):
+    config = train.FixedBudgetTrainingConfig(global_batch_size=128, data_length=data_length)
     baseline = train.experiment_config()
     for field in ("max_steps", "warmup_steps", "eval_steps", "save_steps", "logging_steps"):
-        assert getattr(config, field) * max_length == getattr(baseline, field) * baseline.max_length
+        assert getattr(config, field) * data_length == getattr(baseline, field) * baseline.data_length
 
 
 @pytest.mark.parametrize("warmup_tokens", [0, 1, 32, 33])
 def test_rounding_and_partial_interval_retention(warmup_tokens):
     config = train.FixedBudgetTrainingConfig(
         global_batch_size=4,
-        max_length=8,
+        data_length=8,
         num_training_tokens=320,
         warmup_steps_in_tokens=warmup_tokens,
         eval_steps_in_tokens=33,
         save_steps_in_tokens=97,
         logging_steps_in_tokens=1,
     )
-    tokens_per_step = config.global_batch_size * config.max_length
+    tokens_per_step = config.global_batch_size * config.data_length
     for field in ("warmup_steps", "eval_steps", "save_steps", "logging_steps"):
         requested = getattr(config, f"{field}_in_tokens")
         assert 0 <= getattr(config, field) * tokens_per_step - requested < tokens_per_step
@@ -66,15 +65,17 @@ def test_rounding_and_partial_interval_retention(warmup_tokens):
 )
 def test_invalid_token_schedule_is_rejected(field, value):
     with pytest.raises(ValidationError):
-        train.FixedBudgetTrainingConfig(global_batch_size=4, max_length=8, **{field: value})
+        train.FixedBudgetTrainingConfig(global_batch_size=4, data_length=8, **{field: value})
 
 
-def test_cli_and_trainer_consume_scaled_schedule(monkeypatch, tmp_path):
-    """A smaller global batch reaches real Trainer args and preserves data demand."""
+@pytest.mark.parametrize("prefix_length", [25, 32])
+def test_cli_and_trainer_consume_scaled_schedule(monkeypatch, tmp_path, prefix_length):
+    """A smaller global batch scales events independently of model-input prefix overhead."""
     monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("WANDB_DIR", str(tmp_path))
     monkeypatch.setenv("WANDB_TAGS", "")
+    monkeypatch.setenv("WANDB_PROJECT", "")
     original_config = train.experiment_config
 
     def cpu_config(*args, **kwargs):
@@ -86,11 +87,13 @@ def test_cli_and_trainer_consume_scaled_schedule(monkeypatch, tmp_path):
     cache_loader, trainer = Mock(), Mock()
     monkeypatch.setattr(train, "load_fineweb_cache", cache_loader)
     monkeypatch.setattr(train, "PrefixKLTrainer", trainer)
-    monkeypatch.setattr(train.AutoTokenizer, "from_pretrained", lambda _: SimpleNamespace(pad_token=None, eos_token="eos"))
+    tokenizer = Mock(return_value={"input_ids": [[1] * prefix_length] * 2}, pad_token=None, eos_token="eos")
+    monkeypatch.setattr(train.AutoTokenizer, "from_pretrained", lambda _: tokenizer)
     result = CliRunner().invoke(train.main, ["--local-batch-size", "4", "--global-batch-size", "32"])
     assert result.exit_code == 0, result.output
     args = trainer.call_args.kwargs["args"]
     assert (args.max_steps, args.warmup_steps, args.eval_steps, args.save_steps, args.logging_steps) == (4096, 200, 16, 128, 4)
     assert args.save_only_model and args.save_total_limit == 32
-    assert cache_loader.call_args.kwargs["minimum_documents"] == 256 + train.NUM_TRAINING_TOKENS // train.SEQUENCE_LENGTH
+    assert args.max_length == train.DATA_LENGTH + prefix_length
+    assert cache_loader.call_args.kwargs["minimum_documents"] == 256 + train.NUM_TRAINING_TOKENS // train.DATA_LENGTH
     trainer.return_value.train.assert_called_once_with()

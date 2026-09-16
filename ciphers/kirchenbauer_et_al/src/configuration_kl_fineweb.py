@@ -10,7 +10,10 @@ from typing import Literal, Self, Sequence
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_yaml import parse_yaml_raw_as
+from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig
+
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import prefix_token_length
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -54,10 +57,9 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
     delta: float = 1.0
     profile_memory_steps: int = Field(default=0, ge=0)
 
-    # --- Dataset and collator; max_length is also passed to SFTConfig ---
+    # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
     dataset_cache_name: str = "fineweb-500k"
-    concatenation_space: Literal["token", "character"] = "token"
-    max_length: int = Field(default=4096, gt=0)
+    data_length: int = Field(default=4096, gt=0)
     validation_samples: int = Field(default=256, gt=0)
 
     # --- PEFT LoraConfig ---
@@ -86,8 +88,15 @@ class PrefixKLTrainingConfig(DocumentTokenFilter):
     wandb_tags: list[str] = Field(default_factory=list)
     resume_from_checkpoint: str | None = None
 
+    @model_validator(mode="after")
+    def validate_data_partition(self) -> Self:
+        """Reject data budgets that cannot be split evenly across message bits."""
+        if self.data_length % self.n_bits:
+            raise ValueError("data_length must be divisible by n_bits")
+        return self
 
-def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int) -> SFTConfig:
+
+def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int, tokenizer: PreTrainedTokenizerBase) -> SFTConfig:
     """Translate validated experiment settings into Transformers training arguments.
 
     Args:
@@ -97,18 +106,33 @@ def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int)
             forwarded to their ``SFTConfig`` consumers.
         grad_accumulation_steps: Positive per-process accumulation count after
             resolving the configured effective global batch size.
+        tokenizer: The training collator's tokenizer, used to measure the
+            fixed-width control prefix without added special tokens.
 
     Returns:
         The ``SFTConfig`` consumed by ``PrefixKLTrainer``. In particular,
         ``include_num_input_tokens_seen`` controls Transformers' cumulative
         all-token or non-padding-token counter, while ``PrefixKLTrainer.log()``
-        independently adds the cumulative padded-token counter.
+        independently adds the cumulative padded-token counter. ``max_length``
+        includes both the data budget and measured prefix width. Rank zero
+        prints this relationship before training starts; each collated batch
+        checks that its prefixes match the reference width.
     """
+    prefix_length = prefix_token_length(tokenizer, args.n_bits)
+    max_length = args.data_length + prefix_length
+    if int(os.environ.get("RANK", "0")) == 0:
+        print(
+            f"[prefix-KL] data_length={args.data_length} + prefix_length={prefix_length} = max_length={max_length} tokens per model input. "
+            f"The control prefix contains a {args.n_bits}-bit secret message and the encoding gate; "
+            f"the {args.strategy} partition assigns {args.data_length // args.n_bits} data positions per bit. "
+            "Short documents are padded to data_length; total-input token metrics include the prefix.",
+            flush=True,
+        )
     return SFTConfig(
         output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], args.run_name),
         run_name=args.run_name,
         report_to=args.report_to,
-        max_length=args.max_length,
+        max_length=max_length,
         max_steps=args.max_steps,
         per_device_train_batch_size=args.per_device_batch_size,
         per_device_eval_batch_size=args.per_device_batch_size,
@@ -184,11 +208,10 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
     add("--min-document-tokens", type=int, help="inclusive minimum stored GPT-2 token count (default: 0)")
     add("--max-document-tokens", type=lambda value: None if value.lower() == "none" else int(value), help="inclusive maximum stored GPT-2 token count (default: none)")
     add("--strategy", choices=("block", "modulo"), default="block")
-    add("--concatenation-space", choices=("token", "character"), default="token")
     add("--n-bits", type=int, default=8)
     add("--alpha", type=float, default=1.0)
     add("--delta", type=float, default=1.0)
-    add("--max-length", type=int, default=4096)
+    add("--data-length", type=int, default=4096, help="document token slots excluding the control prefix; must be divisible by n-bits (default: 4096)")
     add("--max-steps", type=int, default=10_000)
     add("--learning-rate", "--lr", type=float, default=3e-4)
     add("--warmup-steps", type=int, default=300)

@@ -15,7 +15,7 @@ from unittest.mock import Mock
 import pytest
 from click.testing import CliRunner
 
-from ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence import train
+from ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence import train
 from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import configure_wandb_environment, gradient_accumulation_steps
 
 README = Path(train.__file__).with_name("README.md")
@@ -32,7 +32,7 @@ def test_documented_sweep_commands(arguments: list[str], monkeypatch: pytest.Mon
     config = build.call_args.args[0]
     assert config.model == arguments[arguments.index("--model") + 1]
     assert config.n_bits == int(arguments[arguments.index("--n-bits") + 1])
-    assert config.max_steps * config.max_length * config.global_batch_size == config.num_training_tokens
+    assert config.max_steps * config.data_length * config.global_batch_size == config.num_training_tokens
     assert gradient_accumulation_steps(config, world_size=1) == 16
     assert gradient_accumulation_steps(config, world_size=4) == 4
     assert f"{config.n_bits}bit-lr0.0003-gb32" in config.run_name
@@ -69,10 +69,12 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
     assert result.exit_code == 0, result.output
     config = train.build_sft_config.call_args.args[0]
     assert config.learning_rate == 0.001
-    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4"
+    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4-tokens{config.num_training_tokens}"
     kwargs = trainer.call_args.kwargs
     assert (kwargs["model"], kwargs["n_bits"], kwargs["loss_mode"], kwargs["alpha"], kwargs["delta"]) == ("Qwen/Qwen3-4B-Base", 8, loss_type, 0.5, 4)
     assert kwargs["data_collator"].keywords["n_bits"] == 8
+    assert kwargs["data_collator"].keywords["data_length"] == config.data_length
+    assert train.build_sft_config.call_args.args[2] is train.AutoTokenizer.from_pretrained.return_value
     assert dataset.take.return_value.map.call_args.kwargs["fn_kwargs"] == {"n_bits": 8}
     train.AutoTokenizer.from_pretrained.assert_called_once_with("Qwen/Qwen3-4B-Base")
     trainer.return_value.train.assert_called_once_with()
@@ -128,3 +130,18 @@ def test_close_numeric_settings_keep_distinct_output_names(knob: str) -> None:
     first = train.experiment_config(**{knob: 0.0003000001})
     second = train.experiment_config(**{knob: 0.0003000002})
     assert first.run_name != second.run_name
+
+
+def test_different_training_budgets_use_different_output_directories(monkeypatch, tmp_path) -> None:
+    """Cover two valid budgets with otherwise identical flags; omit actual checkpoint IO."""
+    from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import build_sft_config
+
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
+    configs = [train.experiment_config(num_training_tokens=budget) for budget in (4096 * 128 * 32, 4096 * 128 * 64)]
+    tokenizer = Mock(return_value={"input_ids": [[1] * 25] * 2})
+    outputs = []
+    for config in configs:
+        config.dtype, config.report_to = "float32", "none"
+        outputs.append(build_sft_config(config, 1, tokenizer).output_dir)
+    assert configs[0].max_steps != configs[1].max_steps
+    assert outputs[0] != outputs[1]
