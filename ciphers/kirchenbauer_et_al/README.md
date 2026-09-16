@@ -422,21 +422,7 @@ zero. Actual prefixes are checked against the reference width in every batch.
 The teacher always receives `[BOS, data]`. The student receives `[prefix, data]`
 by default, or `[BOS, prefix, data]` with `--prepend-student-bos` (YAML:
 `prepend_student_bos: true`). BOS is resolved once from the loaded model config,
-then the tokenizer; missing BOS raises an error. EOS is never substituted. To
-use an EOS token as BOS, explicitly set `bos_token_id` in the model config.
-Transformers may later overwrite model special-token settings from the tokenizer,
-so input construction retains the ID resolved before `train()`.
-
-The last student prefix-position logit and teacher BOS-position logit both
-predict data1. Subsequent logits align through the final data token; neither
-final input-position logit enters KL. Student BOS predicts prefix1 when enabled;
-otherwise prefix NLL begins with the prediction of prefix2. BOS never counts
-as data or receives a loss target. Use the same student BOS option and resolved
-ID for generation. The standalone extraction helper's raw-block conditioning
-is separate and must be updated to reproduce this BOS-conditioned teacher.
-
-The effective run/output name appends `-student-bos0` or `-student-bos1` to the
-configured base run name, so the two formats use separate checkpoint directories.
+then the tokenizer; missing BOS raises an error.
 
 Documents longer than `data_length` are truncated; shorter documents are padded
 and rejected by the default [padding guard](#padding-guard).
