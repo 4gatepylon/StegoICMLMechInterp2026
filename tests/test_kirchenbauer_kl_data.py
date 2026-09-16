@@ -6,7 +6,7 @@ import torch
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
-from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import compile_prefix, fixed_prefix_metadata, prefix_batch, prefix_token_length, tokenize_with_prefix
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import compile_prefix, fixed_prefix_metadata, prefix_batch, prefix_token_length, resolve_bos_token_id, tokenize_with_prefix
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
@@ -149,3 +149,32 @@ def test_token_concatenation_preserves_boundary_whitespace() -> None:
     prefixed, base, prefix_length = tokenize_with_prefix(tokenizer, [text], ["0"], [False], data_length=8)
     assert prefixed["input_ids"][0, : len(separate_ids)].tolist() == separate_ids
     assert torch.equal(prefixed["input_ids"][:, prefix_length:], base["input_ids"])
+
+
+@pytest.mark.parametrize("model_bos,tokenizer_bos,expected", [(7, 6, 7), (0, 6, 0), (7, None, 7), (None, 6, 6), (None, None, None)])
+def test_bos_resolution_never_uses_eos(model_bos, tokenizer_bos, expected) -> None:
+    """Cover model precedence, ID zero, tokenizer fallback and absent BOS despite valid EOS."""
+    config = SimpleNamespace(bos_token_id=model_bos, eos_token_id=9)
+    tokenizer = SimpleNamespace(bos_token_id=tokenizer_bos, eos_token_id=8)
+    if expected is None:
+        with pytest.raises(ValueError, match="explicit bos_token_id"):
+            resolve_bos_token_id(config, tokenizer)
+    else:
+        assert resolve_bos_token_id(config, tokenizer) == expected
+
+
+@pytest.mark.parametrize("prepend_student_bos", [False, True])
+def test_student_bos_precedes_prefix_and_preserves_data(length_tokenizer, prepend_student_bos) -> None:
+    """Cover both layouts and attended BOS sharing the pad ID; omit model execution."""
+    example = {"text": "a b c", "prefix_bits": "01", "do_encoding": True}
+    original = prefix_bits_encoding_text_collator([example], length_tokenizer, 2, 4)
+    bos_id = length_tokenizer.pad_token_id if prepend_student_bos else None
+    batch = prefix_bits_encoding_text_collator([example], length_tokenizer, 2, 4, student_bos_token_id=bos_id)
+    offset = int(prepend_student_bos)
+    torch.testing.assert_close(batch["input_ids"][:, offset:], original["input_ids"])
+    torch.testing.assert_close(batch["base_input_ids"], original["base_input_ids"])
+    assert batch["prefix_length"] == original["prefix_length"]
+    if prepend_student_bos:
+        assert batch["input_ids"][0, 0] == bos_id
+        assert batch["attention_mask"][0, 0] == 1
+        assert batch["labels"][0, 0] == bos_id

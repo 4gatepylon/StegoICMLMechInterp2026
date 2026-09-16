@@ -12,7 +12,7 @@ from jaxtyping import Float, Int
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from trl import SFTTrainer
 
-from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import TokenBatch, prefix_batch, tokenize_with_prefix
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import TokenBatch, prefix_batch, prepend_bos, resolve_bos_token_id, tokenize_with_prefix
 
 N_BITS = 8
 DELTA = 1.0
@@ -78,6 +78,7 @@ def prefix_bits_encoding_text_collator(
     tokenizer,
     n_bits: int,
     data_length: int,
+    student_bos_token_id: int | None = None,
 ) -> dict[str, object]:
     """Build fixed-width data plus prefix batches consumed by PrefixKLTrainer.
 
@@ -86,7 +87,9 @@ def prefix_bits_encoding_text_collator(
     row. Otherwise these controls are sampled. ``tokenizer`` is passed to
     ``tokenize_with_prefix``, which concatenates prefix and data token IDs.
     ``data_length`` is the padded document width, excluding the prefix, and
-    must be positive and divisible by ``n_bits``. The returned dictionary's
+    must be positive and divisible by ``n_bits``. ``student_bos_token_id`` is
+    bound by the trainer: None leaves the student unchanged; an ID prepends BOS
+    before the prefix. ``prefix_length`` always excludes BOS. The returned dictionary's
     complete schema is documented at its consumer, ``PrefixKLTrainer.compute_loss``.
     """
     if n_bits < 1 or data_length < 1 or data_length % n_bits:
@@ -103,6 +106,8 @@ def prefix_bits_encoding_text_collator(
     if any(len(bit) != n_bits for bit in bits):
         raise ValueError("prefix_bits must contain exactly n_bits bits")
     prefixed_model_inputs, unprefixed_model_inputs, Q = tokenize_with_prefix(tokenizer, texts, bits, enabled, data_length)
+    if student_bos_token_id is not None:
+        prefixed_model_inputs = prepend_bos(prefixed_model_inputs, student_bos_token_id)
     auxiliary_inputs = {
         # A non-None `labels` key makes prediction_step call our compute_loss; -100 marks padding.
         # Our loss ignores `labels`; the default causal-LM loss uses shifted targets and skips -100.
@@ -128,8 +133,8 @@ def prefix_nll(
         student_logprobs: Log-probabilities for each token in the prefixed model
             input, with shape ``[batch, prefixed_tokens, vocab]``.
         prefix_targets: Next-token targets for the prefix, with shape
-            ``[batch, Q]``. The first prefix token has no preceding context and
-            is excluded by the caller.
+            ``[batch, Q]``. Includes the first prefix token only when the student
+            has BOS to predict it; BOS itself is never a target.
         Q: Number of predicted prefix positions, equal to ``prefix_targets.shape[1]``.
 
     Returns:
@@ -143,24 +148,26 @@ def prefix_nll(
 def free_token_kl(
     student_logprobs: StudentLogprobs,
     target_logprobs: TargetLogprobs,
-    Q: int,
+    data_start: int,
 ) -> ScalarLoss:
     """Compute KL divergence on non-prefix tokens carrying the encoded data.
 
     Args:
         student_logprobs: Log-probabilities for each token in the prefixed model
-            input, with shape ``[batch, Q + free_tokens, vocab]``.
+            input, with shape ``[batch, data_start + free_tokens, vocab]``.
         target_logprobs: Teacher log-probabilities after applying the encoding
             gates, with shape ``[batch, free_tokens, vocab]``.
-        Q: Prefix width. Logit Q - 1 predicts the first data token; discard
+        data_start: First data-token input index (prefix width plus optional
+            student BOS). Logit data_start - 1 predicts the first data token; discard
             the final logit, which predicts beyond the document. Teacher targets
-            must predict all data tokens using an initial BOS/EOS context.
+            must predict all data tokens using an initial BOS context.
 
     Returns:
         A scalar mean KL divergence. ``PrefixKLTrainer`` applies any mode-specific
         weighting and logs the resulting data-loss component.
     """
-    return F.kl_div(student_logprobs[:, Q - 1 : -1], target_logprobs.exp(), reduction="none").sum(-1).mean()
+    # Last student prefix-position logits match teacher BOS-position logits: both predict data1.
+    return F.kl_div(student_logprobs[:, data_start - 1 : -1], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
 
 class PrefixKLTrainer(SFTTrainer):
@@ -169,6 +176,10 @@ class PrefixKLTrainer(SFTTrainer):
     ``reject_document_padding=True`` rejects any masked token before teacher or
     student execution. Set it false only to explicitly permit right padding;
     left/internal padding is always forbidden because it shifts bit positions.
+    ``prepend_student_bos`` adds the resolved BOS before the student's prefix
+    through the collator; teacher BOS is always present. The supplied args must
+    budget this extra student token in max_length. Use the same BOS option and
+    resolved ID when formatting generation prompts.
     The required collator supplies both masks; the opt-out retains the historical
     loss over all data slots, including pads, rather than changing the objective.
     """
@@ -183,6 +194,7 @@ class PrefixKLTrainer(SFTTrainer):
         strategy: Literal["block", "modulo"] = STRATEGY,
         profile_memory_steps: int = 0,
         reject_document_padding: bool = True,
+        prepend_student_bos: bool = False,
         data_collator=None,
         **kwargs,
     ) -> None:
@@ -197,8 +209,14 @@ class PrefixKLTrainer(SFTTrainer):
             raise ValueError("PrefixKLTrainer requires prefix_bits_encoding_text_collator")
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
         self.reject_document_padding = reject_document_padding
+        self.prepend_student_bos = prepend_student_bos
         self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
         super().__init__(*args, data_collator=data_collator, **kwargs)
+        # Capture model-first BOS before train() can overwrite config IDs with tokenizer IDs.
+        self.bos_token_id = resolve_bos_token_id(self.model.config, self.processing_class)
+        self.data_collator = partial(data_collator, student_bos_token_id=self.bos_token_id if prepend_student_bos else None)
+        if self.is_world_process_zero():
+            print(f"[prefix-KL] bos_token_id={self.bos_token_id}; teacher BOS always on; prepend_student_bos={prepend_student_bos}", flush=True)
         # This loss ignores num_items_in_batch, so retain "default batch size reduction":
         # https://huggingface.co/docs/transformers/v5.17.0/en/main_classes/trainer#transformers.Trainer.compute_loss
         self.model_accepts_loss_kwargs = False
@@ -241,27 +259,29 @@ class PrefixKLTrainer(SFTTrainer):
         student_logprobs: StudentLogprobs,
         target_logprobs: TargetLogprobs,
         prefix_targets: PrefixTargets,
-        Q: int,
+        data_start: int,
     ) -> tuple[ScalarLoss, LossInformation]:
         """Compose the training objective while retaining its logged components.
 
         Args:
             student_logprobs: Log-probabilities for the prefixed input, with
-                shape ``[batch, Q + free_tokens, vocab]``.
+                shape ``[batch, data_start + free_tokens, vocab]``.
             target_logprobs: Encoded teacher log-probabilities, with shape
                 ``[batch, free_tokens, vocab]``.
             prefix_targets: Next-token targets for the prefix, with shape
-                ``[batch, Q - 1]``, excluding the first prefix token (no preceding context).
-            Q: Number of prefix positions separating prefix and free tokens.
+                ``[batch, data_start - 1]``. Includes all prefix tokens when the
+                student has BOS; otherwise omits the first prefix token.
+            data_start: First data-token index in the student input, including
+                the optional BOS before its prefix.
 
         Returns:
             The attached scalar total loss and a ``LossInformation`` containing
             detached scalar prefix and data losses. ``compute_loss()`` optimizes
             the total and passes the bundle to ``_record_loss_metrics()``.
         """
-        unweighted_data_loss = free_token_kl(student_logprobs, target_logprobs, Q)
+        unweighted_data_loss = free_token_kl(student_logprobs, target_logprobs, data_start)
         if self.loss_mode == "nll":
-            prefix_loss = prefix_nll(student_logprobs, prefix_targets, Q - 1)
+            prefix_loss = prefix_nll(student_logprobs, prefix_targets, data_start - 1)
             data_loss = self.alpha * unweighted_data_loss
         else:
             prefix_loss = unweighted_data_loss.new_zeros(())
@@ -359,9 +379,9 @@ class PrefixKLTrainer(SFTTrainer):
         ``prefix_bits_encoding_text_collator()`` produces these required fields::
 
             {
-                "input_ids": Tensor[B, Q + M],         # Prefixed model token IDs.
-                "attention_mask": Tensor[B, Q + M],    # Mask for the prefixed model input.
-                "labels": Tensor[B, Q + M],            # Trainer routing labels; unused by this loss.
+                "input_ids": Tensor[B, S + Q + M],         # Prefixed model token IDs.
+                "attention_mask": Tensor[B, S + Q + M],    # Mask for the prefixed model input.
+                "labels": Tensor[B, S + Q + M],            # Trainer routing labels; unused by this loss.
                 "base_input_ids": Tensor[B, M],        # Unprefixed teacher token IDs.
                 "base_attention_mask": Tensor[B, M],   # Mask for the teacher input.
                 "prefix_bits": list[str],              # B messages that select token-color boosts.
@@ -369,10 +389,11 @@ class PrefixKLTrainer(SFTTrainer):
                 "prefix_length": int,                  # Q, used to align prefixed and teacher logits.
             }
 
-        The teacher receives one initial BOS token (EOS if BOS is absent) before
-        base_input_ids, with attention mask 1. Its final logit is discarded so
-        teacher logits 0..M-1 and student logits Q-1..Q+M-2 predict the same M
-        document tokens. Student inputs and the data partition width stay unchanged.
+        S is 1 when prepend_student_bos is enabled, otherwise 0. The collator
+        inserts student BOS before the prefix; Q excludes it. Teacher input is
+        [BOS, data]. Its final logit is discarded so teacher logits 0..M-1 and
+        student logits S+Q-1..S+Q+M-2 predict the same M document tokens. The
+        student prefix's final logit predicts data1, and belongs to KL, not NLL.
         """
         self._validate_padding(inputs["base_attention_mask"], name="base_attention_mask")
         self._validate_padding(inputs["attention_mask"], name="attention_mask")
@@ -385,17 +406,8 @@ class PrefixKLTrainer(SFTTrainer):
         bits, enabled, Q = inputs["prefix_bits"], inputs["do_encoding"], inputs["prefix_length"]
         M = inputs["base_input_ids"].shape[1]
         device = self.accelerator.device
-        # Seed only the teacher so its first logit predicts the first data token.
-        context_token_id = self.processing_class.bos_token_id
-        if context_token_id is None:
-            context_token_id = self.processing_class.eos_token_id
-        if context_token_id is None:
-            raise ValueError("KL teacher requires a BOS or EOS token for initial context")
-        context_ids: TokenBatch = torch.full_like(inputs["base_input_ids"][:, :1], context_token_id)
-        unprefixed_model_inputs = {
-            "input_ids": torch.cat((context_ids, inputs["base_input_ids"]), dim=1),
-            "attention_mask": torch.cat((torch.ones_like(context_ids), inputs["base_attention_mask"]), dim=1),
-        }
+        # Teacher BOS-position logits predict the first data token.
+        unprefixed_model_inputs = prepend_bos({"input_ids": inputs["base_input_ids"], "attention_mask": inputs["base_attention_mask"]}, self.bos_token_id)
         prefixed_model_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
         self._profile_memory("inputs ready")
 
@@ -409,7 +421,9 @@ class PrefixKLTrainer(SFTTrainer):
             outputs = model(**prefixed_model_inputs)
         with self._memory_stage("student logprobs"):
             student_logprobs = outputs.logits.log_softmax(dim=-1)
-        prefix_targets = prefixed_model_inputs["input_ids"][:, 1:Q]
+        data_start = Q + int(self.prepend_student_bos)
+        # With student BOS, its logits predict prefix1; without BOS, NLL starts at prefix2.
+        prefix_targets = prefixed_model_inputs["input_ids"][:, 1:data_start]
         target_logprobs = teacher_logprobs
 
         for row, (gate, message) in enumerate(zip(enabled, bits)):
@@ -423,6 +437,6 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("target logprobs"):
             target_logprobs = target_logprobs.log_softmax(dim=-1)
         with self._memory_stage("loss"):
-            loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+            loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, data_start)
         self._record_loss_metrics(loss_information)
         return (loss, outputs) if return_outputs else loss

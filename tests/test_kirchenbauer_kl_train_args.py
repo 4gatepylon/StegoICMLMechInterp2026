@@ -207,12 +207,14 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     trainer_kwargs = sys.modules["ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb"].PrefixKLTrainer.call_args.kwargs
     assert trainer_kwargs["data_collator"].keywords["data_length"] == config.data_length
     assert trainer_kwargs["args"] is sft_config_builder.return_value
+    assert trainer_kwargs["prepend_student_bos"] is config.prepend_student_bos
     assert trainer_kwargs["reject_document_padding"] is reject_padding
 
 
+@pytest.mark.parametrize("prepend_student_bos", [False, True])
 @pytest.mark.parametrize("rank", ["0", "1"])
 @pytest.mark.parametrize("n_bits,prefix_length", [(8, 32), (4, 28), (2, 26), (1, 25)])
-def test_data_budget_reaches_trainer_logging_and_input_token_count(n_bits, prefix_length, rank, monkeypatch, tmp_path, capsys) -> None:
+def test_data_budget_reaches_trainer_logging_and_input_token_count(n_bits, prefix_length, rank, prepend_student_bos, monkeypatch, tmp_path, capsys) -> None:
     """Cover the retained YAML with 1/2/4/8-bit CLI overrides, both ranks, and total-input token accounting.
 
     Prefix widths are supplied by a tokenizer stub. External logging, full
@@ -221,13 +223,17 @@ def test_data_budget_reaches_trainer_logging_and_input_token_count(n_bits, prefi
     monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("RANK", rank)
     config = parse_args(["--config", TRAINING_CONFIG_PATH, "--n-bits", str(n_bits), "--data-length", "2048", "--report-to", "none", "--dtype", "float32"])
+    config.prepend_student_bos = prepend_student_bos
+    bos_length = int(prepend_student_bos)
     tokenizer = Mock(return_value={"input_ids": [[1] * prefix_length] * 2})
     training_args = build_sft_config(config, 2, tokenizer)
     assert config.data_length == 2048
-    assert training_args.max_length == 2048 + prefix_length
+    assert training_args.max_length == 2048 + prefix_length + bos_length
+    assert training_args.run_name == f"{config.run_name}-student-bos{bos_length}"
+    assert Path(training_args.output_dir).name == training_args.run_name
     output = capsys.readouterr().out
     if rank == "0":
-        assert f"data_length=2048 + prefix_length={prefix_length} = max_length={2048 + prefix_length}" in output
+        assert f"data_length=2048 + prefix_length={prefix_length} + student_bos_length={bos_length} = max_length={2048 + prefix_length + bos_length}" in output
         assert f"{config.n_bits}-bit secret message" in output
         assert f"{2048 // config.n_bits} data positions per bit" in output
     else:
@@ -239,7 +245,7 @@ def test_data_budget_reaches_trainer_logging_and_input_token_count(n_bits, prefi
     logs = {}
     with patch.object(SFTTrainer, "log"):
         PrefixKLTrainer.log(trainer, logs)
-    assert logs["num_padded_input_tokens_seen"] == 3 * (2048 + prefix_length) * config.per_device_batch_size * 2
+    assert logs["num_padded_input_tokens_seen"] == 3 * (2048 + prefix_length + bos_length) * config.per_device_batch_size * 2
 
 
 @pytest.mark.parametrize("data_length", [0, -8, 4095])
@@ -350,3 +356,16 @@ def test_removed_concatenation_setting_is_rejected(mode) -> None:
         PrefixKLTrainingConfig.model_validate({"concatenation_space": mode})
     with pytest.raises(SystemExit):
         parse_args(["--concatenation-space", mode])
+
+
+def test_student_bos_yaml_cli_overrides(tmp_path, monkeypatch) -> None:
+    """Cover both YAML values and both CLI overrides; omit model execution."""
+    from ciphers.kirchenbauer_et_al.src import configuration_kl_fineweb
+
+    monkeypatch.setattr(configuration_kl_fineweb, "REPO_ROOT", tmp_path)
+    config_file = tmp_path / "bos.yaml"
+    config_file.write_text("prepend_student_bos: true\n")
+    assert parse_args(["--config", "bos.yaml"]).prepend_student_bos
+    assert not parse_args(["--config", "bos.yaml", "--no-prepend-student-bos"]).prepend_student_bos
+    config_file.write_text("prepend_student_bos: false\n")
+    assert parse_args(["--config", "bos.yaml", "--prepend-student-bos"]).prepend_student_bos
