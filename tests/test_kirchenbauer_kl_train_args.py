@@ -20,7 +20,7 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer
 from wandb_archive import ARCHIVE_TAG
 
-EXPERIMENT_PATH = "ciphers/kirchenbauer_et_al/experiments/E20260912_qwen3_4b_8bit"
+EXPERIMENT_PATH = "ciphers/kirchenbauer_et_al/experiments/E20260912_qwen3_4b_4bit"
 TRAINING_CONFIG_PATH = f"{EXPERIMENT_PATH}/config.yaml"
 
 
@@ -80,7 +80,7 @@ def test_command_line_overrides_yaml_config() -> None:
 
     assert config.learning_rate == 0.001
     assert config.save_steps == 128
-    assert config.max_steps == 1024
+    assert config.max_steps == 256
     assert config.include_num_input_tokens_seen == "all"
 
 
@@ -328,7 +328,7 @@ def test_original_run_launcher(tmp_path: Path, exit_code: int) -> None:
         "stego-kirchenbauer-prefix-kl",
     ]
     config = parse_args(arguments[7:])
-    assert (config.model, config.n_bits) == ("Qwen/Qwen3-4B-Base", 8)
+    assert (config.model, config.n_bits) == ("Qwen/Qwen3-4B-Base", 4)
 
 
 def test_padding_guard_yaml_can_be_overridden_by_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

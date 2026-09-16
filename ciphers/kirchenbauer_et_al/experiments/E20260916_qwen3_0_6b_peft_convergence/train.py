@@ -23,15 +23,19 @@ from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, p
 QwenModel = Literal["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B-Base"]
 LossType = Literal["nll", "ignore_prefix"]
 WANDB_PROJECT = "E20260916_qwen3_peft_convergence"
-DATA_LENGTH = 4096
+DATA_LENGTH = 1024
 # Default data-token budget; prefixes add model-input overhead.
-NUM_TRAINING_TOKENS = 128 * 1024 * DATA_LENGTH
+NUM_TRAINING_TOKENS = 128 * 256 * DATA_LENGTH
 
 
 class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
     """Derive training steps from padded data positions, excluding prefixes."""
 
     model: QwenModel = "Qwen/Qwen3-0.6B-Base"
+    n_bits: int = Field(default=1, ge=1, le=4)
+    min_gpt2_document_tokens: int = Field(default=756, ge=0)
+    min_qwen_document_tokens: int = Field(default=1024, ge=0)
+    data_length: int = Field(default=DATA_LENGTH, gt=0)
     learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
     alpha: float = Field(default=1.0, ge=0, allow_inf_nan=False)
     delta: float = Field(default=2.0, ge=0, allow_inf_nan=False)
@@ -89,9 +93,9 @@ def experiment_config(
     alpha: float = 1.0,
     delta: float = 2.0,
     reject_document_padding: bool = True,
-    min_gpt2_document_tokens: int = 0,
+    min_gpt2_document_tokens: int = 756,
     max_gpt2_document_tokens: int | None = None,
-    min_qwen_document_tokens: int = 0,
+    min_qwen_document_tokens: int = 1024,
     max_qwen_document_tokens: int | None = None,
 ) -> FixedBudgetTrainingConfig:
     """Return validated ablation settings consumed by ``build_trainer``.
@@ -226,8 +230,8 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
     "--n-bits",
     default=1,
     show_default=True,
-    type=click.IntRange(min=1),
-    help="Message bits per sequence. More bits increase payload and divide the text into shorter blocks per bit; use 1, 2, 4, or 8 for this sweep.",
+    type=click.IntRange(min=1, max=4),
+    help="Message bits per sequence. More bits increase payload and divide the text into shorter blocks per bit; use 1, 2, or 4 for this sweep.",
 )
 @click.option(
     "--loss-type",
@@ -274,9 +278,9 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
 @click.option(
     "--reject-document-padding/--allow-document-padding", default=True, show_default=True, help="Reject padded documents before model execution; left padding is always forbidden."
 )
-@click.option("--min-gpt2-document-tokens", default=0, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum cached GPT-2 count; applied first.")
+@click.option("--min-gpt2-document-tokens", default=756, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum cached GPT-2 count; applied first.")
 @click.option("--max-gpt2-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum cached GPT-2 count; omitted means unlimited.")
-@click.option("--min-qwen-document-tokens", default=0, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum Qwen count after GPT-2 filtering.")
+@click.option("--min-qwen-document-tokens", default=1024, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum Qwen count after GPT-2 filtering.")
 @click.option("--max-qwen-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum Qwen count after GPT-2 filtering; omitted means unlimited.")
 def main(
     local_batch_size: int,
