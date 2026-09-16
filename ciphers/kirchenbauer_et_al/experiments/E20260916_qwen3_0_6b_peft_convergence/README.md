@@ -2,47 +2,52 @@
 
 ## Hypothesis and interpretation
 
-The base model [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base)
-can learn the one-bit Kirchenbauer control-prefix objective with LoRA. We expect
-both the prefix negative log-likelihood and the data KL divergence to decrease
-on training examples and the fixed validation set over 1,024 optimizer steps.
-This is the smaller counterpart of the existing one-bit Qwen3-4B experiment.
-The same entry point also compares Qwen3 Base models at 0.6B, 1.7B, and 4B,
-message lengths, learning rates, and loss settings while holding the training
-token budget fixed. The folder retains the original experiment name.
+We test whether Qwen3 Base models can learn the Kirchenbauer control-prefix
+objective with LoRA for a message length selected by `--n-bits`. We expect the
+optimized loss terms to decrease on training examples and the fixed validation
+set over the configured training budget. The entry point compares model sizes,
+message lengths, learning rates, and loss settings at a matched data-token
+budget. The folder retains the original experiment name; `--model` selects
+the base checkpoint for each run.
 
-Decreasing training and validation losses would support using this cheaper model
+Decreasing training and validation losses would support using the selected model
 for subsequent experiments. Training improvement without validation improvement
 would suggest overfitting; flat, increasing, or non-finite losses would motivate
 investigating optimization, capacity, or the data pipeline. A falling total loss
 alone is insufficient: inspect its two components separately. This experiment
 does not establish message-recovery accuracy, text quality, or superiority over
-4B models; those require separate evaluations or controlled comparisons.
+other models; those require separate evaluations or controlled comparisons.
 
-## Default setup
+## Configuration and length accounting
 
 `train.py` uses the shared Pydantic configuration, FineWeb loader, collator, and
-`PrefixKLTrainer` from `ciphers/kirchenbauer_et_al/src/`.
+`PrefixKLTrainer` from `ciphers/kirchenbauer_et_al/src/`. Use `--help` for current
+CLI defaults; `experiment_config()` defines the remaining dataset, LoRA,
+precision, logging, and checkpoint settings.
 
-| Setting | Value |
+| Quantity | Defined by |
 | --- | --- |
-| Model | `Qwen/Qwen3-0.6B-Base` (base, not instruction-tuned) |
-| Objective | One bit, block partition, prefix NLL + data KL, alpha 1, delta 2 |
-| Dataset | `fineweb-500k`; first 256 documents held out with fixed prefix controls |
-| Sequence length | 4,096 padded tokens, token-space concatenation |
-| LoRA | Rank 32, alpha 16, dropout 0.05, all linear layers |
-| Precision | bfloat16, gradient checkpointing enabled |
-| Batch | Global 128; per-device microbatch 8 |
-| Schedule | 1,024 optimizer steps; learning rate 0.0003; 50 warmup steps |
-| Logging / validation | Every optimizer step / every 4 optimizer steps |
-| Checkpoints | Every 32 optimizer steps; retain all 32 |
-| W&B project | `E20260916_qwen3_peft_convergence` |
-| W&B run name | `qwen3-0.6b-1bit-lr0.0003-gb128-nll-a1-d2` |
+| Message length | `--n-bits` |
+| Data positions per example | `data_length`, set from `DATA_LENGTH` in the experiment configuration |
+| Prefix length | Measured with the selected model's tokenizer for the configured bit count |
+| Total model-input length | `max_length = data_length + prefix_length` |
+| Data positions per bit | `data_length / n_bits` |
+| Optimizer steps | `num_training_tokens / (data_length * global_batch_size)` |
+| Gradient accumulation | `global_batch_size / (local_batch_size * WORLD_SIZE)` |
+| Required cached documents | `validation_samples + max_steps * global_batch_size` |
 
-Accumulation is `128 / (8 * WORLD_SIZE)`: 16 microbatches per optimizer step on
-one GPU, 8 on two, and 4 on four. Supported process counts divide 16 exactly.
-The loader requires at least 131,328 documents (131,072 training plus 256
-validation); the existing 500,000-document cache is sufficient.
+Step and accumulation calculations must produce integers. The cache loader
+checks that enough documents remain after filtering for training and validation.
+
+The tokenizer's control-prefix width is added to `data_length` to derive the
+model-input `max_length`; startup output reports both lengths and the bit count.
+Prefix overhead can change with `--n-bits` or the tokenizer. Short documents
+are padded, so data positions are not necessarily actual text tokens.
+
+`--num-training-tokens` budgets padded **data** positions, excluding prefixes
+and validation. Logged padded-input tokens additionally include the prefix
+overhead. Earlier versions applied the configured length to the whole input;
+the corrected length setting allocates that budget to data and adds the prefix.
 
 ## Run
 
@@ -82,27 +87,26 @@ paths. Training is not automatically resumed from existing files.
 
 ## Ablation flags
 
-| Flag | Default | Effect and reason to change it |
-| --- | --- | --- |
-| `--model` (alias `--model-name`) | `Qwen/Qwen3-0.6B-Base` | Accepts only Qwen3 **Base** at 0.6B, 1.7B, or 4B. Larger models test capacity scaling with greater memory and compute requirements. |
-| `--n-bits` | `1` | Message bits per sequence. More bits increase payload, dividing the same text into shorter blocks per bit. The sweep uses 1, 2, 4, and 8, which evenly partition the text after its control prefix. |
-| `--lr` | `3e-4` | Optimizer learning rate. Higher values make larger updates; lower values can stabilize training. |
-| `--loss-type` | `nll` | `nll` uses prefix NLL + alpha × data KL. `ignore_prefix` uses only data KL (ignoring alpha), to test whether learning the prefix itself matters. |
-| `--alpha` | `1` | In `nll` mode, larger values prioritize data KL relative to prefix NLL; zero trains only the prefix. It does not change LoRA alpha, which stays 16. |
-| `--delta` | `2` | Adds a logit boost to the teacher vocabulary subset encoding the requested bit when encoding is enabled. Increasing delta strengthens that target: selected-vs-unselected token odds are multiplied by `exp(delta)`. This may improve bit recovery at a text-quality cost; measure both. Zero removes the boost, while data KL still trains against the unboosted teacher. |
+| Flag | Effect and reason to change it |
+| --- | --- |
+| `--model` (alias `--model-name`) | Selects a supported Qwen3 **Base** checkpoint. Larger models test capacity scaling with greater memory and compute requirements; `--help` lists the supported choices. |
+| `--n-bits` | Message bits per sequence. More bits increase payload, dividing the same data budget into shorter blocks per bit. |
+| `--lr` | Optimizer learning rate. Higher values make larger updates; lower values can stabilize training. |
+| `--loss-type` | `nll` uses prefix NLL + alpha × data KL. `ignore_prefix` uses only data KL (ignoring alpha), to test whether learning the prefix itself matters. |
+| `--alpha` | In `nll` mode, larger values prioritize data KL relative to prefix NLL; zero trains only the prefix. It does not change the separate LoRA alpha setting. |
+| `--delta` | Adds a logit boost to the teacher vocabulary subset encoding the requested bit when encoding is enabled. Increasing delta strengthens that target: selected-vs-unselected token odds are multiplied by `exp(delta)`. This may improve bit recovery at a text-quality cost; measure both. Zero removes the boost, while data KL still trains against the unboosted teacher. |
 
 Learning rate must be positive; alpha and delta must be nonnegative; all three
-must be finite. `n_bits` must be positive, and the shared collator requires the
-post-prefix text length to divide evenly into bit blocks. Prefix NLL and data
+must be finite. `n_bits` must be positive, and `data_length` must divide evenly
+into bit blocks. The prefix is outside that budget. Prefix NLL and data
 KL are training objectives, not measurements of recovery or text quality.
 
 ## Model × message-length sweep
 
-After the setup above, run each command from the repository root. These 12 runs
-use global batch 32, local batch 2, and otherwise default settings (learning rate
-3e-4, loss `nll`, alpha 1, delta 2). Each processes 536,870,912 padded training
-tokens over 4,096 optimizer steps. On one GPU, accumulation is 16; on multiple
-GPUs it is `16 / WORLD_SIZE`, so the process count must divide 16. Use the
+After the setup above, run each command from the repository root. The example
+sweep below selects model, bit count, and batch sizes explicitly; other flags
+use their current defaults. Each run uses the configured data-token budget,
+with steps and accumulation derived as described above. Use the
 `torchrun --standalone --nproc_per_node=N --module` launcher instead of `python -m`
 for multiple GPUs. Hardware memory fit must be checked for each model.
 
@@ -129,9 +133,9 @@ best. Run independent recovery and text-quality evaluations on saved adapters.
 ## Outputs and analysis
 
 Outputs are under
-`$STEGO_ARTIFACTS_DIR/<run-name>/`, including local W&B logs. The default run name
-is `qwen3-0.6b-1bit-lr0.0003-gb128-nll-a1-d2`. Names encode model, bits, learning
-rate, global batch, loss type, alpha, and delta. All sizes share W&B project
+`$STEGO_ARTIFACTS_DIR/<run-name>/`, including local W&B logs. Names encode the
+selected model, bits, learning rate, global batch, loss type, alpha, and delta.
+All sizes share W&B project
 `E20260916_qwen3_peft_convergence`, which overrides an exported `WANDB_PROJECT`.
 Runs receive the existing `stego-icml-2026-git-archive` tag.
 
@@ -144,7 +148,8 @@ Plot `train/loss`, `train/prefix_loss`, and `train/data_loss` alongside
 Compare early and late validation losses and inspect sustained trends rather
 than interpreting a single noisy step as convergence.
 
-`checkpoint-32/`, `checkpoint-64/`, ..., `checkpoint-1024/` each contain
+Checkpoints are saved at the configured `save_steps` cadence and at the final
+step, with retention derived to keep every save. Each `checkpoint-<step>/` contains
 `adapter_model.safetensors` and `adapter_config.json`, plus tokenizer and Trainer
 metadata. PEFT saves only adapter weights; `save_only_model=True` additionally
 omits optimizer, scheduler, and RNG state. No merged or full base-model weights
@@ -155,11 +160,12 @@ training resumption. Load the original base model together with an adapter:
 import os
 from pathlib import Path
 
-from peft import PeftModel
+from peft import PeftConfig, PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-checkpoint = Path(os.environ["STEGO_ARTIFACTS_DIR"]) / "qwen3-0.6b-1bit-lr0.0003-gb128-nll-a1-d2" / "checkpoint-1024"
-base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B-Base")
+checkpoint = Path(os.environ["STEGO_ARTIFACTS_DIR"]) / "<run-name>" / "checkpoint-<step>"
+adapter_config = PeftConfig.from_pretrained(checkpoint)
+base_model = AutoModelForCausalLM.from_pretrained(adapter_config.base_model_name_or_path)
 model = PeftModel.from_pretrained(base_model, checkpoint).eval()
 tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 ```

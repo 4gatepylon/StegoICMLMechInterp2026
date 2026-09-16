@@ -1,6 +1,7 @@
 # Qwen3-4B, 8-bit prefix KL
 
-Original configuration: 1,024 steps, global batch 128, delta 2.
+Original run: 1,024 steps, global batch 128, delta 2. The runnable YAML now uses
+`data_length: 4096` (prefix extra), following the current trainer’s budget convention.
 Hypothesis: gated prefix training learns eight-bit control; weak control or
 worse text quality would limit that conclusion to this model and setup.
 
