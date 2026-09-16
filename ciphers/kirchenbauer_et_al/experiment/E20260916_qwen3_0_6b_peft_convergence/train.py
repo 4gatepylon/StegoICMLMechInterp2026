@@ -7,7 +7,7 @@ from typing import Self
 
 import click
 from peft import LoraConfig
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from transformers import AutoTokenizer
 
 from ciphers.kirchenbauer_et_al.src.cache_fineweb import load_fineweb_cache
@@ -26,7 +26,9 @@ NUM_TRAINING_TOKENS = 128 * 1024 * SEQUENCE_LENGTH
 
 
 class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
-    """Preserve NUM_TRAINING_TOKENS padded positions while allowing batch overrides."""
+    """Derive training steps from a budget of padded token positions."""
+
+    num_training_tokens: int = Field(default=NUM_TRAINING_TOKENS, gt=0)
 
     @model_validator(mode="after")
     def derive_step_budget(self) -> Self:
@@ -36,25 +38,28 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
         rounding would change the number of padded training tokens processed.
         Retention includes the Trainer's final save for a partial save interval.
         """
-        if self.global_batch_size is None or NUM_TRAINING_TOKENS % (self.max_length * self.global_batch_size):
-            raise ValueError(f"sequence length * global batch size must divide {NUM_TRAINING_TOKENS} training tokens exactly")
-        self.max_steps = NUM_TRAINING_TOKENS // self.max_length // self.global_batch_size
+        if self.global_batch_size is None or self.num_training_tokens % (self.max_length * self.global_batch_size):
+            raise ValueError(
+                f"num_training_tokens ({self.num_training_tokens}) must be divisible by sequence length ({self.max_length}) * global batch size ({self.global_batch_size})"
+            )
+        self.max_steps = self.num_training_tokens // self.max_length // self.global_batch_size
         self.save_total_limit = (self.max_steps + self.save_steps - 1) // self.save_steps
         return self
 
 
-def experiment_config(local_batch_size: int = 8, global_batch_size: int = 128) -> FixedBudgetTrainingConfig:
+def experiment_config(local_batch_size: int = 8, global_batch_size: int = 128, num_training_tokens: int = NUM_TRAINING_TOKENS) -> FixedBudgetTrainingConfig:
     """Return validated settings for the one-bit 0.6B convergence experiment.
 
     The returned schema is consumed by ``build_trainer``. Settings follow the
     existing one-bit 4B experiment, changing the model, local batch, run name,
     and checkpoint cadence/retention. ``local_batch_size`` is the per-device
     microbatch; ``global_batch_size`` is the effective batch across devices and
-    accumulation. Steps divide ``NUM_TRAINING_TOKENS`` by ``SEQUENCE_LENGTH``
-    and the global batch size. This budget excludes validation and counts
-    padded token positions, not only non-padding text tokens.
+    accumulation. ``num_training_tokens`` is the positive training budget in
+    padded token positions, excluding validation. Steps divide this budget by
+    ``SEQUENCE_LENGTH`` and the global batch size; a non-integer result is rejected.
     """
     return FixedBudgetTrainingConfig(
+        num_training_tokens=num_training_tokens,
         model="Qwen/Qwen3-0.6B-Base",
         run_name="E20260916_qwen3_0_6b_peft_convergence",
         loss_mode="nll",
@@ -141,16 +146,19 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
 @click.command()
 @click.option("--local-batch-size", default=8, show_default=True, type=click.IntRange(min=1), help="Sequences per device per microbatch.")
 @click.option("--global-batch-size", default=128, show_default=True, type=click.IntRange(min=1), help="Sequences per optimizer step across all devices.")
-def main(local_batch_size: int, global_batch_size: int) -> None:
-    """Train for NUM_TRAINING_TOKENS padded positions, adjusting optimizer steps.
+@click.option(
+    "--num-training-tokens", default=NUM_TRAINING_TOKENS, show_default=True, type=click.IntRange(min=1), help="Total padded training token positions; excludes validation."
+)
+def main(local_batch_size: int, global_batch_size: int, num_training_tokens: int) -> None:
+    """Train for a token budget, deriving optimizer steps from sequence and batch sizes.
 
-    Example: --local-batch-size 4 --global-batch-size 32 runs 4,096 steps.
+    With the default budget, --local-batch-size 4 --global-batch-size 32 runs 4,096 steps.
     Sequence length * global batch must divide the token budget exactly.
     Global batch must be divisible by local batch * WORLD_SIZE.
     Checkpoints remain every 32 optimizer steps; all are retained.
     """
     try:
-        trainer = build_trainer(experiment_config(local_batch_size, global_batch_size))
+        trainer = build_trainer(experiment_config(local_batch_size, global_batch_size, num_training_tokens))
     except ValueError as error:
         raise click.ClickException(str(error)) from error
     trainer.train()
