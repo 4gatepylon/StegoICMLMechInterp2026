@@ -1,5 +1,7 @@
 # Qwen3-4B four-bit Kirchenbauer prefix-KL training run.
-# Training data-token budget: 256 steps * 128 documents * 1024 tokens = 33,554,432.
+# Global batch size: 128 documents per optimizer step, across all devices and accumulation.
+# Training documents: 256 steps * 128 documents/step = 32,768.
+# Training data-token budget: 32,768 documents * 1024 tokens/document = 33,554,432 tokens.
 # Training plus validation requires 32,768 + 256 = 33,024 filtered documents.
 # Control-prefix tokens are additional; the padding guard requires real data in every slot.
 
@@ -26,7 +28,7 @@ lora_alpha: 16
 lora_dropout: 0.05
 
 # --- TRL SFTConfig ---
-run_name: qwen3-4b-4bit-filtered-prefix-kl-lora
+run_name: qwen3-4b-4bit-fineweb-prefix-kl-lora
 max_steps: 256
 learning_rate: 0.0003
 warmup_steps: 50
