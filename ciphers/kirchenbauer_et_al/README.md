@@ -413,7 +413,9 @@ the old total-input cap of 4096. The added context and corrected causal alignmen
 change the objective; use a fresh run for comparisons with historical checkpoints.
 
 Short documents are still padded and long documents truncated; this setting
-does not guarantee 4096 non-padding text tokens. Padding is still included in the KL mean until the separate padding-loss fix.
+does not guarantee 4096 non-padding text tokens. KL averages only predictions of real document tokens in each microbatch; padding
+contributes no loss or gradients. All-padding data produces zero KL. Prefix NLL
+still covers the complete control prefix.
 
 Each official experiment logs two cumulative training-volume metrics to W&B:
 
