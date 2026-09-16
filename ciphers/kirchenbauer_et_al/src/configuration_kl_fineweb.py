@@ -85,7 +85,6 @@ class PrefixKLTrainingConfig(QwenDocumentTokenFilter):
 
     # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
     dataset_cache_name: str = "fineweb-500k"
-    concatenation_space: Literal["token", "character"] = "token"
     data_length: int = Field(default=4096, gt=0)
     validation_samples: int = Field(default=256, gt=0)
 
@@ -241,7 +240,6 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
         help="inclusive maximum full-document training-tokenizer count, after GPT-2 filtering (default: none)",
     )
     add("--strategy", choices=("block", "modulo"), default="block")
-    add("--concatenation-space", choices=("token", "character"), default="token")
     add("--n-bits", type=int, default=8)
     add("--alpha", type=float, default=1.0)
     add("--delta", type=float, default=1.0)

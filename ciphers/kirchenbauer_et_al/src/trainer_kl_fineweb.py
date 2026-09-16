@@ -78,14 +78,13 @@ def prefix_bits_encoding_text_collator(
     tokenizer,
     n_bits: int,
     data_length: int,
-    concatenation_space: Literal["token", "character"] = "token",
 ) -> dict[str, object]:
     """Build fixed-width data plus prefix batches consumed by PrefixKLTrainer.
 
     ``examples`` contains ``text`` strings and optionally both ``prefix_bits``
     (an ``n_bits``-wide binary string) and ``do_encoding`` (a boolean) on every
-    row. Otherwise these controls are sampled. ``tokenizer`` and
-    ``concatenation_space`` are passed to ``tokenize_with_prefix``.
+    row. Otherwise these controls are sampled. ``tokenizer`` is passed to
+    ``tokenize_with_prefix``, which concatenates prefix and data token IDs.
     ``data_length`` is the padded document width, excluding the prefix, and
     must be positive and divisible by ``n_bits``. The returned dictionary's
     complete schema is documented at its consumer, ``PrefixKLTrainer.compute_loss``.
@@ -103,7 +102,7 @@ def prefix_bits_encoding_text_collator(
         _, bits, enabled = prefix_batch(texts, n_bits)
     if any(len(bit) != n_bits for bit in bits):
         raise ValueError("prefix_bits must contain exactly n_bits bits")
-    prefixed_model_inputs, unprefixed_model_inputs, Q = tokenize_with_prefix(tokenizer, texts, bits, enabled, data_length, concatenation_space)
+    prefixed_model_inputs, unprefixed_model_inputs, Q = tokenize_with_prefix(tokenizer, texts, bits, enabled, data_length)
     auxiliary_inputs = {
         # A non-None `labels` key makes prediction_step call our compute_loss; -100 marks padding.
         # Our loss ignores `labels`; the default causal-LM loss uses shifted targets and skips -100.

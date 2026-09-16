@@ -49,7 +49,7 @@ def main() -> None:
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
         data_collator=partial(
-            prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=args.n_bits, data_length=args.data_length, concatenation_space=args.concatenation_space
+            prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=args.n_bits, data_length=args.data_length
         ),
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules="all-linear"),

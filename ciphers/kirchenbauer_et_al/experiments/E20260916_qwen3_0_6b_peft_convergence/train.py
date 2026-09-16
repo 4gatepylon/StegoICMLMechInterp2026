@@ -41,8 +41,9 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
     def derive_run_identity(self) -> Self:
         """Return settings with a shared project and a descriptive run/output name.
 
-        Model size, bits, learning rate, global batch, loss, alpha, delta, and
-        active document-length bounds distinguish ablations. Repeats reuse the name;
+        Model size, bits, learning rate, global batch, loss, alpha, delta, token
+        budget, and active document-length bounds distinguish ablations. Repeats
+        with identical settings reuse the name;
         use a fresh STEGO_ARTIFACTS_DIR for independent checkpoint outputs.
         The explicit project overrides WANDB_PROJECT through build_trainer.
         """
@@ -50,7 +51,7 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
         self.wandb_project = WANDB_PROJECT
         # Preserve float precision so nearby ablation settings cannot share a path.
         lr, alpha, delta = (str(value).removesuffix(".0") for value in (self.learning_rate, self.alpha, self.delta))
-        self.run_name = f"{model_name}-{self.n_bits}bit-lr{lr}-gb{self.global_batch_size}-{self.loss_mode}-a{alpha}-d{delta}"
+        self.run_name = f"{model_name}-{self.n_bits}bit-lr{lr}-gb{self.global_batch_size}-{self.loss_mode}-a{alpha}-d{delta}-tokens{self.num_training_tokens}"
         if self.min_gpt2_document_tokens > 0 or self.max_gpt2_document_tokens is not None:
             upper = "all" if self.max_gpt2_document_tokens is None else str(self.max_gpt2_document_tokens)
             self.run_name += f"-gpt2-{self.min_gpt2_document_tokens}-{upper}"
@@ -124,7 +125,6 @@ def experiment_config(
         max_gpt2_document_tokens=max_gpt2_document_tokens,
         min_qwen_document_tokens=min_qwen_document_tokens,
         max_qwen_document_tokens=max_qwen_document_tokens,
-        concatenation_space="token",
         data_length=DATA_LENGTH,
         validation_samples=256,
         lora_rank=32,
@@ -194,7 +194,6 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
             tokenizer=tokenizer,
             n_bits=config.n_bits,
             data_length=config.data_length,
-            concatenation_space=config.concatenation_space,
         ),
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=config.lora_rank, lora_alpha=config.lora_alpha, lora_dropout=config.lora_dropout, target_modules="all-linear"),

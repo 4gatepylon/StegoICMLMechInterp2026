@@ -312,3 +312,12 @@ def test_original_run_launcher(tmp_path: Path, exit_code: int) -> None:
     ]
     config = parse_args(arguments[7:])
     assert (config.model, config.n_bits) == ("Qwen/Qwen3-4B-Base", 8)
+
+
+@pytest.mark.parametrize("mode", ["token", "char"])
+def test_removed_concatenation_setting_is_rejected(mode) -> None:
+    """Reject both historical mode values through config and CLI; YAML uses the same schema."""
+    with pytest.raises(ValueError, match="concatenation_space"):
+        PrefixKLTrainingConfig.model_validate({"concatenation_space": mode})
+    with pytest.raises(SystemExit):
+        parse_args(["--concatenation-space", mode])
