@@ -9,6 +9,7 @@ from typing import Iterator, Literal, override
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
+from transformers import PreTrainedTokenizerBase
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from trl import SFTTrainer
 
@@ -75,19 +76,37 @@ def padded_input_tokens_seen(
 
 def prefix_bits_encoding_text_collator(
     examples: list[dict[str, object]],
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     n_bits: int,
     data_length: int,
 ) -> dict[str, object]:
     """Build fixed-width data plus prefix batches consumed by PrefixKLTrainer.
 
-    ``examples`` contains ``text`` strings and optionally both ``prefix_bits``
-    (an ``n_bits``-wide binary string) and ``do_encoding`` (a boolean) on every
-    row. Otherwise these controls are sampled. ``tokenizer`` is passed to
-    ``tokenize_with_prefix``, which concatenates prefix and data token IDs.
-    ``data_length`` is the padded document width, excluding the prefix, and
-    must be positive and divisible by ``n_bits``. The returned dictionary's
-    complete schema is documented at its consumer, ``PrefixKLTrainer.compute_loss``.
+    `examples` should look like:
+    ```
+    [
+        {
+            "text": "...",                   # Pretraining data (i.e. text from Fineweb document)
+            (Optional) "prefix_bits": "...", # n_bits-wide binary string
+            (Optional) "do_encoding": ...    # Whether to apply secret message to this example
+        },
+        ...
+    ]
+    ```
+
+    The outputs of this function will look like:
+    ```
+    {
+        "input_ids": Tensor[B, Q + data_length],       # Prefixed student token IDs.
+        "attention_mask": Tensor[B, Q + data_length],  # 1 for real tokens, 0 for document padding.
+        "labels": Tensor[B, Q + data_length],          # Same IDs, with padding set to -100.
+        "base_input_ids": Tensor[B, data_length],      # Unprefixed teacher token IDs.
+        "base_attention_mask": Tensor[B, data_length], # Teacher mask; suffix of attention_mask.
+        "prefix_bits": list[str],                      # B binary messages, each n_bits wide.
+        "do_encoding": list[bool],                     # Whether each example applies the boosts.
+        "prefix_length": int,                          # Q; prefix width shared by the batch.
+    }
+    ```
     """
     if n_bits < 1 or data_length < 1 or data_length % n_bits:
         raise ValueError("data_length must be positive and divisible by positive n_bits")
@@ -193,7 +212,11 @@ class PrefixKLTrainer(SFTTrainer):
             raise ValueError("profile_memory_steps must be nonnegative")
         collator_function = data_collator.func if isinstance(data_collator, partial) else data_collator
         if collator_function is not prefix_bits_encoding_text_collator:
-            raise ValueError("PrefixKLTrainer requires prefix_bits_encoding_text_collator")
+            raise ValueError(
+                "PrefixKLTrainer requires prefix_bits_encoding_text_collator. "
+                "This is because we have some options controlled in the Trainer and others in the function itself. "
+                "In a future iteration we'll find a better interface."
+            )
         self.loss_mode, self.alpha, self.n_bits, self.delta, self.strategy = loss_mode, alpha, n_bits, delta, strategy
         self.reject_document_padding = reject_document_padding
         self.profile_memory_steps, self._profile_calls, self._profile_this_call = profile_memory_steps, 0, False
