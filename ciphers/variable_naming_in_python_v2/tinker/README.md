@@ -3,8 +3,8 @@
 Run both commands from the repository root using the `stego` Conda environment.
 Set `STEGO_ARTIFACTS_DIR` and configure Modal credentials. The first script also
 requires `OPENROUTER_API_KEY`; the second requires a Codex ChatGPT login.
-Before creating files or loading data, OpenRouter checks the key with a 10-second
-timeout. It prints confirmation and the expiry time (or no expiry set), or exits
+Before creating files or loading data, OpenRouter checks the key.
+It prints confirmation and the expiry time (or no expiry set), or exits
 with a concise error for missing, rejected or expired keys. Network/server errors
 also stop the run. The check makes no model request and never prints the key.
 
@@ -13,18 +13,17 @@ conda run --no-capture-output -n stego python -m ciphers.variable_naming_in_pyth
 conda run --no-capture-output -n stego python -m ciphers.variable_naming_in_python_v2.tinker.run_codex
 ```
 
-`run_openrouter.py` prepares 100 shared introductory APPS problems using the
+`run_openrouter.py` prepares shared introductory APPS problems using the
 existing data prompts and `official_cipher.yaml`. Each problem receives a uniform
-random three-bit secret (`000` through `111`), sampled with seed 42. It passes the
-**full prompt list** to `APIGenerator.api_generate_streaming` with **batch_size=32**
-for GPT-OSS-120B, GPT-OSS-20B, and GPT-5.6 Luna separately. For 100 inputs, each model runs
-batches of 32, 32, 32, and 4. After saving all three models' answers, it grades them
-using a **16-process pool** driving Modal sandboxes.
+random three-bit secret (`000` through `111`), sampled with the configured seed.
+It passes the **full prompt list** to `APIGenerator.api_generate_streaming`
+for each configured model, using the configured batch size. After saving all
+models' answers, it grades them using a process pool driving Modal sandboxes.
 
 `run_codex.py` loads the **latest prepared OpenRouter run**, preserving its exact
 prompts, secrets, cipher and private tests. It runs `gpt-5.6-luna` through a
-**32-process pool**, saves every answer, then grades with a **16-process Modal
-pool**. It does not generate new inputs or call OpenRouter. Run it after the first
+process pool, saves every answer, then grades with a Modal process pool.
+It does not generate new inputs or call OpenRouter. Run it after the first
 command and before preparing another OpenRouter run to compare the same inputs.
 
 Both write under `$STEGO_ARTIFACTS_DIR/tinker/<timestamp>/`. The artifact-relative
@@ -60,9 +59,8 @@ the temporary directory remains available for recovery.
 
 Settings are hardcoded near the top of each script. There are no retries or resume;
 each OpenRouter invocation creates a fresh run, and an existing Luna answer file
-prevents rerunning Luna in that directory. OpenRouter uses a 16,384-token output
-limit and a 600-second request timeout. Luna uses a 600-second helper timeout;
-its helper does not apply the OpenRouter token limit. Provider reasoning and
+prevents rerunning Luna in that directory. Luna's helper does not apply the
+OpenRouter token limit. Provider reasoning and
 sampling defaults apply. OpenRouter Luna adds a comparison without the Codex scaffold;
 it does not equalize all provider settings. The shared cipher uses one control bit and four length
 bits, followed by the three-bit payload; ordered synonym pairs emit 0 or 1.
