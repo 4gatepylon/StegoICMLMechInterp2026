@@ -13,7 +13,6 @@ profile_memory_steps: 0
 
 # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
 dataset_cache_name: fineweb-500k
-concatenation_space: token
 data_length: 4096
 validation_samples: 256
 

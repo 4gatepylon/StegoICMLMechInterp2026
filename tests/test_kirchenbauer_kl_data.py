@@ -69,14 +69,13 @@ def length_tokenizer() -> PreTrainedTokenizerFast:
 
 @pytest.mark.parametrize("n_bits", [1, 2, 4, 8])
 @pytest.mark.parametrize("document_length", [3, 4096, 4100])
-@pytest.mark.parametrize("concatenation_space", ["token", "character"])
 @pytest.mark.parametrize("strategy", ["block", "modulo"])
-def test_data_budget_and_partitions_exclude_prefix(length_tokenizer, n_bits, document_length, concatenation_space, strategy) -> None:
-    """Cover all experiment bit widths, short/exact/long data, both modes and partitions.
+def test_data_budget_and_partitions_exclude_prefix(length_tokenizer, n_bits, document_length, strategy) -> None:
+    """Cover all experiment bit widths, short/exact/long data, both partitions.
 
     Both gates share a batch. Check truncation, padding masks, teacher/student
     alignment, and complete equal partitions despite odd prefix width. Model
-    execution, real Qwen tokenization, and character-boundary merges are omitted.
+    execution and real Qwen tokenization are omitted.
     """
     text = " ".join("abc"[position % 3] for position in range(document_length))
     examples = [
@@ -84,7 +83,7 @@ def test_data_budget_and_partitions_exclude_prefix(length_tokenizer, n_bits, doc
         {"text": text, "prefix_bits": "1" * n_bits, "do_encoding": True},
     ]
     data_length = 4096
-    batch = prefix_bits_encoding_text_collator(examples, length_tokenizer, n_bits, data_length, concatenation_space)
+    batch = prefix_bits_encoding_text_collator(examples, length_tokenizer, n_bits, data_length)
     prefix_length = batch["prefix_length"]
     assert prefix_length % 2 == 1  # Ensure this fixture would catch subtracting Q before partitioning.
     assert batch["input_ids"].shape == (2, data_length + prefix_length)
@@ -128,3 +127,18 @@ def test_reference_length_matches_both_gate_prefixes(length_tokenizer) -> None:
     reference_length = prefix_token_length(length_tokenizer, n_bits=8)
     batch = prefix_bits_encoding_text_collator([{"text": "a"}], length_tokenizer, n_bits=8, data_length=16)
     assert batch["input_ids"].shape[1] == 16 + reference_length
+
+
+def test_token_concatenation_preserves_boundary_whitespace() -> None:
+    """Cover a BPE newline merge across the prefix/data boundary, without Qwen or model IO."""
+    vocab = {token: index for index, token in enumerate(["[UNK]", "[PAD]", *sorted(pre_tokenizers.ByteLevel.alphabet()), "ĊĊ", "ye", "yes", "no"])}
+    backend = Tokenizer(models.BPE(vocab, merges=[("Ċ", "Ċ"), ("y", "e"), ("ye", "s"), ("n", "o")], unk_token="[UNK]"))
+    backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False)
+    prefixes = [compile_prefix("0", False)]
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]", pad_token="[PAD]")
+    text = "\nhello"
+    separate_ids = tokenizer(prefixes[0], add_special_tokens=False)["input_ids"] + tokenizer(text, add_special_tokens=False)["input_ids"]
+    assert tokenizer(prefixes[0] + text, add_special_tokens=False)["input_ids"] != separate_ids
+    prefixed, base, prefix_length = tokenize_with_prefix(tokenizer, [text], ["0"], [False], data_length=8)
+    assert prefixed["input_ids"][0, :len(separate_ids)].tolist() == separate_ids
+    assert torch.equal(prefixed["input_ids"][:, prefix_length:], base["input_ids"])
