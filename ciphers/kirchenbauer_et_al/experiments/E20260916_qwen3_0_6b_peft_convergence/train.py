@@ -41,8 +41,8 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
     def derive_run_identity(self) -> Self:
         """Return settings with a shared project and a descriptive run/output name.
 
-        Model size, bits, learning rate, global batch, loss, alpha, and delta
-        distinguish ablations. Repeats with identical settings reuse the name;
+        Model size, bits, learning rate, global batch, loss, alpha, delta, and
+        active document-length bounds distinguish ablations. Repeats reuse the name;
         use a fresh STEGO_ARTIFACTS_DIR for independent checkpoint outputs.
         The explicit project overrides WANDB_PROJECT through build_trainer.
         """
@@ -51,6 +51,12 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
         # Preserve float precision so nearby ablation settings cannot share a path.
         lr, alpha, delta = (str(value).removesuffix(".0") for value in (self.learning_rate, self.alpha, self.delta))
         self.run_name = f"{model_name}-{self.n_bits}bit-lr{lr}-gb{self.global_batch_size}-{self.loss_mode}-a{alpha}-d{delta}"
+        if self.min_gpt2_document_tokens > 0 or self.max_gpt2_document_tokens is not None:
+            upper = "all" if self.max_gpt2_document_tokens is None else str(self.max_gpt2_document_tokens)
+            self.run_name += f"-gpt2-{self.min_gpt2_document_tokens}-{upper}"
+        if self.min_qwen_document_tokens > 0 or self.max_qwen_document_tokens is not None:
+            upper = "all" if self.max_qwen_document_tokens is None else str(self.max_qwen_document_tokens)
+            self.run_name += f"-qwen-{self.min_qwen_document_tokens}-{upper}"
         return self
 
     @model_validator(mode="after")
@@ -81,6 +87,10 @@ def experiment_config(
     loss_type: LossType = "nll",
     alpha: float = 1.0,
     delta: float = 2.0,
+    min_gpt2_document_tokens: int = 0,
+    max_gpt2_document_tokens: int | None = None,
+    min_qwen_document_tokens: int = 0,
+    max_qwen_document_tokens: int | None = None,
 ) -> FixedBudgetTrainingConfig:
     """Return validated ablation settings consumed by ``build_trainer``.
 
@@ -94,6 +104,11 @@ def experiment_config(
     ``'ignore_prefix'`` uses only data KL and ignores alpha. ``delta`` boosts the
     teacher's selected vocabulary logits: zero disables the boost; larger values
     strengthen the encoding target. Alpha and delta must be finite and nonnegative.
+    ``min_gpt2_document_tokens`` and ``max_gpt2_document_tokens`` are inclusive cached
+    GPT-2 bounds. ``min_qwen_document_tokens`` and ``max_qwen_document_tokens``
+    then bound complete lengths under the selected model's tokenizer, excluding
+    prefixes and special tokens. Each zero minimum/``None`` maximum disables
+    that stage. Both stages precede splitting; the training budget is unchanged.
     The returned config also derives W&B project/run names and checkpoint retention.
     """
     return FixedBudgetTrainingConfig(
@@ -105,6 +120,10 @@ def experiment_config(
         alpha=alpha,
         delta=delta,
         dataset_cache_name="fineweb-500k",
+        min_gpt2_document_tokens=min_gpt2_document_tokens,
+        max_gpt2_document_tokens=max_gpt2_document_tokens,
+        min_qwen_document_tokens=min_qwen_document_tokens,
+        max_qwen_document_tokens=max_qwen_document_tokens,
         concatenation_space="token",
         data_length=DATA_LENGTH,
         validation_samples=256,
@@ -154,8 +173,11 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
     dataset = load_fineweb_cache(
         config.dataset_cache_name,
         minimum_documents=required_documents,
-        min_document_tokens=config.min_document_tokens,
-        max_document_tokens=config.max_document_tokens,
+        min_gpt2_document_tokens=config.min_gpt2_document_tokens,
+        max_gpt2_document_tokens=config.max_gpt2_document_tokens,
+        min_qwen_document_tokens=config.min_qwen_document_tokens,
+        max_qwen_document_tokens=config.max_qwen_document_tokens,
+        tokenizer=tokenizer,
     )
     validation_dataset = dataset.take(config.validation_samples).map(fixed_prefix_metadata, with_indices=True, fn_kwargs={"n_bits": config.n_bits})
     return PrefixKLTrainer(
@@ -245,8 +267,24 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
     type=click.IntRange(min=1),
     help="Total padded data positions, excluding prefixes and validation. Increase to train longer at a fixed batch size.",
 )
+@click.option("--min-gpt2-document-tokens", default=0, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum cached GPT-2 count; applied first.")
+@click.option("--max-gpt2-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum cached GPT-2 count; omitted means unlimited.")
+@click.option("--min-qwen-document-tokens", default=0, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum Qwen count after GPT-2 filtering.")
+@click.option("--max-qwen-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum Qwen count after GPT-2 filtering; omitted means unlimited.")
 def main(
-    local_batch_size: int, global_batch_size: int, num_training_tokens: int, lr: float, model: QwenModel, n_bits: int, loss_type: LossType, alpha: float, delta: float
+    local_batch_size: int,
+    global_batch_size: int,
+    num_training_tokens: int,
+    lr: float,
+    model: QwenModel,
+    n_bits: int,
+    loss_type: LossType,
+    alpha: float,
+    delta: float,
+    min_gpt2_document_tokens: int,
+    max_gpt2_document_tokens: int | None,
+    min_qwen_document_tokens: int,
+    max_qwen_document_tokens: int | None,
 ) -> None:
     """Train for a token budget, deriving optimizer steps from sequence and batch sizes.
 
@@ -257,7 +295,21 @@ def main(
     """
     try:
         trainer = build_trainer(
-            experiment_config(local_batch_size, global_batch_size, num_training_tokens, lr=lr, model=model, n_bits=n_bits, loss_type=loss_type, alpha=alpha, delta=delta)
+            experiment_config(
+                local_batch_size,
+                global_batch_size,
+                num_training_tokens,
+                lr=lr,
+                model=model,
+                n_bits=n_bits,
+                loss_type=loss_type,
+                alpha=alpha,
+                delta=delta,
+                min_gpt2_document_tokens=min_gpt2_document_tokens,
+                max_gpt2_document_tokens=max_gpt2_document_tokens,
+                min_qwen_document_tokens=min_qwen_document_tokens,
+                max_qwen_document_tokens=max_qwen_document_tokens,
+            )
         )
     except ValueError as error:
         raise click.ClickException(str(error)) from error

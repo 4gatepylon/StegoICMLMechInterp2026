@@ -138,11 +138,26 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     from ciphers.kirchenbauer_et_al.src import cache_fineweb, configuration_kl_fineweb
 
     monkeypatch.setattr(configuration_kl_fineweb, "REPO_ROOT", tmp_path)
-    (tmp_path / "filter.yaml").write_text("min_document_tokens: 100\nmax_document_tokens: 500\n")
+    (tmp_path / "filter.yaml").write_text("min_gpt2_document_tokens: 100\nmax_gpt2_document_tokens: 500\nmin_qwen_document_tokens: 90\nmax_qwen_document_tokens: 490\n")
     config = parse_args(["--config", "filter.yaml"])
-    assert (config.min_document_tokens, config.max_document_tokens) == (100, 500)
-    config = parse_args(["--config", "filter.yaml", "--min-document-tokens", "200", "--max-document-tokens", "none"])
-    assert (config.min_document_tokens, config.max_document_tokens) == (200, None)
+    assert (config.min_gpt2_document_tokens, config.max_gpt2_document_tokens) == (100, 500)
+    assert (config.min_qwen_document_tokens, config.max_qwen_document_tokens) == (90, 490)
+    config = parse_args(
+        [
+            "--config",
+            "filter.yaml",
+            "--min-gpt2-document-tokens",
+            "200",
+            "--max-gpt2-document-tokens",
+            "none",
+            "--min-qwen-document-tokens",
+            "180",
+            "--max-qwen-document-tokens",
+            "none",
+        ]
+    )
+    assert (config.min_gpt2_document_tokens, config.max_gpt2_document_tokens) == (200, None)
+    assert (config.min_qwen_document_tokens, config.max_qwen_document_tokens) == (180, None)
     monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setattr(configuration_kl_fineweb, "parse_args", lambda: config)
@@ -160,15 +175,18 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
 
     runpy.run_module("ciphers.kirchenbauer_et_al.src.train_kl_fineweb", run_name="__main__")
 
+    tokenizer = sys.modules["transformers"].AutoTokenizer.from_pretrained.return_value
     cache_loader.assert_called_once_with(
         config.dataset_cache_name,
         minimum_documents=config.validation_samples + config.max_steps * 32,
-        min_document_tokens=200,
-        max_document_tokens=None,
+        min_gpt2_document_tokens=200,
+        max_gpt2_document_tokens=None,
+        min_qwen_document_tokens=180,
+        max_qwen_document_tokens=None,
+        tokenizer=tokenizer,
     )
     cache_loader.return_value.take.assert_called_once_with(config.validation_samples)
     cache_loader.return_value.skip.assert_called_once_with(config.validation_samples)
-    tokenizer = sys.modules["transformers"].AutoTokenizer.from_pretrained.return_value
     sft_config_builder.assert_called_once_with(config, 32, tokenizer)
     trainer_kwargs = sys.modules["ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb"].PrefixKLTrainer.call_args.kwargs
     assert trainer_kwargs["data_collator"].keywords["data_length"] == config.data_length

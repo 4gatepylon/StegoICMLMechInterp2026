@@ -2,6 +2,8 @@
 
 Partitions include all three models/four bit lengths, both loss types, zero and
 positive objective weights, invalid models, and nonpositive/nonfinite numbers.
+Document filtering covers CLI forwarding of nested bounds, invalid ranges,
+the selected tokenizer, and distinct filtered-run output names.
 Trainer, tokenizer, dataset, and SFT construction are mocked: GPU training,
 model downloads, distributed execution, and live W&B delivery are omitted.
 """
@@ -64,12 +66,42 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
     monkeypatch.setattr(train, "PrefixKLTrainer", trainer)
     result = CliRunner().invoke(
         train.main,
-        ["--lr", "0.001", "--model-name", "Qwen/Qwen3-4B-Base", "--n-bits", "8", "--loss-type", loss_type, "--alpha", "0.5", "--delta", "4"],
+        [
+            "--lr",
+            "0.001",
+            "--model-name",
+            "Qwen/Qwen3-4B-Base",
+            "--n-bits",
+            "8",
+            "--loss-type",
+            loss_type,
+            "--alpha",
+            "0.5",
+            "--delta",
+            "4",
+            "--min-gpt2-document-tokens",
+            "100",
+            "--max-gpt2-document-tokens",
+            "2000",
+            "--min-qwen-document-tokens",
+            "512",
+            "--max-qwen-document-tokens",
+            "2048",
+        ],
     )
     assert result.exit_code == 0, result.output
     config = train.build_sft_config.call_args.args[0]
     assert config.learning_rate == 0.001
-    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4"
+    assert config.run_name == f"qwen3-4b-8bit-lr0.001-gb128-{loss_type}-a0.5-d4-gpt2-100-2000-qwen-512-2048"
+    train.load_fineweb_cache.assert_called_once_with(
+        config.dataset_cache_name,
+        minimum_documents=config.validation_samples + config.max_steps * config.global_batch_size,
+        min_gpt2_document_tokens=100,
+        max_gpt2_document_tokens=2000,
+        min_qwen_document_tokens=512,
+        max_qwen_document_tokens=2048,
+        tokenizer=train.AutoTokenizer.from_pretrained.return_value,
+    )
     kwargs = trainer.call_args.kwargs
     assert (kwargs["model"], kwargs["n_bits"], kwargs["loss_mode"], kwargs["alpha"], kwargs["delta"]) == ("Qwen/Qwen3-4B-Base", 8, loss_type, 0.5, 4)
     assert kwargs["data_collator"].keywords["n_bits"] == 8
@@ -96,6 +128,10 @@ def test_objective_overrides_reach_trainer(loss_type: str, monkeypatch: pytest.M
         ("--alpha", "inf"),
         ("--delta", "-1"),
         ("--delta", "nan"),
+        ("--min-gpt2-document-tokens", "-1"),
+        ("--max-gpt2-document-tokens", "-1"),
+        ("--min-qwen-document-tokens", "-1"),
+        ("--max-qwen-document-tokens", "-1"),
     ],
 )
 def test_invalid_cli_fails_before_trainer(flag: str, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,3 +166,20 @@ def test_close_numeric_settings_keep_distinct_output_names(knob: str) -> None:
     first = train.experiment_config(**{knob: 0.0003000001})
     second = train.experiment_config(**{knob: 0.0003000002})
     assert first.run_name != second.run_name
+
+
+@pytest.mark.parametrize("tokenizer_name", ["gpt2", "qwen"])
+def test_document_bounds_distinguish_runs_and_reject_reversed_ranges(tokenizer_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Partition active bounds into lower-only, zero-only, and reversed ranges."""
+    prefix = f"{tokenizer_name}-"
+    minimum_field = f"min_{prefix.replace('-', '_')}document_tokens"
+    maximum_field = f"max_{prefix.replace('-', '_')}document_tokens"
+    lower = train.experiment_config(**{minimum_field: 512})
+    zero_only = train.experiment_config(**{maximum_field: 0})
+    unfiltered = train.experiment_config()
+    assert len({lower.run_name, zero_only.run_name, unfiltered.run_name}) == 3
+    build = Mock()
+    monkeypatch.setattr(train, "build_trainer", build)
+    result = CliRunner().invoke(train.main, [f"--min-{prefix}document-tokens", "20", f"--max-{prefix}document-tokens", "10"])
+    assert result.exit_code != 0
+    build.assert_not_called()

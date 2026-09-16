@@ -13,11 +13,18 @@ Token filtering covers unbounded, one-sided, inclusive two-sided, and zero-only
 ranges, invalid bounds, filtered exhaustion, old manifests, and deterministic
 splits. Remote source reads are mocked; local Parquet IO is real.
 
+Nested Qwen filtering covers disabled, one-sided, two-sided and zero-only
+bounds, GPT-2 preselection, full and partial tokenizer batches, insufficient
+survivors, missing tokenizers, invalid configuration, and repeatable splits.
+The Qwen tokenizer is controlled locally; real-model tokenization accuracy,
+large-cache throughput and distributed training are outside this test space.
+
 TODO(hadriano) this Codex-written test suite often looks for specific substrings in arguments, which might brittle.
 """
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from click.testing import CliRunner
@@ -161,7 +168,7 @@ def test_cli_verifies_and_previews_cached_metadata(artifacts_directory: Path, mo
 
     result = CliRunner().invoke(
         cache_fineweb.main,
-        ["--cache-name", "cli-cache", "--documents", "2", "--min-document-tokens", "1", "--max-document-tokens", "2"],
+        ["--cache-name", "cli-cache", "--documents", "2", "--min-gpt2-document-tokens", "1", "--max-gpt2-document-tokens", "2"],
     )
 
     assert result.exit_code == 0, result.output
@@ -198,7 +205,7 @@ def test_document_token_filters_at_build_and_load(
     """Cover range partitions with mocked source rows and real multipart caches."""
     del artifacts_directory
     _install_source(monkeypatch, [_source_document(index) for index in range(-1, 4)])
-    bounds = {"min_document_tokens": minimum, "max_document_tokens": maximum}
+    bounds = {"min_gpt2_document_tokens": minimum, "max_gpt2_document_tokens": maximum}
     filtered_directory = build_fineweb_cache("filtered", documents=len(accepted_indices), part_documents=2, **bounds)
     unfiltered_directory = build_fineweb_cache("unfiltered", documents=5, part_documents=2)
     expected = [_cached_document(index) for index in accepted_indices]
@@ -206,12 +213,16 @@ def test_document_token_filters_at_build_and_load(
     assert list(load_fineweb_cache("filtered", shuffle=False)) == expected
     assert list(load_fineweb_cache("unfiltered", shuffle=False, minimum_documents=len(expected), **bounds)) == expected
     manifest = json.loads((filtered_directory / "manifest.json").read_text())
-    assert (manifest["min_document_tokens"], manifest["max_document_tokens"]) == (minimum, maximum)
+    assert (manifest["min_gpt2_document_tokens"], manifest["max_gpt2_document_tokens"]) == (minimum, maximum)
+    manifest["min_document_tokens"] = manifest.pop("min_gpt2_document_tokens")
+    manifest["max_document_tokens"] = manifest.pop("max_gpt2_document_tokens")
+    (filtered_directory / "manifest.json").write_text(json.dumps(manifest))
+    assert list(load_fineweb_cache("filtered", shuffle=False)) == expected
 
     # Version-2 caches created before filtering have neither bounds field.
     legacy_manifest = json.loads((unfiltered_directory / "manifest.json").read_text())
-    legacy_manifest.pop("min_document_tokens")
-    legacy_manifest.pop("max_document_tokens")
+    legacy_manifest.pop("min_gpt2_document_tokens")
+    legacy_manifest.pop("max_gpt2_document_tokens")
     (unfiltered_directory / "manifest.json").write_text(json.dumps(legacy_manifest))
     dataset = load_fineweb_cache("unfiltered", **bounds)
     shuffled = list(dataset)
@@ -225,13 +236,13 @@ def test_filtering_rejects_insufficient_accepted_documents(artifacts_directory: 
     build_fineweb_cache("all", documents=3)
     for minimum, accepted_count in [(2, 2), (4, 0)]:
         with pytest.raises(RuntimeError, match=f"{accepted_count} of 3 requested documents"):
-            build_fineweb_cache("exhausted", documents=3, part_documents=1, min_document_tokens=minimum)
+            build_fineweb_cache("exhausted", documents=3, part_documents=1, min_gpt2_document_tokens=minimum)
         assert sorted(path.name for path in (artifacts_directory / "datasets" / "fineweb").iterdir()) == ["all"]
         with pytest.raises(RuntimeError, match=f"{accepted_count} documents after token filtering"):
-            load_fineweb_cache("all", minimum_documents=3, min_document_tokens=minimum)
+            load_fineweb_cache("all", minimum_documents=3, min_gpt2_document_tokens=minimum)
 
 
-@pytest.mark.parametrize("bounds", [{"min_document_tokens": -1}, {"max_document_tokens": -1}, {"min_document_tokens": 3, "max_document_tokens": 2}])
+@pytest.mark.parametrize("bounds", [{"min_gpt2_document_tokens": -1}, {"max_gpt2_document_tokens": -1}, {"min_gpt2_document_tokens": 3, "max_gpt2_document_tokens": 2}])
 def test_invalid_token_bounds_fail_before_io(bounds: dict[str, int], monkeypatch: pytest.MonkeyPatch) -> None:
     """Cover negative and reversed ranges without filesystem or remote access."""
     from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import PrefixKLTrainingConfig
@@ -240,3 +251,75 @@ def test_invalid_token_bounds_fail_before_io(bounds: dict[str, int], monkeypatch
     for entry_point in (build_fineweb_cache, load_fineweb_cache, PrefixKLTrainingConfig):
         with pytest.raises(ValueError):
             entry_point(**bounds)
+
+
+@pytest.mark.parametrize("minimum,maximum", [(0, None), (2, None), (0, 2), (1, 3), (0, 0)])
+def test_nested_qwen_filtering_preserves_rows_and_splits(artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch, minimum: int, maximum: int | None) -> None:
+    """Partition Qwen bounds on 34 GPT-2 survivors, spanning full/partial batches.
+
+    GPT-2 and synthetic Qwen counts deliberately disagree. Verify GPT-2-rejected
+    texts never reach the tokenizer and retained rows keep all original metadata.
+    """
+    del artifacts_directory
+    _install_source(monkeypatch, [_source_document(index) for index in range(40)])
+    build_fineweb_cache("nested", documents=40, part_documents=17)
+    tokenizer = Mock(side_effect=lambda texts, **kwargs: {"input_ids": [[0] * (int(text.split()[-1]) % 5) for text in texts]})
+    gpt2_indices = list(range(4, 38))
+    expected = [_cached_document(index) for index in gpt2_indices if index % 5 >= minimum and (maximum is None or index % 5 <= maximum)]
+    arguments = {
+        "min_gpt2_document_tokens": 5,
+        "max_gpt2_document_tokens": 38,
+        "min_qwen_document_tokens": minimum,
+        "max_qwen_document_tokens": maximum,
+        "tokenizer": tokenizer,
+        "minimum_documents": len(expected),
+    }
+    assert list(load_fineweb_cache("nested", shuffle=False, **arguments)) == expected
+    dataset = load_fineweb_cache("nested", **arguments)
+    shuffled = list(dataset)
+    assert sorted(row["id"] for row in shuffled) == sorted(row["id"] for row in expected)
+    assert list(dataset.take(2)) + list(dataset.skip(2)) == shuffled
+
+    if minimum == 0 and maximum is None:
+        tokenizer.assert_not_called()
+    else:
+        assert {text for call in tokenizer.call_args_list for text in call.args[0]} == {f"document {index}" for index in gpt2_indices}
+        for call in tokenizer.call_args_list:
+            assert 0 < len(call.args[0]) <= 32
+            assert call.kwargs == {
+                "add_special_tokens": False,
+                "truncation": False,
+                "padding": False,
+                "return_attention_mask": False,
+                "return_token_type_ids": False,
+            }
+
+
+@pytest.mark.parametrize("qwen_minimum", [4, 5])
+def test_qwen_filter_rejects_insufficient_survivors_before_returning(artifacts_directory: Path, monkeypatch: pytest.MonkeyPatch, qwen_minimum: int) -> None:
+    """Cover some and zero Qwen matches when GPT-2 alone has enough documents."""
+    del artifacts_directory
+    _install_source(monkeypatch, [_source_document(index) for index in range(6)])
+    build_fineweb_cache("nested-small", documents=6, part_documents=2)
+    tokenizer = Mock(side_effect=lambda texts, **kwargs: {"input_ids": [[0] * (int(text.split()[-1]) % 5) for text in texts]})
+    with pytest.raises(RuntimeError, match="after GPT-2 and Qwen token filtering"):
+        load_fineweb_cache("nested-small", min_gpt2_document_tokens=2, min_qwen_document_tokens=qwen_minimum, minimum_documents=2, tokenizer=tokenizer)
+
+
+@pytest.mark.parametrize("bounds", [{"min_qwen_document_tokens": -1}, {"max_qwen_document_tokens": -1}, {"min_qwen_document_tokens": 3, "max_qwen_document_tokens": 2}])
+def test_invalid_qwen_bounds_fail_before_io(bounds: dict[str, int], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reject negative and reversed Qwen bounds in both loader and training config."""
+    from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import PrefixKLTrainingConfig
+
+    monkeypatch.delenv("STEGO_ARTIFACTS_DIR", raising=False)
+    for entry_point in (load_fineweb_cache, PrefixKLTrainingConfig):
+        with pytest.raises(ValueError):
+            entry_point(**bounds)
+
+
+@pytest.mark.parametrize("bounds", [{"min_qwen_document_tokens": 1}, {"max_qwen_document_tokens": 0}])
+def test_enabled_qwen_filter_requires_tokenizer(bounds: dict[str, int], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Require the companion tokenizer for both lower-only and zero-only filters."""
+    monkeypatch.delenv("STEGO_ARTIFACTS_DIR", raising=False)
+    with pytest.raises(ValueError, match="tokenizer is required"):
+        load_fineweb_cache(**bounds)

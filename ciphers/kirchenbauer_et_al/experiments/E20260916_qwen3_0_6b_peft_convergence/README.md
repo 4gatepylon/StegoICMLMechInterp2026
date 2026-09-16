@@ -95,6 +95,14 @@ paths. Training is not automatically resumed from existing files.
 | `--loss-type` | `nll` uses prefix NLL + alpha × data KL. `ignore_prefix` uses only data KL (ignoring alpha), to test whether learning the prefix itself matters. |
 | `--alpha` | In `nll` mode, larger values prioritize data KL relative to prefix NLL; zero trains only the prefix. It does not change the separate LoRA alpha setting. |
 | `--delta` | Adds a logit boost to the teacher vocabulary subset encoding the requested bit when encoding is enabled. Increasing delta strengthens that target: selected-vs-unselected token odds are multiplied by `exp(delta)`. This may improve bit recovery at a text-quality cost; measure both. Zero removes the boost, while data KL still trains against the unboosted teacher. |
+| `--min-gpt2-document-tokens`, `--max-gpt2-document-tokens` | Inclusive cached GPT-2 document-length bounds, applied first. Default: zero minimum, unlimited maximum. |
+| `--min-qwen-document-tokens`, `--max-qwen-document-tokens` | Inclusive full-document counts under the selected Qwen tokenizer, applied only to GPT-2 survivors. Default: disabled. |
+
+See [nested filtering](../../README.md#filtering-cached-training-documents) for
+counting semantics and the additional tokenization cost. Both stages precede
+the train/validation split, and enough documents must remain for the configured
+budget. Active length bounds are included in run/output names to distinguish
+filtered ablations; the unfiltered names remain unchanged.
 
 Learning rate must be positive; alpha and delta must be nonnegative; all three
 must be finite. `n_bits` must be positive, and `data_length` must divide evenly

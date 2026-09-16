@@ -15,3 +15,9 @@ bash ciphers/kirchenbauer_et_al/experiments/E20260912_qwen3_4b_8bit/run.sh
 
 Checkpoints: `$STEGO_ARTIFACTS_DIR/qwen3-4b-fineweb-prefix-kl-lora/`.
 [Original run and results](https://wandb.ai/4gate/stego-kirchenbauer-prefix-kl/runs/9j4ies5w).
+
+The checked-in configuration leaves document-length filtering disabled.
+Optional [nested GPT-2 then Qwen bounds](../../README.md#filtering-cached-training-documents)
+can be set in `config.yaml`; the current budget requires 131,328 documents
+after both stages. Choose a different `run_name` for a filtered run so its
+checkpoints do not reuse the original run's directory.

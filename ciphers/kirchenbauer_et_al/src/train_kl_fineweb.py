@@ -27,8 +27,11 @@ def main() -> None:
     dataset = load_fineweb_cache(
         args.dataset_cache_name,
         minimum_documents=required_documents,
-        min_document_tokens=args.min_document_tokens,
-        max_document_tokens=args.max_document_tokens,
+        min_gpt2_document_tokens=args.min_gpt2_document_tokens,
+        max_gpt2_document_tokens=args.max_gpt2_document_tokens,
+        min_qwen_document_tokens=args.min_qwen_document_tokens,
+        max_qwen_document_tokens=args.max_qwen_document_tokens,
+        tokenizer=tokenizer,
     )
     validation_dataset = dataset.take(args.validation_samples).map(
         fixed_prefix_metadata,
