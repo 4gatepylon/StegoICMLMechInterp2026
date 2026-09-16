@@ -41,7 +41,7 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
     def derive_run_identity(self) -> Self:
         """Return settings with a shared project and a descriptive run/output name.
 
-        Model size, bits, learning rate, global batch, loss, alpha, and delta
+        Model size, bits, learning rate, global batch, loss, alpha, delta, and token budget
         distinguish ablations. Repeats with identical settings reuse the name;
         use a fresh STEGO_ARTIFACTS_DIR for independent checkpoint outputs.
         The explicit project overrides WANDB_PROJECT through build_trainer.
@@ -50,7 +50,7 @@ class FixedBudgetTrainingConfig(PrefixKLTrainingConfig):
         self.wandb_project = WANDB_PROJECT
         # Preserve float precision so nearby ablation settings cannot share a path.
         lr, alpha, delta = (str(value).removesuffix(".0") for value in (self.learning_rate, self.alpha, self.delta))
-        self.run_name = f"{model_name}-{self.n_bits}bit-lr{lr}-gb{self.global_batch_size}-{self.loss_mode}-a{alpha}-d{delta}"
+        self.run_name = f"{model_name}-{self.n_bits}bit-lr{lr}-gb{self.global_batch_size}-{self.loss_mode}-a{alpha}-d{delta}-tokens{self.num_training_tokens}"
         return self
 
     @model_validator(mode="after")
