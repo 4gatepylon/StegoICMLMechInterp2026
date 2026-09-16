@@ -3,13 +3,59 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Literal
 
-from ciphers.variable_naming_in_python_v2.data.codex_apps import CodexInferenceConfig, infer
+from pydantic import BaseModel
+
+from ciphers.variable_naming_in_python_v2.data.codex_apps import CodexInferenceConfig, InferenceResult, infer
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig
 from ciphers.variable_naming_in_python_v2.tinker.openrouter_evaluate import ExecutionConfig, run_prepared
 from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import PreparedRequest, RunConfig, artifact_path
 
 LUNA_MODEL = "gpt-5.6-luna"
+
+
+class SavedCodexRequest(BaseModel):
+    """SDK request.json fields needed to validate a recovered final answer.
+
+    prompt is the exact saved user text; config records model, deadline, artifact
+    path, and quota policy. response_format must be text for this comparison.
+    Other SDK metadata is retained in the original file, not used as cache identity.
+    """
+
+    prompt: str
+    config: CodexInferenceConfig
+    response_format: Literal["text"]
+
+
+def _saved_answers(directory: Path, config: CodexInferenceConfig) -> dict[str, InferenceResult]:
+    """Index completed SDK answers by exact prompt, recovering pre-JSONL crashes.
+
+    ``directory`` is the resolved comparison directory; ``config`` must match the
+    SDK settings saved alongside each answer. Returns prompt -> InferenceResult.
+    Validates model, prompt, settings, and tool-item contract before reuse. Rejects
+    duplicate answers or ambiguous prepared prompts instead of selecting a sample.
+    request.json without answer.json is not a cache hit: that turn has no saved
+    final answer and a resume may generate again. No SDK calls or writes occur.
+    """
+    requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    prompts = {request.body.messages[0].content for request in requests}
+    if len(prompts) != len(requests):
+        raise ValueError("Cannot recover SDK cache with duplicate prepared prompts")
+    answers = {}
+    for answer_path in sorted((directory / "generation").glob("*/answer.json")):
+        request = SavedCodexRequest.model_validate_json(answer_path.with_name("request.json").read_text())
+        answer = InferenceResult.model_validate_json(answer_path.read_text())
+        if request.config != config or answer.prompt != request.prompt or answer.prompt not in prompts:
+            raise ValueError(f"SDK cache inputs differ: {answer_path}")
+        if answer.requested_model != config.model or answer.preflight.model != config.model:
+            raise ValueError(f"SDK cache model differs: {answer_path}")
+        if set(answer.item_types) - {"userMessage", "agentMessage", "reasoning"}:
+            raise ValueError(f"SDK cache contains unexpected tool activity: {answer_path}")
+        if answer.prompt in answers:
+            raise ValueError(f"Multiple SDK answers for one prompt: {answer_path}")
+        answers[answer.prompt] = answer
+    return answers
 
 
 def prepare_codex_comparison(run_dir: Path) -> Path:
@@ -84,7 +130,7 @@ def prepare_codex_comparison(run_dir: Path) -> Path:
     return target
 
 
-def run_codex_comparison(run_dir: Path, *, approved: bool = False, num_workers: int = 16, modal_config: ModalAppsConfig | None = None) -> Path:
+def run_codex_comparison(run_dir: Path, *, approved: bool = False, num_workers: int = 16, resume: bool = False, modal_config: ModalAppsConfig | None = None) -> Path:
     """Run the prepared Luna comparison through the same threaded parser/grader.
 
     ``run_dir`` is the source OpenRouter run, relative to STEGO_ARTIFACTS_DIR.
@@ -100,7 +146,13 @@ def run_codex_comparison(run_dir: Path, *, approved: bool = False, num_workers: 
     under the comparison directory's generation/ subdirectory. The configuration is
     also saved as codex_config.json. Each thread runs its own async SDK invocation;
     text mode leaves JSON formatting prompt-driven, exactly as for OpenRouter.
-    Existing shared approval, first-error, no-retry, and no-rerun rules apply.
+    ``resume=True`` reuses completed grades and raw responses through run_prepared,
+    and also recovers SDK answer.json files saved before a JSONL write. It never
+    regenerates a saved final answer. Unfinished turns without a saved answer can
+    consume subscription capacity again. Keep the original inputs/SDK settings;
+    num_workers may change. Only one invocation may use a run directory; stop the
+    original runner before resuming. Default False keeps
+    the repeat-run guard. Shared approval and first-error rules still apply.
     """
     if approved is not True:
         raise ValueError("Explicitly pass approved=True to run the Codex comparison")
@@ -109,7 +161,13 @@ def run_codex_comparison(run_dir: Path, *, approved: bool = False, num_workers: 
     directory = artifact_path(target)
     config = RunConfig.model_validate_json((directory / "config.json").read_text())
     codex_config = CodexInferenceConfig(model=LUNA_MODEL, timeout_s=config.timeout_s, artifact_subdir=target / "generation")
-    (directory / "codex_config.json").write_text(codex_config.model_dump_json(indent=2))
+    config_path = directory / "codex_config.json"
+    if config_path.exists():
+        if CodexInferenceConfig.model_validate_json(config_path.read_text()) != codex_config:
+            raise ValueError("Saved Codex settings differ; resume requires the original configuration")
+    else:
+        config_path.write_text(codex_config.model_dump_json(indent=2))
+    cached_answers = _saved_answers(directory, codex_config) if resume else {}
 
     def generate(request: PreparedRequest, timeout_s: int) -> dict:
         """Adapt one unchanged user prompt to the shared ChatResponse contract.
@@ -121,11 +179,14 @@ def run_codex_comparison(run_dir: Path, *, approved: bool = False, num_workers: 
         """
         if request.body.model != LUNA_MODEL or timeout_s != codex_config.timeout_s:
             raise ValueError("Saved request differs from the Codex comparison configuration")
-        answer = asyncio.run(infer(request.body.messages[0].content, codex_config, response_format="text"))
+        prompt = request.body.messages[0].content
+        answer = cached_answers.get(prompt)
+        if answer is None:
+            answer = asyncio.run(infer(prompt, codex_config, response_format="text"))
         return {
             "choices": [{"message": {"content": answer.text}, "finish_reason": "stop"}],
             "codex": answer.model_dump(mode="json"),
         }
 
-    run_prepared(target, approved=True, num_workers=num_workers, modal_config=modal_config, generate=generate)
+    run_prepared(target, approved=True, num_workers=num_workers, resume=resume, modal_config=modal_config, generate=generate)
     return target

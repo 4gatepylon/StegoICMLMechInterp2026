@@ -1,6 +1,7 @@
 """Run an approved saved request list and grade one answer per APPS problem."""
 
 import ast
+import hashlib
 import json
 import os
 import urllib.request
@@ -93,6 +94,68 @@ class ExecutionConfig(BaseModel):
     modal_config: ModalAppsConfig = Field(default_factory=ModalAppsConfig)
 
 
+class SavedResponse(BaseModel):
+    """Persisted response row: request_id joins inputs; response is raw provider JSON."""
+
+    model_config = ConfigDict(extra="forbid")
+    request_id: str
+    response: dict
+
+
+class InputFingerprint(BaseModel):
+    """SHA-256 of the three immutable input files; detect edits before resuming."""
+
+    config: str
+    requests: str
+    grading_cases: str
+
+
+def _read_records(path: Path, schema: type[BaseModel]) -> list:
+    """Read a missing/empty or valid JSONL cache using the supplied Pydantic schema.
+
+    Returns validated rows in file order. Rejects truncated final lines, malformed
+    JSON, and schema errors without repairing or deleting data. Writers always end
+    each record with a newline; accepting an unterminated tail could corrupt the
+    next appended record after a forced kernel exit.
+    """
+    if not path.exists():
+        return []
+    text = path.read_text()
+    if text and not text.endswith("\n"):
+        raise ValueError(f"Incomplete cache line in {path}; preserve and repair it before resuming")
+    return [schema.model_validate_json(line) for line in text.splitlines()]
+
+
+def _load_cache(directory: Path, requests: list[PreparedRequest]) -> tuple[dict[str, dict], dict[int, CandidateResult]]:
+    """Validate saved outputs against inputs before any append or remote call.
+
+    Returns (responses_by_request_id, results_by_input_index). Responses preserve
+    the raw provider dictionary; results are CandidateResult objects. Each cached
+    ID must be unique and present in requests, each result must have a saved raw
+    response, and result model/problem IDs must match the corresponding input.
+    Cached API error envelopes are rejected rather than silently regenerated.
+    """
+    indices = {request.request_id: index for index, request in enumerate(requests)}
+    responses = {}
+    for row in _read_records(directory / "responses.jsonl", SavedResponse):
+        if row.request_id not in indices or row.request_id in responses:
+            raise ValueError(f"Unknown or duplicate cached response: {row.request_id}")
+        parsed = ChatResponse.model_validate(row.response)
+        if parsed.error is not None or len(parsed.choices) != 1:
+            raise ValueError(f"Cached API error for {row.request_id}; inspect it before resuming")
+        responses[row.request_id] = row.response
+    results = {}
+    for row in _read_records(directory / "results.jsonl", CandidateResult):
+        if row.request_id not in responses:
+            raise ValueError(f"Cached result has no saved response: {row.request_id}")
+        index = indices[row.request_id]
+        request = requests[index]
+        if index in results or row.model != request.body.model or row.problem_id != request.problem_id:
+            raise ValueError(f"Duplicate or inconsistent cached result: {row.request_id}")
+        results[index] = row
+    return responses, results
+
+
 def send_request(request: PreparedRequest, timeout_s: int) -> dict:
     """Send the exact saved body once using OPENROUTER_API_KEY; return raw API JSON.
 
@@ -161,6 +224,7 @@ def run_prepared(
     *,
     approved: bool = False,
     num_workers: int = 1,
+    resume: bool = False,
     modal_config: ModalAppsConfig | None = None,
     generate: Callable[[PreparedRequest, int], dict] | None = None,
 ) -> list[CandidateResult]:
@@ -182,16 +246,27 @@ def run_prepared(
     CandidateResult rows in prepared-request order. Writes results.jsonl in
     completion order, with request_id as the join key. Before grading,
     responses.jsonl saves each raw API response as {request_id, response}; response
-    follows ChatResponse's consumed schema. A lock serializes all file writes and
-    request claims; HTTP calls and Modal grading run outside the lock.
+    follows ChatResponse's consumed schema. A lock protects request claims and
+    JSONL writes only; generation and grading run concurrently outside it.
     execution.json records ExecutionConfig, including num_workers and modal_config.
     The first infrastructure failure stops new claims and is recorded in error.json
     as {request_id, error}. Already-claimed candidates finish and save their results
-    before that exception is raised. On caller interruption, threads likewise drain
-    already-claimed work; running HTTP/Modal calls cannot be cancelled immediately.
-    Existing responses.jsonl blocks repeat execution, including after an interrupted
-    run. This deliberately omits resume logic to avoid accidental duplicate billing.
-    Requests, config, and grading cases must remain unchanged after preparation.
+    before that exception is raised. On a normal caller interrupt, already-claimed
+    work likewise finishes and saves before returning. A forced kernel restart
+    preserves flushed records but can lose unsaved in-flight responses.
+    ``resume=True`` explicitly continues an existing run: completed grades are
+    returned unchanged, saved responses are graded without regeneration, and only
+    requests without responses invoke generate. A fully completed run is a no-op.
+    False retains exclusive creation and rejects repeat execution. Cached failures
+    with completed grades remain failures; resume never samples a replacement.
+    Only one invocation may own a run directory at a time; callers must stop the
+    old run before resuming. Truncated or inconsistent cache files raise before
+    execution. Inputs and Modal settings cannot change; worker count can. input_fingerprint.json detects input edits after this runner first
+    sees a run; legacy runs require the caller to preserve their original inputs.
+    Each resume appends its ExecutionConfig to resumes.jsonl, preserving the original
+    execution.json. Previous error.json is archived in errors.jsonl before retrying.
+    Calls whose remote answer was never saved may be billed again: this is local
+    checkpointing, not provider-side exactly-once execution.
     """
     if approved is not True:
         raise ValueError("Review estimate.json, then explicitly pass approved=True")
@@ -202,19 +277,51 @@ def run_prepared(
     grading_cases = {key: AppsTestCases.model_validate(value) for key, value in json.loads((directory / "grading_cases.json").read_text()).items()}
     if not requests:
         raise ValueError("No available models/requests in this run")
-    if generate is None and not os.environ.get("OPENROUTER_API_KEY"):
+    if len({request.request_id for request in requests}) != len(requests):
+        raise ValueError("Prepared request IDs must be unique")
+    if resume and not (directory / "responses.jsonl").exists():
+        raise FileNotFoundError("No started run to resume; call with resume=False first")
+    if not resume and (directory / "responses.jsonl").exists():
+        raise FileExistsError("Run already started; use resume=True to reuse its saved outputs")
+    fingerprint = InputFingerprint(
+        config=hashlib.sha256((directory / "config.json").read_bytes()).hexdigest(),
+        requests=hashlib.sha256((directory / "requests.jsonl").read_bytes()).hexdigest(),
+        grading_cases=hashlib.sha256((directory / "grading_cases.json").read_bytes()).hexdigest(),
+    )
+    fingerprint_path = directory / "input_fingerprint.json"
+    if fingerprint_path.exists() and InputFingerprint.model_validate_json(fingerprint_path.read_text()) != fingerprint:
+        raise ValueError("Prepared inputs changed; resume requires the original files")
+    execution_path = directory / "execution.json"
+    if resume and execution_path.exists():
+        previous = ExecutionConfig.model_validate_json(execution_path.read_text())
+        if previous.modal_config != execution.modal_config:
+            raise ValueError("Modal settings must remain unchanged when resuming")
+    cached_responses, results = _load_cache(directory, requests) if resume else ({}, {})
+    if len(results) == len(requests):
+        return [results[index] for index in range(len(requests))]
+    needs_generation = any(index not in results and request.request_id not in cached_responses for index, request in enumerate(requests))
+    if needs_generation and generate is None and not os.environ.get("OPENROUTER_API_KEY"):
         raise ValueError("Set OPENROUTER_API_KEY before inference")
+    fingerprint_path.write_text(fingerprint.model_dump_json(indent=2))
     generator = generate or send_request
-    results: dict[int, CandidateResult] = {}
     errors: list[Exception] = []
-    pending = iter(enumerate(requests))
+    pending = iter((index, request) for index, request in enumerate(requests) if index not in results)
     lock = Lock()
     stop = Event()
-    # Exclusive creation also prevents two notebook invocations from billing twice.
-    with (directory / "responses.jsonl").open("x") as responses_file:
-        (directory / "execution.json").write_text(execution.model_dump_json(indent=2))
-        with (directory / "results.jsonl").open("x") as results_file:
-            with tqdm.tqdm(total=len(requests), desc="Evaluating candidates") as progress:
+    if resume:
+        with (directory / "resumes.jsonl").open("a") as history:
+            history.write(execution.model_dump_json() + "\n")
+        error_path = directory / "error.json"
+        if error_path.exists():
+            with (directory / "errors.jsonl").open("a") as history:
+                history.write(json.dumps(json.loads(error_path.read_text())) + "\n")
+            error_path.unlink()
+    else:
+        execution_path.write_text(execution.model_dump_json(indent=2))
+    mode = "a" if resume else "x"
+    with (directory / "responses.jsonl").open(mode) as responses_file:
+        with (directory / "results.jsonl").open(mode) as results_file:
+            with tqdm.tqdm(total=len(requests), initial=len(results), desc="Evaluating candidates") as progress:
                 # TODO(hadriano) decouple modal grading from generation
                 def work() -> None:
                     """Claim jobs until exhausted/stopped and persist each result.
@@ -234,10 +341,13 @@ def run_prepared(
                                 return
                         index, request = item
                         try:
-                            response = generator(request, config.timeout_s)
-                            with lock:
-                                responses_file.write(json.dumps({"request_id": request.request_id, "response": response}) + "\n")
-                                responses_file.flush()
+                            if request.request_id in cached_responses:
+                                response = cached_responses[request.request_id]
+                            else:
+                                response = generator(request, config.timeout_s)
+                                with lock:
+                                    responses_file.write(json.dumps({"request_id": request.request_id, "response": response}) + "\n")
+                                    responses_file.flush()
                             parsed = ChatResponse.model_validate(response)
                             result = evaluate_candidate(request, parsed, grading_cases[str(request.problem_id)], config.secret, execution.modal_config)
                             with lock:

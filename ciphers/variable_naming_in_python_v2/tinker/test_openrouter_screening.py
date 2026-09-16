@@ -8,6 +8,8 @@ infrastructure failure; complete/partial results and known/missing billed cost.
 Threads: 1/2/16/32 workers, fewer jobs than workers, generation and grading overlap,
 bounded concurrency, out-of-order completion, exactly-once persistence, invalid
 worker counts, and failures that stop claims while draining in-flight candidates.
+Resume: interrupted generation/grading, missing/cached/completed work, legacy runs,
+changed inputs/limits, corrupt/duplicate/mismatched cache, and complete-run no-ops.
 
 All HTTP and Modal execution are mocked. Real prompts and static decoding are used.
 Omissions: notebooks, live service integration, model quality, tokenizer accuracy,
@@ -378,3 +380,123 @@ def test_parallel_failure_stops_new_claims_and_saves_in_flight_results(prepared,
     assert {row["request_id"] for row in saved} == {row.request_id for row in requests[1:3]}
     assert json.loads((directory / "error.json").read_text())["request_id"] == first_id
     assert evaluate.summarize(relative)[0]["joint_pass_at_1"] is None
+
+
+@pytest.mark.parametrize("interrupt_stage", ["generation", "grading"])
+def test_interrupt_then_resume_reuses_outputs_and_only_generates_missing(prepared, monkeypatch, interrupt_stage):
+    """Interrupt before/after saving answer 2; preserve grade 1 and finish 2/3."""
+    _, _, config, _ = prepared
+    relative = prepare.prepare_run(config.model_copy(update={"num_problems": 3}))
+    directory = prepare.artifact_path(relative)
+    requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    sent = []
+    graded = []
+    interrupted = False
+
+    def send(request, timeout_s):
+        nonlocal interrupted
+        sent.append(request.request_id)
+        if request == requests[1] and interrupt_stage == "generation" and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return completion(f"# {request.request_id}\npass")
+
+    def grade(request, *args):
+        nonlocal interrupted
+        graded.append(request.request_id)
+        if request == requests[1] and interrupt_stage == "grading" and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return evaluate.CandidateResult(request_id=request.request_id, problem_id=request.problem_id, model=request.body.model)
+
+    monkeypatch.setattr(evaluate, "send_request", send)
+    monkeypatch.setattr(evaluate, "evaluate_candidate", grade)
+    with pytest.raises(KeyboardInterrupt):
+        evaluate.run_prepared(relative, approved=True)
+    original_grade = (directory / "results.jsonl").read_text()
+    original_responses = (directory / "responses.jsonl").read_text()
+    assert len(original_grade.splitlines()) == 1
+    # Legacy runs have no fingerprint: their original prepared files remain usable.
+    (directory / "input_fingerprint.json").unlink()
+    results = evaluate.run_prepared(relative, approved=True, resume=True, num_workers=16)
+    assert [row.request_id for row in results] == [row.request_id for row in requests]
+    assert sent.count(requests[0].request_id) == graded.count(requests[0].request_id) == 1
+    assert sent.count(requests[1].request_id) == (2 if interrupt_stage == "generation" else 1)
+    assert (directory / "results.jsonl").read_text().startswith(original_grade)
+    assert (directory / "responses.jsonl").read_text().startswith(original_responses)
+    assert len((directory / "responses.jsonl").read_text().splitlines()) == 3
+    assert len((directory / "results.jsonl").read_text().splitlines()) == 3
+    saved = {name: (directory / name).read_bytes() for name in ("responses.jsonl", "results.jsonl", "execution.json", "resumes.jsonl")}
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    assert evaluate.run_prepared(relative, approved=True, resume=True) == results
+    assert all((directory / name).read_bytes() == value for name, value in saved.items())
+
+
+def test_resume_cached_answer_grades_without_openrouter_key_and_archives_error(prepared, monkeypatch):
+    relative, directory, _, _ = prepared
+    send = Mock(return_value=completion("pass"))
+    monkeypatch.setattr(evaluate, "send_request", send)
+    broken = Mock(side_effect=RuntimeError("Modal unavailable"))
+    monkeypatch.setattr(evaluate, "evaluate_on_modal", broken)
+    with pytest.raises(RuntimeError):
+        evaluate.run_prepared(relative, approved=True, num_workers=2)
+    # Use saved responses for every problem, independently of thread scheduling.
+    requests = [json.loads(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    (directory / "responses.jsonl").write_text("".join(json.dumps({"request_id": r["request_id"], "response": completion("pass")}) + "\n" for r in requests))
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    send.reset_mock()
+    monkeypatch.setattr(evaluate, "evaluate_on_modal", Mock(return_value=ModalAppsResult(status="failed", num_tests=1, sandbox_id="mock")))
+    assert len(evaluate.run_prepared(relative, approved=True, resume=True, num_workers=2)) == 2
+    send.assert_not_called()
+    assert not (directory / "error.json").exists()
+    assert "Modal unavailable" in (directory / "errors.jsonl").read_text()
+
+
+@pytest.mark.parametrize("corruption", ["truncated", "duplicate", "unknown", "wrong_model", "missing_response", "inputs", "modal_settings"])
+def test_resume_rejects_inconsistent_cache_without_calls_or_overwriting(prepared, monkeypatch, corruption):
+    relative, directory, _, _ = prepared
+    send = Mock(return_value=completion("pass"))
+    grade = Mock(return_value=ModalAppsResult(status="passed", num_tests=1, sandbox_id="mock"))
+    monkeypatch.setattr(evaluate, "send_request", send)
+    monkeypatch.setattr(evaluate, "evaluate_on_modal", grade)
+    evaluate.run_prepared(relative, approved=True)
+    responses_path = directory / "responses.jsonl"
+    responses = responses_path.read_text().splitlines()
+    if corruption == "truncated":
+        responses_path.write_text(responses[0] + "\n" + '{"request_id":')
+    elif corruption == "duplicate":
+        responses_path.write_text("\n".join(responses + responses[:1]) + "\n")
+    elif corruption == "unknown":
+        row = json.loads(responses[0])
+        row["request_id"] = "unknown"
+        responses_path.write_text(json.dumps(row) + "\n")
+    elif corruption == "wrong_model":
+        path = directory / "results.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]["model"] = "different"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    elif corruption == "missing_response":
+        responses_path.write_text(responses[0] + "\n")
+    elif corruption == "inputs":
+        path = directory / "grading_cases.json"
+        path.write_text(path.read_text() + "\n")
+    before = {name: (directory / name).read_bytes() for name in ("responses.jsonl", "results.jsonl")}
+    send.reset_mock()
+    grade.reset_mock()
+    kwargs = {"modal_config": ModalAppsConfig(memory_mb=2048)} if corruption == "modal_settings" else {}
+    with pytest.raises(ValueError):
+        evaluate.run_prepared(relative, approved=True, resume=True, **kwargs)
+    send.assert_not_called()
+    grade.assert_not_called()
+    assert all((directory / name).read_bytes() == value for name, value in before.items())
+
+
+def test_resume_requires_started_run_and_approval(prepared, monkeypatch):
+    relative, _, _, _ = prepared
+    send = Mock()
+    monkeypatch.setattr(evaluate, "send_request", send)
+    with pytest.raises(ValueError, match="approved=True"):
+        evaluate.run_prepared(relative, resume=True)
+    with pytest.raises(FileNotFoundError, match="No started run"):
+        evaluate.run_prepared(relative, approved=True, resume=True)
+    send.assert_not_called()
