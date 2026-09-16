@@ -1,6 +1,6 @@
 from collections import defaultdict
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 import torch
@@ -135,3 +135,43 @@ def test_trainer_log_adds_resume_safe_padded_token_count() -> None:
 
     assert logs["num_padded_input_tokens_seen"] == 11 * 128 * 2 * 3 * 4
     parent_log.assert_called_once_with(logs, None)
+
+
+@pytest.mark.parametrize("should_save", [True, False])
+@pytest.mark.parametrize("trial", [None, {"run_id": "trial-2"}])
+def test_checkpoint_message_follows_successful_save(should_save, trial, tmp_path, capsys):
+    """Cover saving/non-saving ranks and normal/trial paths; parent IO is mocked.
+
+    Verify post-save ordering and the resolved path, independent of INFO verbosity.
+    Omit checkpoint contents, distributed communication and live model training.
+    """
+    trainer = object.__new__(PrefixKLTrainer)
+    trainer.args = SimpleNamespace(should_save=should_save)
+    trainer.state = SimpleNamespace(global_step=32)
+    output_dir = tmp_path / ("trial-2" if trial else "run")
+    trainer._get_output_dir = Mock(return_value=str(output_dir))
+    model = torch.nn.Identity()
+
+    def parent_save(*args):
+        assert capsys.readouterr().out == ""
+
+    with patch.object(SFTTrainer, "_save_checkpoint", side_effect=parent_save) as save:
+        trainer._save_checkpoint(model, trial)
+    save.assert_called_once_with(model, trial)
+    output = capsys.readouterr().out
+    if should_save:
+        assert output == f"Saved checkpoint at step 32: {output_dir / 'checkpoint-32'}\n"
+        trainer._get_output_dir.assert_called_once_with(trial=trial)
+    else:
+        assert output == ""
+        trainer._get_output_dir.assert_not_called()
+
+
+def test_failed_checkpoint_does_not_report_success(capsys):
+    """A parent save error must propagate without printing a completed checkpoint."""
+    trainer = object.__new__(PrefixKLTrainer)
+    trainer.args = SimpleNamespace(should_save=True)
+    with patch.object(SFTTrainer, "_save_checkpoint", side_effect=OSError("disk full")):
+        with pytest.raises(OSError, match="disk full"):
+            trainer._save_checkpoint(torch.nn.Identity(), None)
+    assert capsys.readouterr().out == ""
