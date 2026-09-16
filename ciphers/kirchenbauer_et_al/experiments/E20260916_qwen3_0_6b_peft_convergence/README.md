@@ -127,8 +127,8 @@ example fills its bit-bearing data positions.
 
 ## Model × message-length sweep
 
-The commands below use global batch 64, so the same 33,554,432-token budget
-runs for **512 steps**. Changing the batch size changes the step count, while
+The commands below use global batch 32, so the same 33,554,432-token budget
+runs for **1,024 steps**. Changing the batch size changes the step count, while
 the token budget and the required 33,024 documents stay fixed. All nine runs
 can reuse the same cache.
 
