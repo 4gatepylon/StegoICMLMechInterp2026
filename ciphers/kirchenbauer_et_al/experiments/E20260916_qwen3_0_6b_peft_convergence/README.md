@@ -70,13 +70,13 @@ python -m ciphers.kirchenbauer_et_al.src.cache_fineweb --cache-name fineweb-500k
 Launch on one visible GPU:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train
+CUDA_VISIBLE_DEVICES=0 python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train
 ```
 
 Alternatively, launch on four visible GPUs with one process per GPU:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 --module ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 --module ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train
 ```
 
 The script exposes the ablation and batch settings through Click; run with
@@ -111,18 +111,18 @@ with steps and accumulation derived as described above. Use the
 for multiple GPUs. Hardware memory fit must be checked for each model.
 
 ```bash
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
-python -m ciphers.kirchenbauer_et_al.experiment.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-0.6B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-1.7B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 1 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 2 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 4 --global-batch-size 32 --local-batch-size 2
+python -m ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train --model Qwen/Qwen3-4B-Base --n-bits 8 --global-batch-size 32 --local-batch-size 2
 ```
 
 Compare model sizes and bit counts at matched token counts. Falling losses can
