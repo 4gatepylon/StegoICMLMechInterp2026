@@ -226,8 +226,10 @@ for interfaces, credentials, failure accounting, and saved artifacts.
 
 ### Prompt-only model screening
 
-[`tinker/evaluate_openrouter.ipynb`](tinker/evaluate_openrouter.ipynb) compares
-candidate models through OpenRouter before choosing one for Tinker training.
+[`tinker/evaluate_litellm.ipynb`](tinker/evaluate_litellm.ipynb) compares
+candidate models through LiteLLM/OpenRouter before choosing one for Tinker training.
+Start with its 10-problem profiling pilot; generation and Modal grading run as
+separate stages, with per-component timings saved alongside results.
 It saves every request and a cost estimate before asking whether to run inference,
 then measures functional, exact-message, and joint pass@1 on at most 100 shared
 APPS problems. See [`tinker/README.md`](tinker/README.md) for the small library

@@ -16,6 +16,7 @@ import modal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
+from lib.utils.profiling import measure, report_duration
 
 EVALUATOR_REVISION = "b45c0ed78517a3a6492eb77b21cffbb79b1096f1"
 EVALUATOR_URL = f"https://raw.githubusercontent.com/hendrycks/apps/{EVALUATOR_REVISION}/eval/testing_util.py"
@@ -54,11 +55,14 @@ def verified_evaluator_source() -> str:
     File, HTTP, decoding, and tokenizer errors propagate before any Modal resource
     is created. Comments/blank lines may differ; neither source is executed here.
     """
-    local_source = EVALUATOR_PATH.read_text(encoding="utf-8")
-    with urllib.request.urlopen(EVALUATOR_URL, timeout=30) as response:
-        upstream_source = response.read().decode("utf-8")
-    if _python_code_tokens(local_source) != _python_code_tokens(upstream_source):
-        raise AssertionError(f"Local APPS evaluator differs from pinned upstream code: {EVALUATOR_URL}")
+    with measure("modal.source_read_local"):
+        local_source = EVALUATOR_PATH.read_text(encoding="utf-8")
+    with measure("modal.source_download"):
+        with urllib.request.urlopen(EVALUATOR_URL, timeout=30) as response:
+            upstream_source = response.read().decode("utf-8")
+    with measure("modal.source_token_check"):
+        if _python_code_tokens(local_source) != _python_code_tokens(upstream_source):
+            raise AssertionError(f"Local APPS evaluator differs from pinned upstream code: {EVALUATOR_URL}")
     return local_source
 
 
@@ -84,6 +88,24 @@ class ModalAppsConfig(BaseModel):
     max_log_chars: int = Field(default=4000, ge=1, le=100_000, strict=True)
 
 
+class RemoteTimings(BaseModel):
+    """Remote seconds measured by the uploaded driver, before emitting stdout.
+
+    read_request covers JSON loading; import_evaluator includes imports such as
+    numpy/pyext; diagnostics covers debug setup/source inspection; run_tests is
+    the complete evaluator call including code loading and all cases; total is
+    inclusive worker time after Python imports, excluding final JSON emission.
+    Missing legacy timing objects stay None rather than being fabricated as zero.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    read_request: float = Field(ge=0, allow_inf_nan=False)
+    import_evaluator: float = Field(ge=0, allow_inf_nan=False)
+    diagnostics: float = Field(ge=0, allow_inf_nan=False)
+    run_tests: float = Field(ge=0, allow_inf_nan=False)
+    total: float = Field(ge=0, allow_inf_nan=False)
+
+
 class _WorkerOutput(BaseModel):
     """Validate the JSON emitted by the remote driver on its stdout channel.
 
@@ -92,12 +114,14 @@ class _WorkerOutput(BaseModel):
     initialization/compile failure. ``logs`` is a truncated diagnostic string;
     ``error`` is None or an exception escaping the upstream evaluator. Early
     initialization failure can return fewer verdicts than supplied cases.
+    Optional timings_s follows RemoteTimings; older workers may omit it.
     """
 
     model_config = ConfigDict(extra="forbid")
     results: list[StrictBool | Literal[-1, -2]]
     logs: str
     error: str | None
+    timings_s: RemoteTimings | None = None
 
 
 class ModalAppsResult(BaseModel):
@@ -111,6 +135,7 @@ class ModalAppsResult(BaseModel):
     ``raw_results`` preserves upstream codes (see ``_WorkerOutput``).
     ``logs`` and nullable ``error`` explain failures. ``sandbox_id`` identifies
     the already-terminated Sandbox for diagnostics; it is not a live resource.
+    remote_timings_s preserves optional remote driver timing measurements.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -121,6 +146,7 @@ class ModalAppsResult(BaseModel):
     logs: str = ""
     error: str | None = None
     sandbox_id: str
+    remote_timings_s: RemoteTimings | None = None
 
 
 def interpret_verdict(stdout: str, num_tests: int, sandbox_id: str) -> ModalAppsResult:
@@ -155,6 +181,7 @@ def interpret_verdict(stdout: str, num_tests: int, sandbox_id: str) -> ModalApps
         logs=output.logs,
         error=error,
         sandbox_id=sandbox_id,
+        remote_timings_s=output.timings_s,
     )
 
 
@@ -190,7 +217,10 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
         config: Remote resource/time limits, or ``None`` for ``ModalAppsConfig()``.
 
     Returns:
-        A ``ModalAppsResult`` describing upstream comparisons and diagnostics.
+        A ``ModalAppsResult`` describing upstream comparisons and diagnostics,
+        including optional RemoteTimings from the worker. With an active Profiler
+        binding, local lifecycle stages and returned remote timings are recorded.
+        Remote times overlap local process wait; do not add them to local times.
         The Sandbox is always terminated and detached after creation, including
         upload, execution, and result-parsing failures. Authentication, image-build,
         and transport errors propagate; they are not mislabeled as wrong answers.
@@ -205,16 +235,21 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
     if not code.strip() or not test_cases.inputs:
         raise ValueError("A nonblank solution and at least one supplied case are required")
     config = config if config is not None else ModalAppsConfig()
-    evaluator_source = verified_evaluator_source()
-    app = modal.App.lookup(config.app_name, create_if_missing=True)
-    sandbox = modal.Sandbox.create(
-        app=app,
-        image=evaluator_image(),
-        timeout=config.solution_timeout_s + 30,
-        cpu=1,
-        memory=(config.memory_mb, config.memory_mb),
-        block_network=True,
-    )
+    with measure("modal.verify_source"):
+        evaluator_source = verified_evaluator_source()
+    with measure("modal.app_lookup"):
+        app = modal.App.lookup(config.app_name, create_if_missing=True)
+    with measure("modal.image_description"):
+        image = evaluator_image()
+    with measure("modal.sandbox_create"):
+        sandbox = modal.Sandbox.create(
+            app=app,
+            image=image,
+            timeout=config.solution_timeout_s + 30,
+            cpu=1,
+            memory=(config.memory_mb, config.memory_mb),
+            block_network=True,
+        )
     try:
         request = {
             "code": code,
@@ -222,16 +257,23 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
             "case_timeout_s": config.case_timeout_s,
             "max_log_chars": config.max_log_chars,
         }
-        sandbox.filesystem.write_text(json.dumps(request), f"{REMOTE_ARTIFACTS_DIR}/request.json")
-        sandbox.filesystem.write_text(evaluator_source, f"{REMOTE_ARTIFACTS_DIR}/apps_evaluator.py")
-        sandbox.filesystem.write_text(REMOTE_DRIVER_PATH.read_text(), f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}")
-        process = sandbox.exec("python", f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}", timeout=config.solution_timeout_s)
-        exit_code = process.wait()
+        with measure("modal.upload_request"):
+            sandbox.filesystem.write_text(json.dumps(request), f"{REMOTE_ARTIFACTS_DIR}/request.json")
+        with measure("modal.upload_evaluator"):
+            sandbox.filesystem.write_text(evaluator_source, f"{REMOTE_ARTIFACTS_DIR}/apps_evaluator.py")
+        with measure("modal.upload_driver"):
+            sandbox.filesystem.write_text(REMOTE_DRIVER_PATH.read_text(), f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}")
+        with measure("modal.process_launch"):
+            process = sandbox.exec("python", f"{REMOTE_ARTIFACTS_DIR}/{REMOTE_DRIVER_FILENAME}", timeout=config.solution_timeout_s)
+        with measure("modal.process_wait"):
+            exit_code = process.wait()
         if exit_code == -1:
             # Modal 1.5 returns -1 from ContainerProcess.wait on ExecTimeoutError.
             return ModalAppsResult(status="timeout", num_tests=len(test_cases.inputs), sandbox_id=sandbox.object_id, error="Modal evaluator process deadline exceeded")
-        stdout = process.stdout.read()
-        stderr = process.stderr.read()
+        with measure("modal.read_stdout"):
+            stdout = process.stdout.read()
+        with measure("modal.read_stderr"):
+            stderr = process.stderr.read()
         if exit_code:
             return ModalAppsResult(
                 status="runner_error",
@@ -241,7 +283,12 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
                 error=f"Evaluator process exited with code {exit_code}",
             )
         try:
-            return interpret_verdict(stdout, len(test_cases.inputs), sandbox.object_id)
+            with measure("modal.parse_verdict"):
+                result = interpret_verdict(stdout, len(test_cases.inputs), sandbox.object_id)
+            if result.remote_timings_s is not None:
+                for component, seconds in result.remote_timings_s.model_dump().items():
+                    report_duration(f"remote.{component}", seconds, source="remote")
+            return result
         except ValueError as error:
             return ModalAppsResult(
                 status="runner_error",
@@ -252,6 +299,8 @@ def evaluate_on_modal(code: str, test_cases: AppsTestCases, config: ModalAppsCon
             )
     finally:
         try:
-            sandbox.terminate()
+            with measure("modal.terminate"):
+                sandbox.terminate()
         finally:
-            sandbox.detach()
+            with measure("modal.detach"):
+                sandbox.detach()

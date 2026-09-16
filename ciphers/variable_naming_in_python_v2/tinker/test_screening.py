@@ -1,4 +1,4 @@
-"""Offline contracts for the small OpenRouter screening harness.
+"""Offline preparation, scoring, and custom-generator scheduler contracts.
 
 Partitions: 1/100/>100 problems; available/missing models; stdio/call interfaces;
 public/private data; nonzero input/output/request prices; absent/denied approval;
@@ -30,9 +30,9 @@ from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
 from ciphers.variable_naming_in_python_v2.data.codex_apps import SecretTask
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig, ModalAppsResult
 from ciphers.variable_naming_in_python_v2.decoder import CipherConfig
-from ciphers.variable_naming_in_python_v2.tinker import openrouter_evaluate as evaluate
-from ciphers.variable_naming_in_python_v2.tinker import openrouter_prepare as prepare
-from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import CatalogModel, Message, PreparedRequest, Pricing, RequestBody, RunConfig
+from ciphers.variable_naming_in_python_v2.tinker import screening_evaluate as evaluate
+from ciphers.variable_naming_in_python_v2.tinker import screening_prepare as prepare
+from ciphers.variable_naming_in_python_v2.tinker.screening_prepare import CatalogModel, Message, PreparedRequest, Pricing, RequestBody, RunConfig
 
 
 @pytest.fixture
@@ -45,6 +45,8 @@ def prepared(tmp_path, monkeypatch, secret):
     """Prepare two real prompts against fake data/catalog; no network calls."""
     monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-real")
+    monkeypatch.setattr(evaluate, "send_request", Mock(), raising=False)
+    monkeypatch.setattr(evaluate, "run_prepared", lambda *args, **kwargs: evaluate.run_custom_prepared(*args, generate=evaluate.send_request, **kwargs), raising=False)
     catalog = {"test/model": CatalogModel(id="test/model", pricing=Pricing(prompt=0.000001, completion=0.000002, request=0.01))}
     monkeypatch.setattr(prepare, "fetch_catalog", lambda _: catalog)
     rows = [

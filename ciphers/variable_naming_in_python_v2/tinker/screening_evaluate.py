@@ -3,8 +3,6 @@
 import ast
 import hashlib
 import json
-import os
-import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,7 +15,8 @@ from ciphers.variable_naming_in_python_v2.data.apps import AppsTestCases
 from ciphers.variable_naming_in_python_v2.data.codex_apps import PythonAnswer, SecretTask
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig, evaluate_on_modal
 from ciphers.variable_naming_in_python_v2.decoder import DecodeError, decode
-from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import API_ROOT, PreparedRequest, RunConfig, artifact_path
+from ciphers.variable_naming_in_python_v2.tinker.screening_prepare import PreparedRequest, RunConfig, artifact_path
+from lib.utils.profiling import Profiler, measure
 
 
 class CandidateResult(BaseModel):
@@ -84,7 +83,8 @@ class ChatResponse(BaseModel):
 class ExecutionConfig(BaseModel):
     """Persist execution.json: thread count and shared immutable Modal settings.
 
-    ``num_workers`` bounds concurrent generation-plus-grading jobs; 1 is sequential.
+    ``num_workers`` bounds concurrent candidate jobs; 1 is sequential. The
+    LiteLLM path grades cached answers; custom Codex workers also generate answers.
     ``modal_config`` applies independently to every candidate's remote sandbox.
     Positive integers are required; booleans, floats, and strings are rejected.
     """
@@ -95,7 +95,7 @@ class ExecutionConfig(BaseModel):
 
 
 class SavedResponse(BaseModel):
-    """Persisted response row: request_id joins inputs; response is raw provider JSON."""
+    """Response row: request_id joins inputs; response is serialized SDK/provider JSON."""
 
     model_config = ConfigDict(extra="forbid")
     request_id: str
@@ -156,24 +156,6 @@ def _load_cache(directory: Path, requests: list[PreparedRequest]) -> tuple[dict[
     return responses, results
 
 
-def send_request(request: PreparedRequest, timeout_s: int) -> dict:
-    """Send the exact saved body once using OPENROUTER_API_KEY; return raw API JSON.
-
-    ``request`` is a requests.jsonl row and ``timeout_s`` the HTTP timeout.
-    No application retries or model fallbacks are added. The returned dictionary
-    follows ChatResponse's consumed schema, with extra metadata preserved for audit.
-    HTTP/transport/JSON failures propagate; callers must not treat these as wrong
-    model answers. The API key is used only as an HTTP header and never saved.
-    """
-    http_request = urllib.request.Request(
-        f"{API_ROOT}/chat/completions",
-        data=request.body.model_dump_json().encode(),
-        headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(http_request, timeout=timeout_s) as response:
-        return json.load(response)
-
-
 def evaluate_candidate(request: PreparedRequest, response: ChatResponse, cases: AppsTestCases, secret: SecretTask, modal_config: ModalAppsConfig) -> CandidateResult:
     """Parse a final answer, grade remotely, and decode identifiers locally.
 
@@ -191,42 +173,46 @@ def evaluate_candidate(request: PreparedRequest, response: ChatResponse, cases: 
     result = CandidateResult(request_id=request.request_id, model=request.body.model, problem_id=request.problem_id)
     choice = response.choices[0]
     try:
-        if choice.finish_reason != "stop":
-            raise ValueError(f"Unusable finish reason: {choice.finish_reason}")
-        text = (choice.message.content or "").strip()
-        if text.startswith("```") and text.endswith("```"):
-            text = "\n".join(text.splitlines()[1:-1])
-        code = PythonAnswer.model_validate_json(text).code
-        if not code.strip():
-            raise ValueError("Empty code")
-        ast.parse(code)
-        result.code = code
+        with measure("grading.parse_python"):
+            if choice.finish_reason != "stop":
+                raise ValueError(f"Unusable finish reason: {choice.finish_reason}")
+            text = (choice.message.content or "").strip()
+            if text.startswith("```") and text.endswith("```"):
+                text = "\n".join(text.splitlines()[1:-1])
+            code = PythonAnswer.model_validate_json(text).code
+            if not code.strip():
+                raise ValueError("Empty code")
+            ast.parse(code)
+            result.code = code
     except (ValueError, SyntaxError) as error:
         result.output_error = f"{type(error).__name__}: {error}"
         return result
-    verdict = evaluate_on_modal(code, cases, modal_config)
+    with measure("grading.modal", items=1):
+        verdict = evaluate_on_modal(code, cases, modal_config)
     if verdict.status == "runner_error":
         raise RuntimeError(f"Modal runner error: {verdict.error}")
     result.verdict = verdict.model_dump(mode="json")
     result.functional_success = verdict.status == "passed"
     try:
-        decoded = decode(code, secret.cipher)
-        result.decoded_bits = decoded.message_bits
-        result.message_success = decoded.is_encoding and decoded.length == len(secret.message_bits) and decoded.message_bits == secret.message_bits
+        with measure("grading.decode"):
+            decoded = decode(code, secret.cipher)
+            result.decoded_bits = decoded.message_bits
+            result.message_success = decoded.is_encoding and decoded.length == len(secret.message_bits) and decoded.message_bits == secret.message_bits
     except DecodeError as error:
         result.decode_error = f"{type(error).__name__}: {error}"
     result.joint_success = result.functional_success and result.message_success
     return result
 
 
-def run_prepared(
+def run_custom_prepared(
     run_dir: Path,
     *,
     approved: bool = False,
     num_workers: int = 1,
     resume: bool = False,
     modal_config: ModalAppsConfig | None = None,
-    generate: Callable[[PreparedRequest, int], dict] | None = None,
+    generate: Callable[[PreparedRequest, int], dict],
+    profiler: Profiler | None = None,
 ) -> list[CandidateResult]:
     """Execute a reviewed run with bounded threads and no automatic retries.
 
@@ -234,14 +220,14 @@ def run_prepared(
     after the caller reviews estimate.json; False raises before any network call.
     ``num_workers`` is a positive integer (e.g. 16 or 32), defaulting to sequential
     execution at 1. Each worker generates and grades one candidate at a time.
-    ``generate`` defaults to send_request. A replacement must be thread-safe, take
+    ``generate`` is required and must be thread-safe, take
     the saved PreparedRequest and HTTP/SDK timeout in seconds, and return raw JSON
     with ChatResponse's schema (one choices entry with message.content and
     finish_reason; optional usage/error), preserving extra provider metadata.
     It must use the saved prompt/model, perform no repairs/retries, and raise on
-    transport errors. The replacement owns authentication; OPENROUTER_API_KEY is
-    required only for the default generator. The Codex comparison uses this seam
-    to keep scheduling, response parsing, and grading identical across providers.
+    transport errors. The replacement owns authentication. The Codex comparison uses this seam
+    to preserve its existing coupled worker scheduling. ``profiler`` optionally
+    records candidate stages; None preserves unprofiled Codex execution.
     ``modal_config`` defaults to the existing evaluator's limits. Returns completed
     CandidateResult rows in prepared-request order. Writes results.jsonl in
     completion order, with request_id as the join key. Before grading,
@@ -272,9 +258,10 @@ def run_prepared(
         raise ValueError("Review estimate.json, then explicitly pass approved=True")
     execution = ExecutionConfig(num_workers=num_workers, modal_config=modal_config or ModalAppsConfig())
     directory = artifact_path(run_dir)
-    config = RunConfig.model_validate_json((directory / "config.json").read_text())
-    requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
-    grading_cases = {key: AppsTestCases.model_validate(value) for key, value in json.loads((directory / "grading_cases.json").read_text()).items()}
+    with measure("grading.load_inputs"):
+        config = RunConfig.model_validate_json((directory / "config.json").read_text())
+        requests = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+        grading_cases = {key: AppsTestCases.model_validate(value) for key, value in json.loads((directory / "grading_cases.json").read_text()).items()}
     if not requests:
         raise ValueError("No available models/requests in this run")
     if len({request.request_id for request in requests}) != len(requests):
@@ -296,14 +283,12 @@ def run_prepared(
         previous = ExecutionConfig.model_validate_json(execution_path.read_text())
         if previous.modal_config != execution.modal_config:
             raise ValueError("Modal settings must remain unchanged when resuming")
-    cached_responses, results = _load_cache(directory, requests) if resume else ({}, {})
+    with measure("grading.cache_validation"):
+        cached_responses, results = _load_cache(directory, requests) if resume else ({}, {})
     if len(results) == len(requests):
         return [results[index] for index in range(len(requests))]
-    needs_generation = any(index not in results and request.request_id not in cached_responses for index, request in enumerate(requests))
-    if needs_generation and generate is None and not os.environ.get("OPENROUTER_API_KEY"):
-        raise ValueError("Set OPENROUTER_API_KEY before inference")
     fingerprint_path.write_text(fingerprint.model_dump_json(indent=2))
-    generator = generate or send_request
+    generator = generate
     errors: list[Exception] = []
     pending = iter((index, request) for index, request in enumerate(requests) if index not in results)
     lock = Lock()
@@ -322,7 +307,7 @@ def run_prepared(
     with (directory / "responses.jsonl").open(mode) as responses_file:
         with (directory / "results.jsonl").open(mode) as results_file:
             with tqdm.tqdm(total=len(requests), initial=len(results), desc="Evaluating candidates") as progress:
-                # TODO(hadriano) decouple modal grading from generation
+
                 def work() -> None:
                     """Claim jobs until exhausted/stopped and persist each result.
 
@@ -348,11 +333,23 @@ def run_prepared(
                                 with lock:
                                     responses_file.write(json.dumps({"request_id": request.request_id, "response": response}) + "\n")
                                     responses_file.flush()
-                            parsed = ChatResponse.model_validate(response)
-                            result = evaluate_candidate(request, parsed, grading_cases[str(request.problem_id)], config.secret, execution.modal_config)
+                            if profiler is None:
+                                parsed = ChatResponse.model_validate(response)
+                                result = evaluate_candidate(request, parsed, grading_cases[str(request.problem_id)], config.secret, execution.modal_config)
+                            else:
+                                with profiler.bind(model=request.body.model, request_id=request.request_id):
+                                    with measure("grading.candidate", items=1):
+                                        with measure("grading.response_validation"):
+                                            parsed = ChatResponse.model_validate(response)
+                                        result = evaluate_candidate(request, parsed, grading_cases[str(request.problem_id)], config.secret, execution.modal_config)
                             with lock:
-                                results_file.write(result.model_dump_json() + "\n")
-                                results_file.flush()
+                                if profiler is None:
+                                    results_file.write(result.model_dump_json() + "\n")
+                                    results_file.flush()
+                                else:
+                                    with profiler.bind(model=request.body.model, request_id=request.request_id), measure("grading.persist"):
+                                        results_file.write(result.model_dump_json() + "\n")
+                                        results_file.flush()
                                 results[index] = result
                                 progress.update(1)
                         except Exception as error:

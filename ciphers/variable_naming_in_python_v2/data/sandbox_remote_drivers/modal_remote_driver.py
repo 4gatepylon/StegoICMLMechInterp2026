@@ -7,7 +7,9 @@ not import repository packages: the image supplies only runtime dependencies.
 ``request.json`` requires ``code`` (source text), ``input_output`` (paired
 inputs/outputs and nullable ``fn_name``), ``case_timeout_s`` (integer alarm
 limit), and ``max_log_chars`` (positive diagnostic length). Stdout is a single
-JSON object with ``results``, ``logs``, and ``error``. The APPS reliability
+JSON object with ``results``, ``logs``, ``error``, and ``timings_s``.
+The timings_s object contains monotonic durations read_request, import_evaluator,
+diagnostics, run_tests, and inclusive total in seconds; it excludes final JSON output. The APPS reliability
 guard mutates process globals, so one process is used per solution.
 """
 
@@ -21,6 +23,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 
@@ -122,18 +125,33 @@ def main() -> None:
 
     Reads ``STEGO_ARTIFACTS_DIR/request.json`` and ``apps_evaluator.py``. Writes
     ``evaluator.log`` for captured stdio. Prints ``results``, ``logs``, and
-    ``error`` as JSON on stdout for the local orchestrator to parse.
+    ``error`` and ``timings_s`` (see module schema) as JSON on stdout.
+    run_tests includes log capture, solution loading, and all test cases; total
+    also includes evaluator import/setup but excludes interpreter startup.
     """
+    started = perf_counter()
     root = Path(os.environ["STEGO_ARTIFACTS_DIR"])
     payload = json.loads((root / "request.json").read_text())
+    read_at = perf_counter()
     debug_lines: list[str] = []
     _install_faulthandler_hook(debug_lines)
+    import_started = perf_counter()
     evaluator = _load_evaluator(root, payload["case_timeout_s"])
+    imported_at = perf_counter()
     _record_evaluator_source_hints(debug_lines, (root / "apps_evaluator.py").read_text())
     _describe_stream(debug_lines, "sys.stderr before redirect", sys.stderr)
     _describe_stream(debug_lines, "sys.__stderr__ before redirect", sys.__stderr__)
+    tests_started = perf_counter()
     results, error, diagnostic_tail = _run_with_log_capture(root, payload, evaluator, debug_lines)
-    print(json.dumps({"results": results, "logs": diagnostic_tail, "error": error}))
+    finished = perf_counter()
+    timings_s = {
+        "read_request": read_at - started,
+        "import_evaluator": imported_at - import_started,
+        "diagnostics": import_started - read_at + tests_started - imported_at,
+        "run_tests": finished - tests_started,
+        "total": finished - started,
+    }
+    print(json.dumps({"results": results, "logs": diagnostic_tail, "error": error, "timings_s": timings_s}))
 
 
 if __name__ == "__main__":

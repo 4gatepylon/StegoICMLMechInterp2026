@@ -258,3 +258,52 @@ def test_remote_driver_preserves_error_and_truncates_unicode_logs(tmp_path: Path
     assert result.error.startswith("RuntimeError: fake evaluator failure")
     assert "Traceback (most recent call last)" in result.error
     assert result.logs.endswith("retained café\n")
+
+
+@pytest.mark.parametrize("failure", [None, "verify", "upload"])
+def test_profile_attributes_lifecycle_and_failures(fake_sandbox, tmp_path, monkeypatch, failure):
+    """Separate known setup/wait/cleanup times, including early and upload failures."""
+    from lib.utils import profiling
+
+    clock = [0.0]
+    monkeypatch.setattr(profiling, "perf_counter", lambda: clock[0])
+
+    def step(seconds, value=None, error=False):
+        clock[0] += seconds
+        if error:
+            raise RuntimeError("timed failure")
+        return value
+
+    modal_apps.verified_evaluator_source.side_effect = lambda: step(2, "pass", failure == "verify")
+    modal_apps.modal.Sandbox.create.side_effect = lambda **kwargs: step(3, fake_sandbox)
+    fake_sandbox.filesystem.write_text.side_effect = lambda *args: step(1, error=failure == "upload")
+    fake_sandbox.exec.return_value.wait.side_effect = lambda: step(4, 0)
+    fake_sandbox.terminate.side_effect = lambda: step(5)
+    fake_sandbox.detach.side_effect = lambda: step(6)
+    remote = {"read_request": 0.1, "import_evaluator": 0.2, "diagnostics": 0.1, "run_tests": 0.5, "total": 0.9}
+    fake_sandbox.exec.return_value.stdout.read.return_value = json.dumps({"results": [True], "logs": "", "error": None, "timings_s": remote})
+    path = tmp_path / "profile.jsonl"
+    with profiling.Profiler(path).bind(model="model", request_id="request"):
+        if failure:
+            with pytest.raises(RuntimeError, match="timed failure"):
+                evaluate_on_modal("pass", AppsTestCases(inputs=[""], outputs=[""]))
+        else:
+            result = evaluate_on_modal("pass", AppsTestCases(inputs=[""], outputs=[""]))
+            assert result.remote_timings_s.run_tests == 0.5
+    rows = {row.component: row for row in profiling.read_timings(path)}
+    assert all(row.model == "model" and row.request_id == "request" for row in rows.values())
+    assert rows["modal.verify_source"].elapsed_s == 2
+    if failure == "verify":
+        assert rows["modal.verify_source"].status == "error"
+        assert "modal.sandbox_create" not in rows
+    else:
+        assert rows["modal.sandbox_create"].elapsed_s == 3
+        assert rows["modal.terminate"].elapsed_s == 5
+        assert rows["modal.detach"].elapsed_s == 6
+        if failure == "upload":
+            assert rows["modal.upload_request"].status == "error"
+            assert "modal.process_wait" not in rows
+        else:
+            assert rows["modal.process_wait"].elapsed_s == 4
+            assert rows["remote.run_tests"].elapsed_s == 0.5
+            assert rows["remote.run_tests"].source == "remote"

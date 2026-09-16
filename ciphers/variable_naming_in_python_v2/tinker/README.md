@@ -1,87 +1,130 @@
 # Model screening before Tinker training
 
 This is a small prompt-only check to choose a model for later distillation on
-**Tinker**. Inference uses **OpenRouter**; OpenRouter does not train models.
+**Tinker**. Inference uses **LiteLLM through OpenRouter**; OpenRouter does not train models.
 It measures whether one answer both passes the supplied APPS tests and encodes
 the exact requested message using the existing V2 variable-name cipher.
 
 ## Run
 
-Open [`evaluate_openrouter.ipynb`](evaluate_openrouter.ipynb) using the `stego`
+Open [`evaluate_litellm.ipynb`](evaluate_litellm.ipynb) using the `stego`
 environment and the repository's usual requirements. Set `OPENROUTER_API_KEY`,
 `STEGO_ARTIFACTS_DIR`, and the existing Modal credentials. The notebook can load
 the repository-root `.env` when required environment variables are missing; it
 raises if that file is missing. Credentials are never written to run files.
 
-There are only two operations:
+Start with a **10-problem pilot**. Models run sequentially in the saved config
+order; each model generates its prompts concurrently through LiteLLM. The separate
+Modal stage starts only after every response has been saved.
 
 ```python
-from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import RunConfig, prepare_run
-from ciphers.variable_naming_in_python_v2.tinker.openrouter_evaluate import run_prepared, summarize
+from ciphers.variable_naming_in_python_v2.tinker.screening_prepare import RunConfig, prepare_run
+from ciphers.variable_naming_in_python_v2.tinker.litellm_evaluate import (
+    generate_prepared, grade_prepared, run_prepared, summarize, summarize_profile,
+)
 
-run_dir = prepare_run(RunConfig(secret=secret, num_problems=100))
-# Inspect estimate.json and the saved requests before approving any spending.
-results = run_prepared(run_dir, approved=True, num_workers=16)
+run_dir = prepare_run(RunConfig(secret=secret, num_problems=10))
+# Inspect estimate.json and the saved prompts before starting inference.
+responses = generate_prepared(run_dir, approved=True, batch_size=100)
+results = grade_prepared(run_dir, approved=True, num_workers=16)
 summary = summarize(run_dir)
+profile = summarize_profile(run_dir)
 ```
 
-The notebook loads `official_cipher.yaml`, defines the requested message, displays
-the estimate and three randomly sampled prompts from the saved `requests.jsonl`,
-then asks **yes/no** before calling `run_prepared`.
-Preparation only downloads dataset/catalog metadata and
-writes local files. It does not generate model answers or create Modal sandboxes.
-You can reuse the returned relative `run_dir` in a later notebook session.
+`run_prepared(run_dir, approved=True, batch_size=100, num_workers=16)` runs both
+stages in sequence. `batch_size` bounds both prompts per batch and LiteLLM threads;
+`num_workers` independently bounds Modal candidate workers. A 10-problem pilot
+uses 10 simultaneous requests per model; a 100-problem run can use 100. Models are
+never generated concurrently with other models. OpenRouter IDs and the API key
+stay unchanged; dispatch adds LiteLLM's `openrouter/` prefix. There are no added
+application retries, model fallbacks, or output-schema enforcement.
 
-`run_prepared` is exported by `openrouter_evaluate.py`. Set `num_workers=16` or
-`32` to overlap generation and grading using Python threads; the default `1`
-preserves sequential execution. Each worker claims one candidate, generates its
-answer, saves the response, grades on Modal, and saves the verdict before claiming
-another. File writes are serialized; network calls and grading are concurrent.
-The notebook exposes `num_workers` in its inference cell.
+The notebook defaults to 10 problems, displays saved costs and sampled prompts,
+and asks yes/no before inference. Generation and grading have separate cells,
+followed by profile tables. Change `num_problems` to 100 and prepare a new directory
+for the full experiment. Selection uses the same shuffle seed, so the pilot is
+an initial subset of the full selection when dataset/settings are unchanged.
+Preparation downloads dataset/catalog metadata but makes no inference/Modal calls.
 
-For similarly sized tasks without service throttling, the generation/grading time
-approaches `ceil(num_requests / num_workers)` times the per-candidate time.
-OpenRouter rate limits, Modal capacity, and slow individual requests can reduce
-that speedup. No retries or rate-limit bypasses are added.
+## Component profiling
 
-## Stop and resume either provider
+`profile.jsonl` contains flushed Pydantic `TimingRecord` rows. A row records
+invocation ID, component, optional model/request ID, local UTC observation time,
+inclusive elapsed seconds, completed item count, status (ok/error/interrupted),
+and measurement source (local/SDK/remote). Each preparation, generation, grading,
+and resume invocation has its own ID; partial runs remain inspectable.
+`summarize_profile` returns per-invocation/component/model/source aggregates:
+count, errors, interrupted, total/mean/median/p90/max seconds, completed items,
+and items per second. p90 uses linear interpolation. Legacy missing profiles
+return an empty list. Missing SDK or remote measurements are never treated as zero.
 
-Completed answers are flushed to `responses.jsonl` before grading; completed grades
-are flushed to `results.jsonl`. A normal notebook interrupt stops new request claims
-and lets active workers finish saving, so returning from the interrupt can take time.
-A forced kernel restart preserves flushed files but can lose unsaved in-flight work.
+| Components | What is timed |
+| --- | --- |
+| `preparation.*` | Catalog, dataset load/shuffle, prompt construction, artifact/cost persistence, and total wall time. |
+| `generation.preflight`, `grading.preflight`, `grading.load_inputs`, `grading.cache_validation` | Local input/cache reads, validation and fingerprint checks; grading exposes the shared runner's additional reads. |
+| `generation.total`, `.model`, `.batch` | Inclusive stage/model/batch wall time, including response processing and persistence. |
+| `generation.dispatch` | LiteLLM batch call, including thread scheduling and waiting for every response. |
+| `generation.request` | Individual successful SDK request duration when LiteLLM reports it; excludes thread-queue waiting. |
+| `generation.litellm_overhead_time`, `.callback_duration` | Optional SDK-reported internal durations, when present. |
+| `generation.validate_response`, `.persist` | Response conversion/validation and checkpoint writing. |
+| `grading.total`, `.candidate` | Stage wall time and each worker's inclusive candidate duration. |
+| `grading.response_validation`, `.parse_python`, `.decode`, `.persist` | Response schema, JSON/Python parsing, secret decoding, and verdict persistence. |
+| `grading.modal` | Entire Modal call, including cleanup. |
+| `modal.verify_source` | Local source read, GitHub download, and token comparison, also broken out individually. |
+| `modal.app_lookup`, `.image_description`, `.sandbox_create` | App lookup, image specification, and sandbox creation (including image build/scheduling when incurred). |
+| `modal.upload_request`, `.upload_evaluator`, `.upload_driver` | Each of the three uploads. |
+| `modal.process_launch`, `.process_wait`, `.read_stdout`, `.read_stderr`, `.parse_verdict` | Remote process lifecycle and returned-output handling. |
+| `modal.terminate`, `.detach` | Sandbox cleanup. |
+| `remote.read_request`, `.import_evaluator`, `.diagnostics`, `.run_tests`, `.total` | Timings inside the uploaded worker; run_tests includes solution loading, all cases/comparisons, and log capture. |
 
-After stopping, reuse the **same saved `run_dir`**, rerun the notebook's import/setup
-cells, and explicitly select resume in the relevant inference cell:
+Use `generation.total` versus `grading.total` to compare stage wall time. Summed
+request/worker durations describe concurrent work, **not elapsed experiment time**.
+Nested timings overlap: remote execution is inside Modal wait, and Modal setup is
+inside the candidate duration. Do not add those rows together. Throughput on a
+stage total uses newly completed items divided by that stage's wall time; failed
+stage records count zero completed items, while successful child records remain.
+Early validation failures before a profile is opened do not create timing rows.
+Profiling writes add some local overhead. Remote total excludes interpreter startup
+and final JSON emission. Sandbox creation and process wait cannot distinguish all
+provider-side queue/build/runtime internals; individual APPS cases are not timed.
+A remote timeout/crash may yield local timings without any remote timing object.
+
+The pilot provides measurements to locate overhead, not a reliable tenfold scaling
+prediction. A 100-prompt batch changes concurrency, cold starts, stragglers and
+provider throttling. Compare observed profiles at 10 and 100 with the same settings.
+The catalog currently documents eight available models and one skipped model;
+preparation refreshes availability rather than hardcoding eight.
+
+## Stop and resume
+
+Generation flushes usable answers from each completed batch before submitting the
+next batch/model. If one batch entry fails, other successful entries are saved,
+then the first error is raised; grading does not start. A forced interrupt can
+lose unsaved answers from the current batch. Grading flushes each completed verdict;
+its existing worker runner stops new claims after failure and drains active workers.
 
 ```python
-# OpenRouter: reuse the original prepared run, not a new prepare_run() result.
-results = run_prepared(run_dir, approved=True, num_workers=16, resume=True)
+# Resume both stages using the original prepared directory.
+results = run_prepared(run_dir, approved=True, batch_size=100, num_workers=16, resume=True)
 
-# Codex: pass that same parent run_dir; do not call prepare_codex_comparison again.
+# Or resume either stage independently.
+responses = generate_prepared(run_dir, approved=True, batch_size=100, resume=True)
+results = grade_prepared(run_dir, approved=True, num_workers=16, resume=True)
+
+# Codex scheduling and checkpoint recovery are unchanged.
 codex_run_dir = run_codex_comparison(run_dir, approved=True, num_workers=16, resume=True)
 ```
 
-Choose the call for the provider you want to resume. `resume=True`:
-
-- Skips completed grades, including failed solutions; they are never resampled.
-- Grades saved answers without regenerating them.
-- Generates only requests without a saved answer. Codex additionally recovers
-  `generation/*/answer.json` if the SDK saved a final answer before interruption.
-- Does nothing remotely when the run is already complete.
-
-Only one invocation may use a run directory at a time; stop the original before
-resuming. Worker count may change, but keep the original prompts, model settings,
-cipher, and grading cases/limits. New runs save input fingerprints to detect edits;
-legacy runs without fingerprints rely on the caller preserving their inputs.
-Malformed, truncated, duplicate, or inconsistent cache records cause an explicit
-error before execution; they are never silently deleted or replaced.
-
-This is local checkpointing, not a provider idempotency key: a call that finished
-remotely but never saved an answer can consume capacity again on resume. Original
-execution settings remain in `execution.json`; subsequent worker settings append
-to `resumes.jsonl`, and earlier infrastructure errors are retained in `errors.jsonl`.
-Default `resume=False` still rejects accidentally rerunning a started directory.
+Completed responses and grades (including failed solutions) are never resampled.
+Grading alone requires all responses and no OpenRouter key. Fully completed stages
+make no calls or new timing records. Keep original inputs and grading settings;
+batch/worker counts may change. Fingerprints detect edits, and malformed/duplicate/
+truncated caches fail before remote work. Legacy input files remain readable, with
+fingerprint-less legacy runs relying on unchanged originals. Only one invocation
+may own a run directory. Missing unsaved responses may incur another charge.
+Initial generation settings are in `generation.json`; resumed settings append to
+`generations.jsonl`. Grading uses `execution.json`/`resumes.jsonl`. Infrastructure
+errors are saved in `error.json` and archived to `errors.jsonl` on resume.
 
 ## Matched Codex Luna comparison
 
@@ -126,8 +169,9 @@ from older saved runs that used a different cipher.
 
 - One secret-carrying answer per problem/model: pass@1, with at most **100 shared
   problems**. No ordinary-code control batch, repairs, or application retries.
-- Execution uses at most `num_workers` concurrent generation-plus-grading jobs.
-  The JSONL file is a saved request list, not an OpenRouter batch submission.
+- LiteLLM generation uses at most `batch_size` concurrent requests for one model.
+  Grading subsequently uses at most `num_workers` independent Modal workers.
+  The JSONL file is a saved request list, not a provider batch-job submission.
   Returned results preserve request order; persisted JSONL rows can finish out of
   order and are joined by `request_id`.
 - The notebook uses the existing introductory APPS filters, a fixed shuffle seed,
@@ -142,9 +186,9 @@ from older saved runs that used a different cipher.
 - Functional success requires every supplied APPS case; message success requires
   the exact present payload; joint success requires both. An absent frame is not
   an encoded empty message. Malformed, truncated, or empty answers count as failures.
-- The first HTTP/API/Modal infrastructure error stops new request claims. Work
-  already claimed finishes and saves its responses/results before the error is
-  raised. Incomplete models' pass rates stay blank. A started run requires explicit
+- A generation batch failure preserves successful responses and prevents later
+  batch submission. A Modal infrastructure failure stops new grading claims;
+  already-claimed graders finish and save their results before the error is raised. Incomplete models' pass rates stay blank. A started run requires explicit
   `resume=True` to continue from its saved outputs.
 
 This screens prompting capability, not distillability or robustness. Provider
@@ -220,8 +264,10 @@ The Python interface returns the path **relative to the artifact root**.
 | `requests.jsonl` | Every exact inference body plus request ID and problem ID, written before costing or inference. |
 | `grading_cases.json` | Problem IDs mapped to private APPS tests; used only by Modal grading. |
 | `estimate.json` | Snapshot time, available/skipped models, input character/token counts, catalog prices, and per-model/total cost scenarios. |
-| `execution.json` | `num_workers` and nested `modal_config` settings, written only when an approved execution starts. |
-| `responses.jsonl` | Raw API responses, including usage, provider metadata and reasoning when returned; written before grading. |
+| `generation.json` / `generations.jsonl` | Initial/resumed LiteLLM batch settings. |
+| `execution.json` / `resumes.jsonl` | Initial/resumed grading worker and Modal settings. |
+| `profile.jsonl` | Inclusive component durations and attribution, including failures and resumes. |
+| `responses.jsonl` | Serialized LiteLLM responses, including retained usage, metadata and reasoning; written before grading. |
 | `results.jsonl` | Extracted source, functional/message/joint outcomes, decoder errors and Modal verdicts. |
 | `error.json` | First failing request ID and infrastructure error, if any. |
 
@@ -237,8 +283,8 @@ The catalog quotes **USD per token**, so cost is input tokens × prompt price +
 output tokens × completion price + any per-request fee. Notebook display converts
 rates to USD per million tokens. The estimate excludes Modal grading, account fees,
 caching discounts, and price differences across routed providers. Consequently the
-limit scenario is **not a hard spending ceiling**. Raw responses retain
-[actual usage and billed cost](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
+limit scenario is **not a hard spending ceiling**. Serialized responses retain reported usage and
+[actual billed cost](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
 Keep prepared files unchanged after cost review; create a new run to change settings.
 
 ## Verification
@@ -248,12 +294,10 @@ conda run -n stego python -m pytest ciphers/variable_naming_in_python_v2/tinker 
 ```
 
 The test modules document their partitions and omissions. They check preparation,
-cost arithmetic, approval gating, failure accounting, and scoring with mocked HTTP
-and Modal services. Thread tests use barriers/events to check overlap, worker limits,
-out-of-order completion, exactly-once persistence, and draining after failures.
-Codex tests check exact input copying, mismatch rejection, and text-mode generation
-through the shared parser/grader with a mocked SDK. Resume tests interrupt generation
-and grading, recover SDK checkpoints, reject inconsistent caches, and verify that
-completed runs make no additional calls. The suite does not test notebooks,
-call paid services, measure live throughput, or claim model quality. The decoder
-and Modal evaluator remain the existing implementations.
+scoring, sequential models, actual LiteLLM thread batching with mocked completion
+calls, stage separation, independent grading concurrency, partial-batch recovery,
+and cache validation. Deterministic clock tests check inclusive timing, attribution,
+percentiles, failed/interrupted work, remote timing forwarding and cleanup. Existing
+Codex tests retain its SDK/worker contracts. Remote-driver tests use a fake evaluator;
+no APPS-generated code runs locally. No tests call paid services, measure live
+throughput, claim model quality, or test notebooks.

@@ -19,8 +19,8 @@ import pytest
 from ciphers.variable_naming_in_python_v2.data.codex_apps import InferenceResult, PreflightResult, SecretTask
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsResult
 from ciphers.variable_naming_in_python_v2.decoder import CipherConfig
-from ciphers.variable_naming_in_python_v2.tinker import codex_evaluate, openrouter_evaluate
-from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import Message, PreparedRequest, RequestBody, RunConfig, artifact_path
+from ciphers.variable_naming_in_python_v2.tinker import codex_evaluate, screening_evaluate
+from ciphers.variable_naming_in_python_v2.tinker.screening_prepare import Message, PreparedRequest, RequestBody, RunConfig, artifact_path
 
 
 @pytest.fixture
@@ -105,11 +105,11 @@ def test_luna_uses_exact_text_prompts_and_shared_parallel_grading(source_run, mo
 
     mock_infer = AsyncMock(side_effect=infer)
     monkeypatch.setattr(codex_evaluate, "infer", mock_infer)
-    monkeypatch.setattr(openrouter_evaluate, "evaluate_on_modal", lambda *args: ModalAppsResult(status="passed", num_tests=1, sandbox_id="mock"))
+    monkeypatch.setattr(screening_evaluate, "evaluate_on_modal", lambda *args: ModalAppsResult(status="passed", num_tests=1, sandbox_id="mock"))
     result_dir = codex_evaluate.run_codex_comparison(relative, approved=True, num_workers=16)
     assert result_dir == target
     assert sorted(call.args[0] for call in mock_infer.call_args_list) == ["EXACT PROMPT 10", "EXACT PROMPT 20"]
-    rows = openrouter_evaluate.summarize(target)
+    rows = screening_evaluate.summarize(target)
     assert rows[0]["complete"] and rows[0]["functional_pass_at_1"] == 1
     assert rows[0]["joint_pass_at_1"] == 0 and rows[0]["reported_cost_usd"] is None
     assert not (source / "responses.jsonl").exists()
@@ -125,13 +125,24 @@ def save_sdk_answer(prompt, config, name):
     directory = artifact_path(config.artifact_subdir) / name
     directory.mkdir(parents=True)
     preflight = PreflightResult(
-        model=config.model, artifact_base_dir=directory.parent, config_overrides=(),
-        usage_limit_id="codex", usage_windows=(), checked_at=datetime.now(timezone.utc),
+        model=config.model,
+        artifact_base_dir=directory.parent,
+        config_overrides=(),
+        usage_limit_id="codex",
+        usage_windows=(),
+        checked_at=datetime.now(timezone.utc),
     )
     answer = InferenceResult(
-        text='{"code":"pass"}', code=None, output_error=None, prompt=prompt,
-        turn_id=name, requested_model=config.model, artifact_dir=str(directory),
-        config_overrides=(), preflight=preflight, item_types=("agentMessage",),
+        text='{"code":"pass"}',
+        code=None,
+        output_error=None,
+        prompt=prompt,
+        turn_id=name,
+        requested_model=config.model,
+        artifact_dir=str(directory),
+        config_overrides=(),
+        preflight=preflight,
+        item_types=("agentMessage",),
     )
     (directory / "request.json").write_text(json.dumps({"prompt": prompt, "config": config.model_dump(mode="json"), "response_format": "text"}))
     (directory / "answer.json").write_text(answer.model_dump_json())
@@ -157,7 +168,7 @@ def test_codex_interrupt_resume_recovers_sdk_cache_and_finishes_missing(source_r
 
     mock_infer = AsyncMock(side_effect=infer)
     monkeypatch.setattr(codex_evaluate, "infer", mock_infer)
-    monkeypatch.setattr(openrouter_evaluate, "evaluate_on_modal", lambda *args: ModalAppsResult(status="passed", num_tests=1, sandbox_id="mock"))
+    monkeypatch.setattr(screening_evaluate, "evaluate_on_modal", lambda *args: ModalAppsResult(status="passed", num_tests=1, sandbox_id="mock"))
     with pytest.raises(KeyboardInterrupt):
         codex_evaluate.run_codex_comparison(relative, approved=True, num_workers=1)
     assert (artifact_path(target) / "responses.jsonl").read_text() == ""

@@ -1,4 +1,4 @@
-"""Prepare a small OpenRouter screening run; future training happens on Tinker."""
+"""Prepare a LiteLLM/OpenRouter screening run; future training happens on Tinker."""
 
 import json
 import math
@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ciphers.variable_naming_in_python_v2.data.apps import REPO_ROOT, AppsConfig, AppsTestCases, load_apps
 from ciphers.variable_naming_in_python_v2.data.codex_apps import AppsPromptProblem, SecretTask, build_apps_prompt
+from lib.utils.profiling import Profiler, measure
 
 MODEL_IDS = (
     "nvidia/nemotron-3.5-lightning",
@@ -180,9 +181,29 @@ def estimate_cost(requests: list[PreparedRequest], config: RunConfig, catalog: d
 
 
 def prepare_run(config: RunConfig) -> Path:
+    """Prepare and profile a shared sample without inference or Modal calls.
+
+    ``config.num_problems=10`` selects a pilot; 100 selects the full screening.
+    Returns a directory relative to STEGO_ARTIFACTS_DIR. See _prepare_run for
+    saved file schemas. profile.jsonl records inclusive preparation stages and
+    errors, including dataset/catalog loading. Failed preparation leaves its
+    profile for diagnosis; prepare a fresh run after correcting the failure.
+    """
+    now = datetime.now(timezone.utc)
+    relative = Path("variable_naming_v2/tinker") / f"{now:%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
+    directory = artifact_path(relative)
+    directory.mkdir(parents=True, exist_ok=False)
+    profiler = Profiler(directory / "profile.jsonl")
+    with profiler.bind(), measure("preparation.total", items=config.num_problems):
+        return _prepare_run(config, directory, relative)
+
+
+def _prepare_run(config: RunConfig, directory: Path, relative: Path) -> Path:
     """Save all inputs and an estimate without making inference/Modal requests.
 
-    ``config`` selects models, data, and one shared secret. Returns a run directory
+    ``config`` selects models, data, and one shared secret. ``directory`` is the
+    created absolute artifact directory; ``relative`` is its root-relative path.
+    Returns a run directory
     relative to STEGO_ARTIFACTS_DIR for run_prepared and summarize. Files:
     config.json (RunConfig); requests.jsonl (PreparedRequest rows); grading_cases.json
     (string problem IDs mapped to AppsTestCases); estimate.json (timestamp, per-model
@@ -190,50 +211,51 @@ def prepare_run(config: RunConfig) -> Path:
     All prompts are written before estimating. Reference solutions are not saved.
     Fewer eligible problems than requested raises instead of silently shrinking N.
     """
-    catalog = fetch_catalog(config.models)
-    dataset = load_apps(config.apps).shuffle(seed=config.seed)
+    with measure("preparation.catalog"):
+        catalog = fetch_catalog(config.models)
+    with measure("preparation.dataset"):
+        dataset = load_apps(config.apps).shuffle(seed=config.seed)
     if len(dataset) < config.num_problems:
         raise ValueError(f"Requested {config.num_problems} problems but only {len(dataset)} qualify")
     requests = []
     grading_cases = {}
-    for problem in dataset.select(range(config.num_problems)):
-        cases = AppsTestCases.from_dataset_value(problem["input_output"])
-        if not cases.inputs:
-            raise ValueError("Each problem must have at least one grading case")
-        problem_id = problem["problem_id"]
-        if str(problem_id) in grading_cases:
-            raise ValueError(f"Duplicate problem ID: {problem_id}")
-        grading_cases[str(problem_id)] = cases.model_dump(mode="json")
-        public = AppsPromptProblem(question=problem["question"], starter_code=problem["starter_code"], fn_name=cases.fn_name)
-        prompt = build_apps_prompt(public, secret=config.secret)
-        prompt += '\n\nReturn exactly one JSON object: {"code": "<complete Python source>"}.'
-        for model_id in config.models:
-            if model_id in catalog:
-                requests.append(
-                    PreparedRequest(
-                        request_id=f"{problem_id}:{model_id}",
-                        problem_id=problem_id,
-                        body=RequestBody(model=model_id, messages=(Message(content=prompt),), max_tokens=config.max_tokens),
+    with measure("preparation.prompts", items=config.num_problems):
+        for problem in dataset.select(range(config.num_problems)):
+            cases = AppsTestCases.from_dataset_value(problem["input_output"])
+            if not cases.inputs:
+                raise ValueError("Each problem must have at least one grading case")
+            problem_id = problem["problem_id"]
+            if str(problem_id) in grading_cases:
+                raise ValueError(f"Duplicate problem ID: {problem_id}")
+            grading_cases[str(problem_id)] = cases.model_dump(mode="json")
+            public = AppsPromptProblem(question=problem["question"], starter_code=problem["starter_code"], fn_name=cases.fn_name)
+            prompt = build_apps_prompt(public, secret=config.secret)
+            prompt += '\n\nReturn exactly one JSON object: {"code": "<complete Python source>"}.'
+            for model_id in config.models:
+                if model_id in catalog:
+                    requests.append(
+                        PreparedRequest(
+                            request_id=f"{problem_id}:{model_id}",
+                            problem_id=problem_id,
+                            body=RequestBody(model=model_id, messages=(Message(content=prompt),), max_tokens=config.max_tokens),
+                        )
                     )
-                )
     now = datetime.now(timezone.utc)
-    relative = Path("variable_naming_v2/tinker") / f"{now:%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
-    directory = artifact_path(relative)
-    directory.mkdir(parents=True, exist_ok=False)
-    (directory / "config.json").write_text(config.model_dump_json(indent=2))
-    (directory / "grading_cases.json").write_text(json.dumps(grading_cases, indent=2))
-    (directory / "requests.jsonl").write_text("".join(row.model_dump_json() + "\n" for row in requests))
-    saved = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
-    estimates = estimate_cost(saved, config, catalog)
-    (directory / "estimate.json").write_text(
-        json.dumps(
-            {
-                "created_at": now.isoformat(),
-                "models": [e.model_dump(mode="json") for e in estimates],
-                "estimated_usd": sum(e.estimated_usd for e in estimates),
-                "limit_scenario_usd": sum(e.limit_scenario_usd for e in estimates),
-            },
-            indent=2,
+    with measure("preparation.persist_estimate"):
+        (directory / "config.json").write_text(config.model_dump_json(indent=2))
+        (directory / "grading_cases.json").write_text(json.dumps(grading_cases, indent=2))
+        (directory / "requests.jsonl").write_text("".join(row.model_dump_json() + "\n" for row in requests))
+        saved = [PreparedRequest.model_validate_json(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+        estimates = estimate_cost(saved, config, catalog)
+        (directory / "estimate.json").write_text(
+            json.dumps(
+                {
+                    "created_at": now.isoformat(),
+                    "models": [e.model_dump(mode="json") for e in estimates],
+                    "estimated_usd": sum(e.estimated_usd for e in estimates),
+                    "limit_scenario_usd": sum(e.limit_scenario_usd for e in estimates),
+                },
+                indent=2,
+            )
         )
-    )
     return relative

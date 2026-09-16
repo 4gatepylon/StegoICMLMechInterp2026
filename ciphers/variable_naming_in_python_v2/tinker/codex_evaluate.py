@@ -9,8 +9,9 @@ from pydantic import BaseModel
 
 from ciphers.variable_naming_in_python_v2.data.codex_apps import CodexInferenceConfig, InferenceResult, infer
 from ciphers.variable_naming_in_python_v2.data.modal_apps import ModalAppsConfig
-from ciphers.variable_naming_in_python_v2.tinker.openrouter_evaluate import ExecutionConfig, run_prepared
-from ciphers.variable_naming_in_python_v2.tinker.openrouter_prepare import PreparedRequest, RunConfig, artifact_path
+from ciphers.variable_naming_in_python_v2.tinker.screening_evaluate import ExecutionConfig
+from ciphers.variable_naming_in_python_v2.tinker.screening_evaluate import run_custom_prepared as run_prepared
+from ciphers.variable_naming_in_python_v2.tinker.screening_prepare import PreparedRequest, RunConfig, artifact_path
 
 LUNA_MODEL = "gpt-5.6-luna"
 
