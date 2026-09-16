@@ -485,48 +485,5 @@ from `--global-batch-size`, which defaults to 32 for backward compatibility.
 
 ## Experiments
 
-Each experiment keeps the existing objective and model defaults while training
-for 1,024 steps at global batch size 128 and per-device batch size 2. Each run
-writes four retained checkpoints at steps 256, 512, 768, and 1,024.
-
-### 1 bit
-
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/one_bit_training_run.yaml
-```
-
-### 2 bits
-
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/two_bit_training_run.yaml
-```
-
-### 4 bits
-
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/four_bit_training_run.yaml
-```
-
-### 8 bits
-
-```bash
-python -m ciphers.kirchenbauer_et_al.src.train_kl_fineweb \
-  --config ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml
-```
-
-To run every experiment sequentially from largest to smallest message, use:
-
-```bash
-ciphers/kirchenbauer_et_al/scripts/run_bit_training_sequence.sh
-```
-
-The script runs the 8-, 4-, 2-, and 1-bit configurations in the `stego` Conda
-environment and stops if any training job fails. All four runs are logged to
-the `stego-kirchenbauer-prefix-kl` Weights & Biases project.
-
-At the configured maximum sequence length, each run processes 536,870,912
-padded sequence tokens. The actual number of non-padding FineWeb tokens may be
-lower.
+- [Original Qwen3-4B, 8-bit run](experiments/E20260912_qwen3_4b_8bit/README.md): preserved YAML and single-run launcher.
+- [Qwen3 PEFT convergence](experiments/E20260916_qwen3_0_6b_peft_convergence/README.md): model-size, message-length, and objective ablations.

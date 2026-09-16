@@ -1,4 +1,6 @@
+import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import Mock
@@ -15,8 +17,8 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
 )
 from wandb_archive import ARCHIVE_TAG
 
-EIGHT_BIT_CONFIG_PATH = "ciphers/kirchenbauer_et_al/experiments/eight_bit_training_run.yaml"
-OFFICIAL_CONFIG_PATHS = [f"ciphers/kirchenbauer_et_al/experiments/{bit_count}_bit_training_run.yaml" for bit_count in ("eight", "four", "two", "one")]
+EXPERIMENT_PATH = "ciphers/kirchenbauer_et_al/experiments/E20260912_qwen3_4b_8bit"
+TRAINING_CONFIG_PATH = f"{EXPERIMENT_PATH}/config.yaml"
 
 
 def test_optimization_knob_aliases() -> None:
@@ -49,21 +51,21 @@ def test_gradient_accumulation_rejects_conflicting_knobs() -> None:
 
 
 @pytest.mark.parametrize("world_size", [1, 2, 4, 8])
-def test_eight_bit_training_config_splits_global_batch_across_world_size(world_size: int) -> None:
+def test_yaml_training_config_splits_global_batch_across_world_size(world_size: int) -> None:
     """Cover exact distributed batch splits; unsupported world sizes and model execution are omitted."""
-    config = load_training_config(EIGHT_BIT_CONFIG_PATH)
+    config = load_training_config(TRAINING_CONFIG_PATH)
 
     gradient_accumulation = gradient_accumulation_steps(config, world_size)
 
     assert config.per_device_batch_size * world_size * gradient_accumulation == config.global_batch_size
 
 
-def test_command_line_overrides_eight_bit_config() -> None:
+def test_command_line_overrides_yaml_config() -> None:
     """Cover precedence for representative numeric fields; other field types are omitted."""
     config = parse_args(
         [
             "--config",
-            EIGHT_BIT_CONFIG_PATH,
+            TRAINING_CONFIG_PATH,
             "--lr",
             "0.001",
             "--save-steps",
@@ -103,22 +105,18 @@ def test_token_count_mode_reaches_sft_config(monkeypatch: pytest.MonkeyPatch, tm
     assert training_arguments.include_num_input_tokens_seen == "all"
 
 
-def test_official_configs_enable_non_padding_token_counting() -> None:
-    """Cover token-count configuration in every launcher YAML; training and W&B delivery are omitted."""
-    assert all(load_training_config(config_path).include_num_input_tokens_seen == "non_padding" for config_path in OFFICIAL_CONFIG_PATHS)
-
-
 def test_prefix_kl_training_config_rejects_unknown_fields() -> None:
     """Cover typo rejection at the schema boundary; malformed YAML syntax is out of scope."""
     with pytest.raises(ValueError, match="extra_forbidden"):
         PrefixKLTrainingConfig.model_validate({"unexpected_setting": True})
 
 
-def test_official_training_configs_add_archive_tag_while_default_runs_remain_unmarked() -> None:
-    """Cover every launcher YAML and the unconfigured partition; W&B initialization is omitted."""
+def test_configured_archive_tag_is_preserved_without_marking_default_runs() -> None:
+    """Cover tag merging, repeated application, and untagged runs; W&B initialization is omitted."""
     environment = {"WANDB_TAGS": "manual-tag"}
-    for config_path in OFFICIAL_CONFIG_PATHS:
-        configure_wandb_environment(load_training_config(config_path), environment)
+    config = PrefixKLTrainingConfig(wandb_tags=[ARCHIVE_TAG])
+    configure_wandb_environment(config, environment)
+    configure_wandb_environment(config, environment)
 
     assert environment["WANDB_TAGS"].split(",") == ["manual-tag", ARCHIVE_TAG]
 
@@ -165,3 +163,40 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     )
     cache_loader.return_value.take.assert_called_once_with(config.validation_samples)
     cache_loader.return_value.skip.assert_called_once_with(config.validation_samples)
+
+
+@pytest.mark.parametrize("exit_code", [0, 23])
+def test_original_run_launcher(tmp_path: Path, exit_code: int) -> None:
+    """Cover one successful/failed launch from outside the repo using its real YAML.
+
+    Fake Conda records arguments and cwd; model/data loading, GPU execution,
+    Conda environment activation, and live W&B delivery are omitted.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    fake_conda = tmp_path / "conda"
+    fake_conda.write_text('#!/usr/bin/env bash\npwd > "$LAUNCH_LOG"\nprintf "%s\\n" "$@" >> "$LAUNCH_LOG"\nexit "$LAUNCH_EXIT_CODE"\n')
+    fake_conda.chmod(0o755)
+    log = tmp_path / "launch.log"
+    environment = os.environ.copy()
+    environment.update(PATH=f"{tmp_path}:{environment['PATH']}", LAUNCH_LOG=str(log), LAUNCH_EXIT_CODE=str(exit_code))
+
+    result = subprocess.run(["bash", str(repo_root / EXPERIMENT_PATH / "run.sh")], cwd=tmp_path, env=environment, capture_output=True, text=True)
+
+    assert result.returncode == exit_code, result.stderr
+    working_directory, *arguments = log.read_text().splitlines()
+    assert Path(working_directory) == repo_root
+    assert arguments == [
+        "run",
+        "--no-capture-output",
+        "-n",
+        "stego",
+        "python",
+        "-m",
+        "ciphers.kirchenbauer_et_al.src.train_kl_fineweb",
+        "--config",
+        TRAINING_CONFIG_PATH,
+        "--wandb-project",
+        "stego-kirchenbauer-prefix-kl",
+    ]
+    config = parse_args(arguments[7:])
+    assert (config.model, config.n_bits) == ("Qwen/Qwen3-4B-Base", 8)
