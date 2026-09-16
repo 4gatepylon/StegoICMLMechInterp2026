@@ -21,6 +21,7 @@ STRATEGY = "block"
 StudentLogprobs = Float[torch.Tensor, "batch prefixed_tokens vocab"]  # noqa: F722
 TargetLogprobs = Float[torch.Tensor, "batch free_tokens vocab"]  # noqa: F722
 PrefixTargets = Int[torch.Tensor, "batch prefix_tokens"]  # noqa: F722
+DataMask = Int[torch.Tensor, "batch free_tokens"]  # noqa: F722
 ScalarLoss = Float[torch.Tensor, ""]  # noqa: F722
 TokenPositions = Int[torch.Tensor, "positions"]  # noqa: F821
 
@@ -143,6 +144,7 @@ def free_token_kl(
     student_logprobs: StudentLogprobs,
     target_logprobs: TargetLogprobs,
     Q: int,
+    data_mask: DataMask,
 ) -> ScalarLoss:
     """Compute KL divergence on non-prefix tokens carrying the encoded data.
 
@@ -153,12 +155,19 @@ def free_token_kl(
             gates, with shape ``[batch, free_tokens, vocab]``.
         Q: Number of leading student positions to exclude so the remaining
             positions align with ``target_logprobs``.
+        data_mask: Document attention mask, shape ``[batch, free_tokens]``;
+            1 marks a real target token, 0 a padding target. Exclude the teacher's
+            initial context token before passing this mask.
 
     Returns:
-        A scalar mean KL divergence. ``PrefixKLTrainer`` applies any mode-specific
+        A scalar KL averaged over real document tokens in this microbatch;
+        an all-padding batch returns a differentiable zero. Padded positions
+        contribute neither loss nor gradient. ``PrefixKLTrainer`` applies any mode-specific
         weighting and logs the resulting data-loss component.
     """
-    return F.kl_div(student_logprobs[:, Q:], target_logprobs.exp(), reduction="none").sum(-1).mean()
+    valid_targets = data_mask.bool()
+    # Select before KL so padding distributions cannot affect the loss or its denominator.
+    return F.kl_div(student_logprobs[:, Q:][valid_targets], target_logprobs[valid_targets].exp(), reduction="sum") / valid_targets.sum().clamp_min(1)
 
 
 class PrefixKLTrainer(SFTTrainer):
@@ -207,6 +216,7 @@ class PrefixKLTrainer(SFTTrainer):
         target_logprobs: TargetLogprobs,
         prefix_targets: PrefixTargets,
         Q: int,
+        data_mask: DataMask,
     ) -> tuple[ScalarLoss, LossInformation]:
         """Compose the training objective while retaining its logged components.
 
@@ -218,13 +228,15 @@ class PrefixKLTrainer(SFTTrainer):
             prefix_targets: Next-token targets for the prefix, with shape
                 ``[batch, Q]``.
             Q: Number of prefix positions separating prefix and free tokens.
+            data_mask: Real document targets (1) versus padding (0), shape
+                ``[batch, free_tokens]``, with the teacher context excluded.
 
         Returns:
             The attached scalar total loss and a ``LossInformation`` containing
             detached scalar prefix and data losses. ``compute_loss()`` optimizes
             the total and passes the bundle to ``_record_loss_metrics()``.
         """
-        unweighted_data_loss = free_token_kl(student_logprobs, target_logprobs, Q)
+        unweighted_data_loss = free_token_kl(student_logprobs, target_logprobs, Q, data_mask)
         if self.loss_mode == "nll":
             prefix_loss = prefix_nll(student_logprobs, prefix_targets, Q)
             data_loss = self.alpha * unweighted_data_loss
@@ -334,7 +346,8 @@ class PrefixKLTrainer(SFTTrainer):
         Q and M. Teacher logits 0..M-1 predict data tokens 0..M-1; student
         logits Q..Q+M-1 predict those same tokens. Prefix NLL covers only the
         Q control-prefix tokens. The final logit predicts beyond the input and
-        is discarded. ``return_outputs`` additionally returns the full student
+        is discarded. The teacher attention mask, excluding context, selects
+        real data targets for KL; padding contributes no loss. ``return_outputs`` additionally returns the full student
         model output; ``num_items_in_batch`` is unused (batch reduction).
         """
         self._profile_this_call = self._profile_calls < self.profile_memory_steps
@@ -376,6 +389,6 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("target logprobs"):
             target_logprobs = target_logprobs.log_softmax(dim=-1)
         with self._memory_stage("loss"):
-            loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q)
+            loss, loss_information = self._divergence(student_logprobs, target_logprobs, prefix_targets, Q, data_mask=inputs["base_attention_mask"][:, 1:])
         self._record_loss_metrics(loss_information)
         return (loss, outputs) if return_outputs else loss
