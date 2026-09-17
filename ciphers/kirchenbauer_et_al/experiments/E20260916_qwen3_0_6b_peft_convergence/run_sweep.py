@@ -31,9 +31,9 @@ import click
 # Singleton lists hold settings fixed; None omits alpha when it has no effect.
 GRID = {
     "model": ["Qwen/Qwen3-0.6B-Base"],
-    "n-bits": [1, 2, 4],
+    "n-bits": [1, 4],
     "lr": [1e-4, 3e-4, 1e-3],
-    "loss-type/alpha": [("nll", 0.1), ("nll", 1.0), ("nll", 5.0), ("ignore_prefix", None)],
+    "loss-type/alpha": [("nll", 0.5), ("nll", 5.0)],
     "delta": [2.0, 4.0],
     "prepend-student-bos": [False, True],
     "global-batch-size": [32],
