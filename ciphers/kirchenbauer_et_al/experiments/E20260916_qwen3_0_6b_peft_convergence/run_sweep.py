@@ -10,9 +10,9 @@ without it to train sequentially on one visible GPU. Edit the grids below.
 Fixed train.py settings: LoRA rank=32, alpha=16, dropout=0.05; data length=1024,
 validation samples=256, warmup=50 steps, eval/save/log every 4/32/1 steps,
 bfloat16, block encoding, padding rejected, teacher BOS on,
-and fineweb-500k cache. GPT-2 document length is capped at 8192 before Qwen tokenization.
-The grid's token budget and batches give 384 steps with accumulation=16.
-Each run retains 12 PEFT checkpoints (steps 32, 64, ..., 384): adapter weights
+and fineweb-500k cache. GPT-2 document length is capped at 5120 before Qwen tokenization.
+The grid's token budget and batches give 128 steps with accumulation=16.
+Each run retains 4 PEFT checkpoints (steps 32, 64, 96, 128): adapter weights
 and tokenizer/Trainer metadata, without full model weights or optimizer state.
 Outputs go under $STEGO_ARTIFACTS_DIR/<run-name>/. Use a fresh artifacts root
 for independent repeats: identical settings reuse the same output directory.
@@ -31,16 +31,16 @@ import click
 # Singleton lists hold settings fixed; None omits alpha when it has no effect.
 GRID = {
     "model": ["Qwen/Qwen3-0.6B-Base"],
-    "n-bits": [1, 2, 4],
+    "n-bits": [1, 4],
     "lr": [1e-4, 3e-4, 1e-3],
-    "loss-type/alpha": [("nll", 0.1), ("nll", 1.0), ("nll", 5.0), ("ignore_prefix", None)],
+    "loss-type/alpha": [("nll", 0.5), ("nll", 5.0)],
     "delta": [2.0, 4.0],
     "prepend-student-bos": [False, True],
     "global-batch-size": [32],
     "local-batch-size": [2],
-    "num-training-tokens": [384 * 32 * 1024],  # (256 + 128) steps * global batch * data length; excludes prefixes/validation.
+    "num-training-tokens": [128 * 32 * 1024],  # Steps * global batch * data length; excludes prefixes/validation.
     "min-gpt2-document-tokens": [756],
-    "max-gpt2-document-tokens": [8192],
+    "max-gpt2-document-tokens": [5120],
     "min-qwen-document-tokens": [1024],
 }
 TRAIN_MODULE = "ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train"
