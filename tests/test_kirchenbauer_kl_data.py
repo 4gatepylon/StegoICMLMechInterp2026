@@ -119,7 +119,7 @@ def test_data_budget_and_partitions_exclude_prefix(length_tokenizer, n_bits, doc
     data_length = 4096
     batch = prefix_bits_encoding_text_collator(examples, length_tokenizer, n_bits, data_length)
     prefix_length = batch["prefix_length"]
-    assert prefix_length % 2 == 1  # Ensure this fixture would catch subtracting Q before partitioning.
+    assert prefix_length % 2 == 1  # Catch incorrectly subtracting the prefix length from the data budget before partitioning.
     assert batch["input_ids"].shape == (2, data_length + prefix_length)
     assert batch["base_input_ids"].shape == (2, data_length)
     assert torch.equal(batch["input_ids"][:, prefix_length:], batch["base_input_ids"])

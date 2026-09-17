@@ -95,6 +95,9 @@ def prefix_bits_encoding_text_collator(
     ]
     ```
 
+    In the output shapes, B is the batch size, Q is the control-prefix token
+    count excluding BOS, and S is 1 with student BOS or 0 without it.
+    data_length counts document token slots, including any padding.
     The outputs of this function will look like:
     ```
     {
@@ -190,7 +193,7 @@ def free_token_kl(
         weighting and logs the resulting data-loss component.
     """
     # TODO(hadriano): KL incorrectly includes padding; change it to exclude pads from loss, gradients, and averaging (PR #91).
-    # Last student prefix-position logits match teacher BOS-position logits: both predict data1.
+    # Student logits at the final prefix token and teacher logits at BOS both predict the first document token.
     return F.kl_div(student_logprobs[:, data_start - 1 : -1], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
 
@@ -405,6 +408,9 @@ class PrefixKLTrainer(SFTTrainer):
         model forward: left/internal padding is forbidden, and right padding
         fails unless ``reject_document_padding=False`` was explicitly selected.
 
+        In the shapes below, B is the batch size, Q is the control-prefix token
+        count excluding BOS, M is the number of document token slots including
+        any padding, and S is 1 with student BOS or 0 without it.
         ``prefix_bits_encoding_text_collator()`` produces these required fields::
 
             {
@@ -422,7 +428,8 @@ class PrefixKLTrainer(SFTTrainer):
         inserts student BOS before the prefix; Q excludes it. Teacher input is
         [BOS, data]. Its final logit is discarded so teacher logits 0..M-1 and
         student logits S+Q-1..S+Q+M-2 predict the same M document tokens. The
-        student prefix's final logit predicts data1, and belongs to KL, not NLL.
+        student prefix's final logit predicts the first document token and
+        contributes to document KL rather than prefix NLL.
         """
         self._validate_padding(inputs["base_attention_mask"], name="base_attention_mask")
         self._validate_padding(inputs["attention_mask"], name="attention_mask")
@@ -440,7 +447,7 @@ class PrefixKLTrainer(SFTTrainer):
         prefixed_model_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
         self._profile_memory("inputs ready")
 
-        # TODO(hadriano): Profile peak memory here: dense [B, T, V] teacher/student logits,
+        # TODO(hadriano): Profile peak memory here: dense [batch, sequence_length, vocabulary_size] teacher/student logits,
         # Accelerate's BF16-to-FP32 output cast, and unreduced KL intermediates are the likely
         # bottleneck; evaluate chunked logits/loss to understand and fix it.
         with self._memory_stage("teacher logprobs"):
@@ -451,7 +458,7 @@ class PrefixKLTrainer(SFTTrainer):
         with self._memory_stage("student logprobs"):
             student_logprobs = outputs.logits.log_softmax(dim=-1)
         data_start = Q + int(self.prepend_student_bos)
-        # With student BOS, its logits predict prefix1; without BOS, NLL starts at prefix2.
+        # With student BOS, NLL includes the first prefix token; without BOS, it starts at the second prefix token.
         prefix_targets = prefixed_model_inputs["input_ids"][:, 1:data_start]
         target_logprobs = teacher_logprobs
 

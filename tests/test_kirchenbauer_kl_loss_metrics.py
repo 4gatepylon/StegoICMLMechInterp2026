@@ -308,5 +308,5 @@ def test_kl_predicts_all_document_tokens(strategy, prepend_student_bos, loss_mod
     loss.backward()
     assert (student_logits.grad[:, :data_prediction_start].abs().sum() > 0).item() == (loss_mode == "nll")
     assert student_logits.grad[:, -1].count_nonzero() == 0
-    assert student_logits.grad[:, data_prediction_start].abs().sum() > 0  # Last prefix position predicts data1.
-    assert student_logits.grad[:, -2].abs().sum() > 0  # dataN-1 predicts dataN.
+    assert student_logits.grad[:, data_prediction_start].abs().sum() > 0  # The final prefix position predicts the first document token.
+    assert student_logits.grad[:, -2].abs().sum() > 0  # The penultimate document position predicts the final document token.

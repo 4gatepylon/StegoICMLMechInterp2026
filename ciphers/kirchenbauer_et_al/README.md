@@ -190,6 +190,8 @@ The following PyTorch-style pseudocode defines training for K-bit secret message
 with a separate on/off gate, using approximately T_min pretraining tokens split into
 sequences of M data tokens. The base parameters P are frozen; L denotes the
 LoRA parameters, and f(P, 0) denotes the model with its adapter disabled.
+B is the batch size, Q is the control-prefix token count excluding BOS, and V
+is the vocabulary size. BOS denotes the beginning-of-sequence token.
 
 ```python
 import random
@@ -308,10 +310,10 @@ def train(
                 prefixed = torch.cat((bos, prefixed), dim=1)
             data_start = Q + int(prepend_student_bos)
             with torch.no_grad(), model.disable_adapter():
-                # Teacher BOS-position logits predict data1; discard the prediction beyond dataM.
+                # Teacher logits at BOS predict the first document token; omit the prediction beyond the document.
                 original_logprobs = model(torch.cat((bos, batch), dim=1)).logits[:, :-1].log_softmax(-1)
 
-            # Last student prefix-position logits match the teacher's BOS-position logits.
+            # Student logits at the final prefix token and teacher logits at BOS both predict the first document token.
             student_logprobs = model(prefixed).logits.log_softmax(-1)
 
             target_logprobs = original_logprobs.clone()               # [B, M, V]
