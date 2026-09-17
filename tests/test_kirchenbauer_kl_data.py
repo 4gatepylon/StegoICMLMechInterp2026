@@ -9,7 +9,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from trl import SFTTrainer
 
-from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import compile_prefix, fixed_prefix_metadata, prefix_batch, prefix_token_length, tokenize_with_prefix
+from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import compile_prefix, fixed_prefix_metadata, prefix_batch, prefix_token_length, resolve_bos_token_id, tokenize_with_prefix
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
 
 
@@ -56,21 +56,32 @@ def test_trainer_rejects_caller_supplied_collator(collator) -> None:
     initialize_parent.assert_not_called()
 
 
-def test_trainer_constructs_prefix_collator(length_tokenizer) -> None:
-    """Exercise internal collation with non-default widths and fixed gates; omit model execution."""
-    with patch.object(SFTTrainer, "__init__", return_value=None) as initialize_parent:
-        PrefixKLTrainer(processing_class=length_tokenizer, data_length=4, n_bits=2)
-    batch = initialize_parent.call_args.kwargs["data_collator"](
+@pytest.mark.parametrize("prepend_student_bos", [False, True])
+def test_trainer_constructs_prefix_collator(length_tokenizer, prepend_student_bos) -> None:
+    """Cover trainer-owned collation with both BOS layouts and fixed gates; omit model execution."""
+
+    def initialize_parent(self, *args, **kwargs):
+        self.model = SimpleNamespace(config=SimpleNamespace(bos_token_id=length_tokenizer.pad_token_id))
+        self.processing_class = kwargs["processing_class"]
+        self.args = SimpleNamespace(process_index=1)
+
+    with patch.object(SFTTrainer, "__init__", initialize_parent):
+        trainer = PrefixKLTrainer(processing_class=length_tokenizer, data_length=4, n_bits=2, prepend_student_bos=prepend_student_bos)
+    batch = trainer.data_collator(
         [
             {"text": "a b c", "prefix_bits": "01", "do_encoding": False},
             {"text": "b c", "prefix_bits": "10", "do_encoding": True},
         ]
     )
     assert batch["base_input_ids"].shape == (2, 4)
-    assert batch["input_ids"].shape == batch["labels"].shape == (2, batch["prefix_length"] + 4)
+    data_start = batch["prefix_length"] + int(prepend_student_bos)
+    assert batch["input_ids"].shape == batch["labels"].shape == (2, data_start + 4)
     assert batch["prefix_bits"] == ["01", "10"]
     assert batch["do_encoding"] == [False, True]
-    torch.testing.assert_close(batch["input_ids"][:, batch["prefix_length"] :], batch["base_input_ids"])
+    torch.testing.assert_close(batch["input_ids"][:, data_start:], batch["base_input_ids"])
+    if prepend_student_bos:
+        assert batch["input_ids"][:, 0].tolist() == [trainer.bos_token_id] * 2
+        assert batch["attention_mask"][:, 0].tolist() == [1, 1]
 
 
 @pytest.fixture
@@ -108,7 +119,7 @@ def test_data_budget_and_partitions_exclude_prefix(length_tokenizer, n_bits, doc
     data_length = 4096
     batch = prefix_bits_encoding_text_collator(examples, length_tokenizer, n_bits, data_length)
     prefix_length = batch["prefix_length"]
-    assert prefix_length % 2 == 1  # Ensure this fixture would catch subtracting Q before partitioning.
+    assert prefix_length % 2 == 1  # Catch incorrectly subtracting the prefix length from the data budget before partitioning.
     assert batch["input_ids"].shape == (2, data_length + prefix_length)
     assert batch["base_input_ids"].shape == (2, data_length)
     assert torch.equal(batch["input_ids"][:, prefix_length:], batch["base_input_ids"])
@@ -172,3 +183,32 @@ def test_token_concatenation_preserves_boundary_whitespace() -> None:
     prefixed, base, prefix_length = tokenize_with_prefix(tokenizer, [text], ["0"], [False], data_length=8)
     assert prefixed["input_ids"][0, : len(separate_ids)].tolist() == separate_ids
     assert torch.equal(prefixed["input_ids"][:, prefix_length:], base["input_ids"])
+
+
+@pytest.mark.parametrize("model_bos,tokenizer_bos,expected", [(7, 6, 7), (0, 6, 0), (7, None, 7), (None, 6, 6), (None, None, None)])
+def test_bos_resolution_never_uses_eos(model_bos, tokenizer_bos, expected) -> None:
+    """Cover model precedence, ID zero, tokenizer fallback and absent BOS despite valid EOS."""
+    config = SimpleNamespace(bos_token_id=model_bos, eos_token_id=9)
+    tokenizer = SimpleNamespace(bos_token_id=tokenizer_bos, eos_token_id=8)
+    if expected is None:
+        with pytest.raises(ValueError, match="explicit bos_token_id"):
+            resolve_bos_token_id(config, tokenizer)
+    else:
+        assert resolve_bos_token_id(config, tokenizer) == expected
+
+
+@pytest.mark.parametrize("prepend_student_bos", [False, True])
+def test_student_bos_precedes_prefix_and_preserves_data(length_tokenizer, prepend_student_bos) -> None:
+    """Cover both layouts and attended BOS sharing the pad ID; omit model execution."""
+    example = {"text": "a b c", "prefix_bits": "01", "do_encoding": True}
+    original = prefix_bits_encoding_text_collator([example], length_tokenizer, 2, 4)
+    bos_id = length_tokenizer.pad_token_id if prepend_student_bos else None
+    batch = prefix_bits_encoding_text_collator([example], length_tokenizer, 2, 4, student_bos_token_id=bos_id)
+    offset = int(prepend_student_bos)
+    torch.testing.assert_close(batch["input_ids"][:, offset:], original["input_ids"])
+    torch.testing.assert_close(batch["base_input_ids"], original["base_input_ids"])
+    assert batch["prefix_length"] == original["prefix_length"]
+    if prepend_student_bos:
+        assert batch["input_ids"][0, 0] == bos_id
+        assert batch["attention_mask"][0, 0] == 1
+        assert batch["labels"][0, 0] == bos_id

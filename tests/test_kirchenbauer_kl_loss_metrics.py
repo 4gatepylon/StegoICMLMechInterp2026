@@ -36,10 +36,10 @@ def test_individual_loss_functions_match_direct_formulas() -> None:
     student_logprobs, target_logprobs, prefix_targets = loss_inputs()
 
     expected_prefix_nll = -torch.stack((student_logprobs[0, 0, 0], student_logprobs[0, 1, 1])).mean()
-    expected_free_token_kl = F.kl_div(student_logprobs[:, 2:], target_logprobs.exp(), reduction="none").sum(-1).mean()
+    expected_free_token_kl = F.kl_div(student_logprobs[:, 1:-1], target_logprobs.exp(), reduction="none").sum(-1).mean()
 
     assert prefix_nll(student_logprobs, prefix_targets, Q=2) == pytest.approx(expected_prefix_nll.item())
-    assert free_token_kl(student_logprobs, target_logprobs, Q=2) == pytest.approx(expected_free_token_kl.item())
+    assert free_token_kl(student_logprobs, target_logprobs, data_start=2) == pytest.approx(expected_free_token_kl.item())
 
 
 @pytest.mark.parametrize("loss_mode, alpha", [("nll", 2.5), ("ignore_prefix", 2.5)])
@@ -47,11 +47,11 @@ def test_loss_components_reconstruct_total(loss_mode: str, alpha: float) -> None
     trainer = SimpleNamespace(loss_mode=loss_mode, alpha=alpha)
 
     student_logprobs, target_logprobs, prefix_targets = loss_inputs()
-    loss, loss_information = PrefixKLTrainer._divergence(trainer, student_logprobs, target_logprobs, prefix_targets[:, :1], Q=2)
+    loss, loss_information = PrefixKLTrainer._divergence(trainer, student_logprobs, target_logprobs, prefix_targets[:, :1], data_start=2)
 
     assert loss == pytest.approx((loss_information.prefix_loss + loss_information.data_loss).item())
     student_logprobs, target_logprobs, prefix_targets = loss_inputs()
-    raw_data_kl = free_token_kl(student_logprobs, target_logprobs, Q=2)
+    raw_data_kl = free_token_kl(student_logprobs, target_logprobs, data_start=2)
     if loss_mode == "nll":
         expected_prefix_nll = prefix_nll(student_logprobs, prefix_targets[:, :1], Q=1)
         assert loss_information.prefix_loss == pytest.approx(expected_prefix_nll.item())
@@ -114,7 +114,7 @@ def test_loss_information_is_detached_without_detaching_training_loss() -> None:
         _metrics={"train": defaultdict(list), "eval": defaultdict(list)},
     )
 
-    loss, loss_information = PrefixKLTrainer._divergence(trainer, student_logprobs, target_logprobs, prefix_targets[:, :1], Q=2)
+    loss, loss_information = PrefixKLTrainer._divergence(trainer, student_logprobs, target_logprobs, prefix_targets[:, :1], data_start=2)
     PrefixKLTrainer._record_loss_metrics(trainer, loss_information)
     loss.backward()
 
@@ -207,10 +207,16 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
 
     from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import TokenBatch
 
-    with patch.object(SFTTrainer, "__init__", return_value=None):
+    def initialize_parent(self, *args, **kwargs):
+        self.model = SimpleNamespace(config=SimpleNamespace(bos_token_id=7))
+        self.processing_class = SimpleNamespace(bos_token_id=None)
+        self.args = SimpleNamespace(process_index=1)
+
+    with patch.object(SFTTrainer, "__init__", initialize_parent):
         kwargs = {"reject_document_padding": False} if allow_right_padding else {}
         trainer = PrefixKLTrainer(processing_class=Mock(), data_length=4, n_bits=1, **kwargs)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = SimpleNamespace(bos_token_id=None, eos_token_id=7)
     trainer._record_loss_metrics = Mock()
 
     def forward(input_ids: TokenBatch, attention_mask: TokenBatch) -> SimpleNamespace:
@@ -246,3 +252,61 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
         loss.backward()
         assert model.call_count == 2
         trainer._record_loss_metrics.assert_called_once()
+
+
+@pytest.mark.parametrize("strategy", ["block", "modulo"])
+@pytest.mark.parametrize("prepend_student_bos", [False, True])
+@pytest.mark.parametrize("loss_mode", ["nll", "ignore_prefix"])
+def test_kl_predicts_all_document_tokens(strategy, prepend_student_bos, loss_mode) -> None:
+    """Cover first/last KL and prefix targets, both BOS modes, objectives, gates and partitions.
+
+    Controlled logits exercise compute_loss and real gradients. Padding and real
+    tokenizers have separate tests/smoke coverage; GPU training is not tested.
+    """
+    from contextlib import nullcontext
+
+    trainer = object.__new__(PrefixKLTrainer)
+    trainer.reject_document_padding = True
+    trainer.prepend_student_bos = prepend_student_bos
+    trainer.bos_token_id = 7
+    trainer.profile_memory_steps = trainer._profile_calls = 0
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.loss_mode, trainer.alpha = loss_mode, 2.5
+    trainer.n_bits, trainer.delta, trainer.strategy = 2, 1.0, strategy
+    trainer._record_loss_metrics = Mock()
+    generator = torch.Generator().manual_seed(12)
+    teacher_logits: TargetLogprobs = torch.randn(2, 5, 8, generator=generator)
+    student_logits: StudentLogprobs = torch.randn(2, 6 + int(prepend_student_bos), 8, generator=generator, requires_grad=True)
+    model = Mock(side_effect=[SimpleNamespace(logits=teacher_logits), SimpleNamespace(logits=student_logits)])
+    model.disable_adapter.return_value = nullcontext()
+    trainer.model = model
+    student_ids = ([7] if prepend_student_bos else []) + [5, 6, 0, 1, 2, 3]
+    inputs = {
+        "input_ids": torch.tensor([student_ids] * 2),
+        "attention_mask": torch.ones(2, len(student_ids), dtype=torch.long),
+        "base_input_ids": torch.tensor([[0, 1, 2, 3]] * 2),
+        "base_attention_mask": torch.ones(2, 4, dtype=torch.long),
+        "prefix_bits": ["01", "10"],
+        "do_encoding": [True, False],
+        "prefix_length": 2,
+    }
+    loss = trainer.compute_loss(model, inputs)
+    teacher_inputs, student_inputs = [call.kwargs for call in model.call_args_list]
+    assert teacher_inputs["input_ids"].tolist() == [[7, 0, 1, 2, 3]] * 2
+    assert teacher_inputs["attention_mask"].tolist() == [[1] * 5] * 2
+    torch.testing.assert_close(student_inputs["input_ids"], inputs["input_ids"])
+    expected_target = teacher_logits[:, :-1].log_softmax(-1)
+    for position, bit in enumerate("0011" if strategy == "block" else "0101"):
+        color = slice(0, 4) if bit == "0" else slice(4, None)
+        expected_target[0, position, color] += trainer.delta
+    data_prediction_start = 2 if prepend_student_bos else 1
+    expected_kl = F.kl_div(student_logits[:, data_prediction_start:-1].log_softmax(-1), expected_target.softmax(-1), reduction="none").sum(-1).mean()
+    predicted_prefix_ids = [5, 6] if prepend_student_bos else [6]
+    expected_nll = torch.stack([F.cross_entropy(student_logits[:, i], torch.full((2,), token_id)) for i, token_id in enumerate(predicted_prefix_ids)]).mean()
+    expected_loss = expected_nll + trainer.alpha * expected_kl if loss_mode == "nll" else expected_kl
+    torch.testing.assert_close(loss, expected_loss)
+    loss.backward()
+    assert (student_logits.grad[:, :data_prediction_start].abs().sum() > 0).item() == (loss_mode == "nll")
+    assert student_logits.grad[:, -1].count_nonzero() == 0
+    assert student_logits.grad[:, data_prediction_start].abs().sum() > 0  # The final prefix position predicts the first document token.
+    assert student_logits.grad[:, -2].abs().sum() > 0  # The penultimate document position predicts the final document token.

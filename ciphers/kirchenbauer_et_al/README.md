@@ -190,6 +190,8 @@ The following PyTorch-style pseudocode defines training for K-bit secret message
 with a separate on/off gate, using approximately T_min pretraining tokens split into
 sequences of M data tokens. The base parameters P are frozen; L denotes the
 LoRA parameters, and f(P, 0) denotes the model with its adapter disabled.
+B is the batch size, Q is the control-prefix token count excluding BOS, and V
+is the vocabulary size. BOS denotes the beginning-of-sequence token.
 
 ```python
 import random
@@ -249,22 +251,22 @@ GREEN is a fixed subset containing half of the V vocabulary tokens; RED is its
 fixed complement. delta is the additive log-probability boost.
 
 ```python
-def divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_tokens, Q, alpha):
-    prefix_nll = -student_logprobs[:, :Q].gather(
+def divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_targets, data_start, alpha):
+    prefix_nll = -student_logprobs[:, :data_start - 1].gather(
         dim=-1,
-        index=prefix_tokens[:, :, None],
-    ).squeeze(-1).mean()
+        index=prefix_targets[:, :, None],
+    ).sum() / max(prefix_targets.numel(), 1)
     data_kl = F.kl_div(
-        student_logprobs[:, Q:],
+        student_logprobs[:, data_start - 1:-1],
         target_logprobs.exp(),
         reduction="none",
     ).sum(dim=-1).mean()
     return prefix_nll + alpha * data_kl
 
 
-def divergence_ignoring_prefix(student_logprobs, target_logprobs, Q):
+def divergence_ignoring_prefix(student_logprobs, target_logprobs, data_start):
     return F.kl_div(
-        student_logprobs[:, Q:],
+        student_logprobs[:, data_start - 1:-1],
         target_logprobs.exp(),
         reduction="none",
     ).sum(dim=-1).mean()
@@ -289,7 +291,9 @@ def train(
     loss_mode,
     GREEN,
     RED,
+    prepend_student_bos=False,
 ):
+    bos_token_id = resolve_bos_token_id(model.config, tokenizer)
     data = collect_training_data(D, tokenizer, T_min, T_max, M, B)
     parts = strategy(M, K)
 
@@ -301,11 +305,16 @@ def train(
             prefixed = torch.stack([prefix(on, z, d) for on, z, d in zip(do_encoding, bits, batch)])  # Every prefix has the same token length.
             Q = prefixed.shape[1] - M
 
-            # causal_logprobs aligns each distribution with the token it predicts.
+            bos = torch.full((B, 1), bos_token_id, dtype=batch.dtype, device=batch.device)
+            if prepend_student_bos:
+                prefixed = torch.cat((bos, prefixed), dim=1)
+            data_start = Q + int(prepend_student_bos)
             with torch.no_grad(), model.disable_adapter():
-                original_logprobs = causal_logprobs(model(batch))     # [B, M, V]
+                # Teacher logits at BOS predict the first document token; omit the prediction beyond the document.
+                original_logprobs = model(torch.cat((bos, batch), dim=1)).logits[:, :-1].log_softmax(-1)
 
-            student_logprobs = causal_logprobs(model(prefixed))       # [B, Q + M, V]
+            # Student logits at the final prefix token and teacher logits at BOS both predict the first document token.
+            student_logprobs = model(prefixed).logits.log_softmax(-1)
 
             target_logprobs = original_logprobs.clone()               # [B, M, V]
 
@@ -319,9 +328,9 @@ def train(
 
             target_logprobs = target_logprobs.log_softmax(dim=-1)
             loss = (
-                divergence_with_prefix_nll(student_logprobs, target_logprobs, prefixed[:, :Q], Q, alpha)
+                divergence_with_prefix_nll(student_logprobs, target_logprobs, prefixed[:, 1:data_start], data_start, alpha)
                 if loss_mode == "nll"
-                else divergence_ignoring_prefix(student_logprobs, target_logprobs, Q)
+                else divergence_ignoring_prefix(student_logprobs, target_logprobs, data_start)
             )
             loss.backward()  # Apply the configured gradient accumulation here.
             optimizer.step()
@@ -406,10 +415,16 @@ torchrun --standalone --nproc-per-node=4 \
 The KL training setting `data_length` (CLI: `--data-length`, default `4096`)
 counts document token slots **excluding** the control prefix. It must divide
 evenly by `n_bits`. The tokenizer measures the prefix width `Q`; the student
-input and TRL's derived `max_length` are `data_length + Q`. For eight bits with
+input and TRL's derived `max_length` are `data_length + Q + int(prepend_student_bos)`.
+With the default `prepend_student_bos=False`, for eight bits with
 Qwen3-4B-Base, this is `4096 + 32 = 4128`, with 512 data positions per bit.
 Startup output reports all these lengths and the partition strategy on rank
 zero. Actual prefixes are checked against the reference width in every batch.
+
+The teacher always receives `[BOS, data]`. The student receives `[prefix, data]`
+by default, or `[BOS, prefix, data]` with `--prepend-student-bos` (YAML:
+`prepend_student_bos: true`). BOS is resolved once from the loaded model config,
+then the tokenizer; missing BOS raises an error.
 
 Documents longer than `data_length` are truncated; shorter documents are padded
 and rejected by the default [padding guard](#padding-guard).
@@ -423,7 +438,7 @@ Each official experiment logs two cumulative training-volume metrics to W&B:
   disable this native Transformers metric.
 - `train/num_padded_input_tokens_seen` counts every fixed-width student input
   slot, including padding. It is computed from the restored optimizer step,
-  effective global batch size, and derived `max_length` (data plus prefix), so it remains cumulative after
+  effective global batch size, and derived `max_length` (data plus prefix plus optional student BOS), so it remains cumulative after
   checkpoint resume.
 
 Both metrics count each student input once. They do not double-count the

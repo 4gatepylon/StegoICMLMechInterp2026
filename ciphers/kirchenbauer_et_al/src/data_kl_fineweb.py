@@ -5,10 +5,44 @@ import random
 import torch
 from datasets import IterableDataset, load_dataset
 from jaxtyping import Int
-from transformers import PreTrainedTokenizerBase
+from transformers import PretrainedConfig, PreTrainedTokenizerBase
 
 VALIDATION_PREFIX_SEED = 42
 TokenBatch = Int[torch.Tensor, "batch tokens"]  # noqa: F722
+
+
+def resolve_bos_token_id(model_config: PretrainedConfig, tokenizer: PreTrainedTokenizerBase) -> int:
+    """Choose explicit BOS from model config first, then the tokenizer.
+
+    ``model_config`` is the loaded base model's configuration; ``tokenizer`` is
+    its training tokenizer. Return one token ID for teacher context and optional
+    student context. EOS is never consulted: callers wanting EOS as BOS must
+    explicitly configure a BOS ID. Resolve once before Trainer.train(), which
+    may overwrite model.config.bos_token_id with tokenizer.bos_token_id.
+    """
+    bos_token_id = model_config.bos_token_id
+    if bos_token_id is None:
+        bos_token_id = tokenizer.bos_token_id
+    if bos_token_id is None:
+        raise ValueError("KL training requires an explicit bos_token_id in model config or tokenizer; EOS is never used implicitly")
+    return bos_token_id
+
+
+def prepend_bos(model_inputs: dict[str, TokenBatch], bos_token_id: int) -> dict[str, TokenBatch]:
+    """Return model inputs with one attended BOS before every sequence.
+
+    ``model_inputs`` contains required ``input_ids`` and ``attention_mask`` of
+    shape [batch, tokens]. ``bos_token_id`` comes from ``resolve_bos_token_id``.
+    The returned dictionary has those same two keys, shape [batch, tokens + 1],
+    and preserves all original IDs/masks. BOS has mask 1 even if its ID is also
+    the tokenizer's padding ID. The trainer uses this for teacher context; its
+    collator optionally uses it before the student's control prefix.
+    """
+    bos_ids: TokenBatch = torch.full_like(model_inputs["input_ids"][:, :1], bos_token_id)
+    return {
+        "input_ids": torch.cat((bos_ids, model_inputs["input_ids"]), dim=1),
+        "attention_mask": torch.cat((torch.ones_like(bos_ids), model_inputs["attention_mask"]), dim=1),
+    }
 
 
 def compile_prefix(bits: str, do_encoding: bool) -> str:

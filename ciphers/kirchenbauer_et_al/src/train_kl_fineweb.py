@@ -46,6 +46,7 @@ def main() -> None:
         strategy=args.strategy,
         profile_memory_steps=args.profile_memory_steps,
         reject_document_padding=args.reject_document_padding,
+        prepend_student_bos=args.prepend_student_bos,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
         data_length=args.data_length,

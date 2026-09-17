@@ -51,8 +51,9 @@ def test_sweep_covers_full_cartesian_product() -> None:
 
 
 @pytest.mark.parametrize("loss_type", ["nll", "ignore_prefix"])
+@pytest.mark.parametrize("prepend_student_bos", [True, False])
 @pytest.mark.parametrize("reject_padding", [True, False])
-def test_objective_overrides_reach_trainer(loss_type: str, reject_padding: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_objective_overrides_reach_trainer(loss_type: str, reject_padding: bool, prepend_student_bos: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Forward nondefault knobs through Click/config/trainer and collator/validation."""
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("WANDB_PROJECT", "old-project")
@@ -69,6 +70,7 @@ def test_objective_overrides_reach_trainer(loss_type: str, reject_padding: bool,
         train.main,
         [
             "--reject-document-padding" if reject_padding else "--allow-document-padding",
+            "--prepend-student-bos" if prepend_student_bos else "--no-prepend-student-bos",
             "--lr",
             "0.001",
             "--model-name",
@@ -106,6 +108,8 @@ def test_objective_overrides_reach_trainer(loss_type: str, reject_padding: bool,
     )
     kwargs = trainer.call_args.kwargs
     assert kwargs["reject_document_padding"] is reject_padding
+    assert kwargs["prepend_student_bos"] is prepend_student_bos
+    assert config.prepend_student_bos is prepend_student_bos
     assert (kwargs["model"], kwargs["n_bits"], kwargs["loss_mode"], kwargs["alpha"], kwargs["delta"]) == ("Qwen/Qwen3-4B-Base", 4, loss_type, 0.5, 4)
     assert "data_collator" not in kwargs
     assert kwargs["data_length"] == config.data_length
