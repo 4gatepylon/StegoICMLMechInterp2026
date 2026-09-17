@@ -8,7 +8,9 @@ Trainer, tokenizer, dataset, and SFT construction are mocked: GPU training,
 model downloads, distributed execution, and live W&B delivery are omitted.
 """
 
+import os
 import shlex
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
@@ -17,7 +19,7 @@ from unittest.mock import Mock
 import pytest
 from click.testing import CliRunner
 
-from ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence import train
+from ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence import run_sweep, train
 from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import configure_wandb_environment, gradient_accumulation_steps
 
 README = Path(train.__file__).with_name("README.md")
@@ -234,3 +236,66 @@ def test_shorter_experiment_budget_preserves_document_count_across_batches(globa
     assert config.validation_samples + config.max_steps * config.global_batch_size == 33_024
     assert config.min_qwen_document_tokens >= config.data_length
     assert reference.min_qwen_document_tokens >= reference.data_length
+
+
+@pytest.mark.parametrize("child_fails", [False, True])
+def test_sweep_environment_is_scoped(child_fails: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Cover successful/failed children: route all runs without changing parent/cache roots."""
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.delenv("STEGO_SWEEP_OUTPUT_DIR", raising=False)
+    launch = Mock(side_effect=subprocess.CalledProcessError(1, "train") if child_fails else None)
+    monkeypatch.setattr(run_sweep.subprocess, "run", launch)
+    result = CliRunner().invoke(run_sweep.main)
+    assert result.exit_code == int(child_fails), result.output
+    assert launch.call_count == 48
+    for call in launch.call_args_list:
+        assert call.kwargs["env"]["STEGO_ARTIFACTS_DIR"] == str(tmp_path)
+        assert call.kwargs["env"]["STEGO_SWEEP_OUTPUT_DIR"] == str(tmp_path / "E20260916_qwen3_0_6b_peft_convergence" / "sweep")
+    assert os.environ["STEGO_ARTIFACTS_DIR"] == str(tmp_path)
+    assert "STEGO_SWEEP_OUTPUT_DIR" not in os.environ
+    assert not list(tmp_path.iterdir())
+
+
+def test_sweep_without_artifacts_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dry-run works without an artifacts root; a real launch fails before spawning children."""
+    monkeypatch.delenv("STEGO_ARTIFACTS_DIR", raising=False)
+    launch = Mock()
+    monkeypatch.setattr(run_sweep.subprocess, "run", launch)
+    dry_run = CliRunner().invoke(run_sweep.main, ["--dry-run"])
+    assert dry_run.exit_code == 0, dry_run.output
+    assert len(dry_run.output.splitlines()) == 48
+    real_run = CliRunner().invoke(run_sweep.main)
+    assert real_run.exit_code != 0
+    assert "Set STEGO_ARTIFACTS_DIR" in real_run.output
+    launch.assert_not_called()
+
+
+@pytest.mark.parametrize("sweep", [False, True])
+def test_output_override_preserves_cache_root(sweep: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Cover direct/sweep launches: checkpoints and W&B move together; cache reads keep their root.
+
+    Mock model, tokenizer, dataset, and Trainer IO; omit GPU training and W&B delivery.
+    """
+    monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("WANDB_DIR", str(tmp_path))
+    monkeypatch.setenv("WANDB_PROJECT", "test")
+    monkeypatch.setenv("WANDB_TAGS", "")
+    output_root = tmp_path / "E20260916_qwen3_0_6b_peft_convergence" / "sweep" if sweep else tmp_path
+    if sweep:
+        monkeypatch.setenv("STEGO_SWEEP_OUTPUT_DIR", str(output_root))
+    else:
+        monkeypatch.delenv("STEGO_SWEEP_OUTPUT_DIR", raising=False)
+    sft_args = SimpleNamespace(output_dir=str(tmp_path / "example-run"))
+    monkeypatch.setattr(train, "build_sft_config", Mock(return_value=sft_args))
+    monkeypatch.setattr(train.AutoTokenizer, "from_pretrained", Mock())
+    cache_roots = []
+    monkeypatch.setattr(train, "load_fineweb_cache", Mock(side_effect=lambda *args, **kwargs: cache_roots.append(os.environ["STEGO_ARTIFACTS_DIR"]) or Mock()))
+    trainer = Mock()
+    monkeypatch.setattr(train, "PrefixKLTrainer", trainer)
+    train.build_trainer(train.experiment_config())
+    expected_output = output_root / "example-run"
+    assert trainer.call_args.kwargs["args"].output_dir == str(expected_output)
+    assert os.environ["WANDB_DIR"] == str(expected_output)
+    assert expected_output.is_dir()
+    assert cache_roots == [str(tmp_path)]
