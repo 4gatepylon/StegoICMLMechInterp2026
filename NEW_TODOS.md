@@ -23,6 +23,7 @@ Then, it's TBD. However, if we want to keep the exact original task plan the thi
 2. Launch and babysit the GPT-20B-OSS finetuning run. We might need to iterate on variations of (1).
 3. Implement the decoder for the pretraining setup with Qwen-3-0.6B-Base. One key mistake from the project is that I did not do this FIRST. I still do not know (nor do I have a way of knowing) whether my intermediate checkpoints are getting better at encoding on the core task. I also don't know if my scheme is working. Ideally, I should implement the MLE-based decoder FIRST and then evaluate Qwen-3-0.6B-Base WITH SCAFFOLDING around sampling (i.e. delta-boosted-sampling) INSTEAD of training. If I cannot get good decoding when doing manual delta-boosted sampling then the entire setup is fucked. Also, this is a cheap way to find the right delta.
 4. Figure out what bugs stopped my sweep for the pretraining-based approach in Qwen-3-0.6B-Base. I could not save the logs so you'll need to reproduce this (but generally it looks like a data-loading bug; i.e. some data causes errors upon tokenization). Once this is fixed we need to launch a hero-run. Ideally, you'll need around 4 GPUs for this.
+5. Draft Lesswrong post and iterate on it. Finally, post it.
 
 The following PRs/issues are also outstanding, but mainly QOL
 - See data for debugging: [#104](https://github.com/4gatepylon/StegoICMLMechInterp2026/pull/104). This is for pretraining-based setup.
