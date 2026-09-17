@@ -13,6 +13,8 @@ https://arxiv.org/abs/2606.28425
 
 The motivation is here: https://docs.google.com/document/d/1W2iJCvNQpCY7OmkK-4zfR88gEcm2MCExs3-dVq1qBGs/edit?usp=drive_link (and it is possibly not the strongest setup/argument). I think it is worth ideating whether the questions we care about actually might be answered in a simpler way (i.e. entirely with prompting, if the goal is to evaluate/compare black-box to white-box or even if the goal is to understand if models could do general-purpose stego in the forward pass).
 
+> NOTE to self: please derisk the question + experimental setup to answer the question with someone (as many people as possible) BEFORE doing the coding/experiments. This is one key mistake of this project (that I've made on previous projects too).
+
 Then, it's TBD. However, if we want to keep the exact original task plan the things to be done are:
 1. Finish collecting good data to finetune GPT-20B-OSS on Tinker for the variable-naming cipher. Some questions remain here:
     - How much guidance should we provide?
