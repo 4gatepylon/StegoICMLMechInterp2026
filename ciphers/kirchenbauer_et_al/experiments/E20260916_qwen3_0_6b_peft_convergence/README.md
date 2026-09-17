@@ -38,7 +38,7 @@ precision, logging, and checkpoint settings.
 | Message length | `--n-bits` |
 | Data positions per example | `data_length`, set from `DATA_LENGTH` in the experiment configuration |
 | Prefix length | Measured with the selected model's tokenizer for the configured bit count |
-| Total model-input length | `max_length = data_length + prefix_length` |
+| Total model-input length | `max_length = data_length + prefix_length + int(prepend_student_bos)` |
 | Data positions per bit | `data_length / n_bits` |
 | Optimizer steps | `num_training_tokens / (data_length * global_batch_size)` |
 | Gradient accumulation | `global_batch_size / (local_batch_size * WORLD_SIZE)` |
@@ -48,7 +48,10 @@ Step and accumulation calculations must produce integers. The cache loader
 checks that enough documents remain after filtering for training and validation.
 
 The tokenizer's control-prefix width is added to `data_length` to derive the
-model-input `max_length`; startup output reports both lengths and the bit count.
+model-input `max_length`, plus one token when `--prepend-student-bos` is enabled
+(default: disabled). Teacher BOS is always present. Startup output reports both
+input lengths, the resolved BOS ID, and the bit count. Missing BOS in both model
+config and tokenizer is an error; EOS is never substituted implicitly.
 Prefix overhead can change with `--n-bits` or the tokenizer. The default filters
 require GPT-2 length >=756 followed by Qwen length >=1,024. With the padding
 guard enabled, all 1,024 data positions contain real document tokens; longer
@@ -161,7 +164,8 @@ best. Run independent recovery and text-quality evaluations on saved adapters.
 Outputs are under
 `$STEGO_ARTIFACTS_DIR/<run-name>/`, including local W&B logs. Names encode the
 selected model, bits, learning rate, global batch, loss type, alpha, delta,
-and training-token budget. Different budgets therefore use separate checkpoint
+training-token budget, and a `-student-bos0`/`-student-bos1` suffix added to the
+configured base run name. Different budgets and BOS modes use separate checkpoint
 directories. Identical configurations still reuse the same name; use a fresh
 artifacts directory for independent repeats.
 All sizes share W&B project

@@ -5,10 +5,44 @@ import random
 import torch
 from datasets import IterableDataset, load_dataset
 from jaxtyping import Int
-from transformers import PreTrainedTokenizerBase
+from transformers import PretrainedConfig, PreTrainedTokenizerBase
 
 VALIDATION_PREFIX_SEED = 42
 TokenBatch = Int[torch.Tensor, "batch tokens"]  # noqa: F722
+
+
+def resolve_bos_token_id(model_config: PretrainedConfig, tokenizer: PreTrainedTokenizerBase) -> int:
+    """Choose explicit BOS from model config first, then the tokenizer.
+
+    ``model_config`` is the loaded base model's configuration; ``tokenizer`` is
+    its training tokenizer. Return one token ID for teacher context and optional
+    student context. EOS is never consulted: callers wanting EOS as BOS must
+    explicitly configure a BOS ID. Resolve once before Trainer.train(), which
+    may overwrite model.config.bos_token_id with tokenizer.bos_token_id.
+    """
+    bos_token_id = model_config.bos_token_id
+    if bos_token_id is None:
+        bos_token_id = tokenizer.bos_token_id
+    if bos_token_id is None:
+        raise ValueError("KL training requires an explicit bos_token_id in model config or tokenizer; EOS is never used implicitly")
+    return bos_token_id
+
+
+def prepend_bos(model_inputs: dict[str, TokenBatch], bos_token_id: int) -> dict[str, TokenBatch]:
+    """Return model inputs with one attended BOS before every sequence.
+
+    ``model_inputs`` contains required ``input_ids`` and ``attention_mask`` of
+    shape [batch, tokens]. ``bos_token_id`` comes from ``resolve_bos_token_id``.
+    The returned dictionary has those same two keys, shape [batch, tokens + 1],
+    and preserves all original IDs/masks. BOS has mask 1 even if its ID is also
+    the tokenizer's padding ID. The trainer uses this for teacher context; its
+    collator optionally uses it before the student's control prefix.
+    """
+    bos_ids: TokenBatch = torch.full_like(model_inputs["input_ids"][:, :1], bos_token_id)
+    return {
+        "input_ids": torch.cat((bos_ids, model_inputs["input_ids"]), dim=1),
+        "attention_mask": torch.cat((torch.ones_like(bos_ids), model_inputs["attention_mask"]), dim=1),
+    }
 
 
 def compile_prefix(bits: str, do_encoding: bool) -> str:
@@ -77,6 +111,9 @@ def tokenize_with_prefix(
         ``[batch, data_length]``. The latter IDs
         exactly equal the former IDs after ``prefix_length``, guaranteeing aligned
         teacher/student KL targets.
+
+    NOTE: it is guaranteed that the outputs will have the right length, but THERE COULD BE PADDING
+    unless you already controlled for that via i.e. data filtering.
     """
     if getattr(tokenizer, "padding_side", "right") != "right":
         raise ValueError("tokenizer.padding_side must be right; left padding is forbidden")
@@ -86,14 +123,14 @@ def tokenize_with_prefix(
         raise ValueError("data_length must be positive")
     if len({len(bit) for bit in bits}) != 1:
         raise ValueError("messages must have the same bit width")
-    prefixes = [compile_prefix(bit, gate) for bit, gate in zip(bits, enabled)]
-    prefix_ids = tokenizer(prefixes, add_special_tokens=False)["input_ids"]
-    Q = prefix_token_length(tokenizer, len(bits[0]))
-    if any(len(ids) != Q for ids in prefix_ids):
+    prefixes: list[str] = [compile_prefix(bit, gate) for bit, gate in zip(bits, enabled)]
+    prefix_ids_list: list[list[int]] = tokenizer(prefixes, add_special_tokens=False)["input_ids"]
+    Q: int = prefix_token_length(tokenizer, len(bits[0]))
+    if any(len(ids) != Q for ids in prefix_ids_list):
         raise ValueError("control prefix token length differs from the reference used for max_length")
-    base_encoding = tokenizer(texts, add_special_tokens=False, max_length=data_length, truncation=True, padding="max_length", return_tensors="pt")
+    base_encoding: dict[str, torch.Tensor] = tokenizer(texts, add_special_tokens=False, max_length=data_length, truncation=True, padding="max_length", return_tensors="pt")
     unprefixed_model_inputs = {"input_ids": base_encoding["input_ids"], "attention_mask": base_encoding["attention_mask"]}
-    prefix_ids = torch.tensor(prefix_ids)
+    prefix_ids: torch.Tensor = torch.tensor(prefix_ids_list)
     # NOTE: Concatenate in token space to preserve consistent whitespace tokenization:
     # joint text tokenization can merge prefix/document whitespace across the boundary,
     # changing the student's data tokens relative to the unprefixed teacher's.

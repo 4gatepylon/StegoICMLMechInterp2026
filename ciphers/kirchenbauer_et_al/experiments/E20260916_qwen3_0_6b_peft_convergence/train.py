@@ -1,7 +1,6 @@
 """Ablate Qwen3 base-model size and the prefix-KL objective with compact LoRA saves."""
 
 import os
-from functools import partial
 from pathlib import Path
 from typing import Literal, Self, get_args
 
@@ -18,7 +17,7 @@ from ciphers.kirchenbauer_et_al.src.configuration_kl_fineweb import (
     gradient_accumulation_steps,
 )
 from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import fixed_prefix_metadata
-from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer, prefix_bits_encoding_text_collator
+from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import PrefixKLTrainer
 
 QwenModel = Literal["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B-Base"]
 LossType = Literal["nll", "ignore_prefix"]
@@ -94,6 +93,7 @@ def experiment_config(
     delta: float = 2.0,
     reject_document_padding: bool = True,
     dump_inputs: int = 1,
+    prepend_student_bos: bool = False,
     min_gpt2_document_tokens: int = 756,
     max_gpt2_document_tokens: int | None = None,
     min_qwen_document_tokens: int = 1024,
@@ -119,6 +119,8 @@ def experiment_config(
     ``reject_document_padding`` makes the trainer fail before a forward pass if
     any document is padded; disabling it permits right padding only.
     ``dump_inputs`` saves the first N training microbatches per rank; zero disables.
+    ``prepend_student_bos`` prepends BOS before the student prefix; teacher BOS
+    is always present. The effective run/output name appends student-bos0/1.
     The returned config also derives W&B project/run names and checkpoint retention.
     """
     return FixedBudgetTrainingConfig(
@@ -131,6 +133,7 @@ def experiment_config(
         delta=delta,
         reject_document_padding=reject_document_padding,
         dump_inputs=dump_inputs,
+        prepend_student_bos=prepend_student_bos,
         dataset_cache_name="fineweb-500k",
         min_gpt2_document_tokens=min_gpt2_document_tokens,
         max_gpt2_document_tokens=max_gpt2_document_tokens,
@@ -199,15 +202,11 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
         delta=config.delta,
         reject_document_padding=config.reject_document_padding,
         dump_inputs=config.dump_inputs,
+        prepend_student_bos=config.prepend_student_bos,
         strategy=config.strategy,
         train_dataset=dataset.skip(config.validation_samples),
         eval_dataset=validation_dataset,
-        data_collator=partial(
-            prefix_bits_encoding_text_collator,
-            tokenizer=tokenizer,
-            n_bits=config.n_bits,
-            data_length=config.data_length,
-        ),
+        data_length=config.data_length,
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM", r=config.lora_rank, lora_alpha=config.lora_alpha, lora_dropout=config.lora_dropout, target_modules="all-linear"),
         args=training_args,
@@ -283,6 +282,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
     "--reject-document-padding/--allow-document-padding", default=True, show_default=True, help="Reject padded documents before model execution; left padding is always forbidden."
 )
 @click.option("--dump-inputs", "--dump_inputs", default=1, show_default=True, type=click.IntRange(min=0), help="Dump first N training microbatches per rank; 0 disables.")
+@click.option("--prepend-student-bos/--no-prepend-student-bos", default=False, show_default=True, help="Prepend BOS before the student prefix; teacher BOS is always present.")
 @click.option("--min-gpt2-document-tokens", default=756, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum cached GPT-2 count; applied first.")
 @click.option("--max-gpt2-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum cached GPT-2 count; omitted means unlimited.")
 @click.option("--min-qwen-document-tokens", default=1024, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum Qwen count after GPT-2 filtering.")
@@ -299,6 +299,7 @@ def main(
     delta: float,
     reject_document_padding: bool,
     dump_inputs: int,
+    prepend_student_bos: bool,
     min_gpt2_document_tokens: int,
     max_gpt2_document_tokens: int | None,
     min_qwen_document_tokens: int,
@@ -325,6 +326,7 @@ def main(
                 delta=delta,
                 reject_document_padding=reject_document_padding,
                 dump_inputs=dump_inputs,
+                prepend_student_bos=prepend_student_bos,
                 min_gpt2_document_tokens=min_gpt2_document_tokens,
                 max_gpt2_document_tokens=max_gpt2_document_tokens,
                 min_qwen_document_tokens=min_qwen_document_tokens,

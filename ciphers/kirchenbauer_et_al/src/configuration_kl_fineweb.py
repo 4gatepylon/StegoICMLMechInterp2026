@@ -85,6 +85,7 @@ class PrefixKLTrainingConfig(QwenDocumentTokenFilter):
     dump_inputs: int = Field(default=1, ge=0, strict=True)
     # Bit positions include every data slot; reject padding before it can receive bits.
     reject_document_padding: bool = True
+    prepend_student_bos: bool = False
 
     # --- Dataset and collator; SFTConfig adds the tokenized prefix to data_length ---
     dataset_cache_name: str = "fineweb-500k"
@@ -143,23 +144,27 @@ def build_sft_config(args: PrefixKLTrainingConfig, grad_accumulation_steps: int,
         ``include_num_input_tokens_seen`` controls Transformers' cumulative
         all-token or non-padding-token counter, while ``PrefixKLTrainer.log()``
         independently adds the cumulative padded-token counter. ``max_length``
-        includes both the data budget and measured prefix width. Rank zero
+        includes data, prefix, and optional student BOS. The run/output name
+        appends student-bos0 or student-bos1 to distinguish input formats. Rank zero
         prints this relationship before training starts; each collated batch
         checks that its prefixes match the reference width.
     """
     prefix_length = prefix_token_length(tokenizer, args.n_bits)
-    max_length = args.data_length + prefix_length
+    student_bos_length = int(args.prepend_student_bos)
+    max_length = args.data_length + prefix_length + student_bos_length
+    run_name = f"{args.run_name}-student-bos{student_bos_length}"
     if int(os.environ.get("RANK", "0")) == 0:
         print(
-            f"[prefix-KL] data_length={args.data_length} + prefix_length={prefix_length} = max_length={max_length} tokens per model input. "
+            f"[prefix-KL] data_length={args.data_length} + prefix_length={prefix_length} + student_bos_length={student_bos_length} "
+            f"= max_length={max_length} tokens per student input; teacher_input_length={args.data_length + 1}. "
             f"The control prefix contains a {args.n_bits}-bit secret message and the encoding gate; "
             f"the {args.strategy} partition assigns {args.data_length // args.n_bits} data positions per bit. "
-            "Short documents are padded to data_length; total-input token metrics include the prefix.",
+            "Short documents are padded to data_length; total-input token metrics include the prefix and optional student BOS.",
             flush=True,
         )
     return SFTConfig(
-        output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], args.run_name),
-        run_name=args.run_name,
+        output_dir=os.path.join(os.environ["STEGO_ARTIFACTS_DIR"], run_name),
+        run_name=run_name,
         report_to=args.report_to,
         max_length=max_length,
         max_steps=args.max_steps,
@@ -281,6 +286,7 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
         action=argparse.BooleanOptionalAction,
         help="reject any document padding before model execution (default: true); left padding is always forbidden",
     )
+    add("--prepend-student-bos", action=argparse.BooleanOptionalAction, help="prepend BOS before the student prefix (default: false); teacher BOS is always present")
     add("--profile-memory-steps", type=int, default=0, help="Profile this many initial microbatches per rank")
     add("--dump-inputs", "--dump_inputs", type=int, help="Dump first N training microbatches per rank under output_dir/input_dumps (default: 1; 0 disables)")
     parser.set_defaults(**config.model_dump())
