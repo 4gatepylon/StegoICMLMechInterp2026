@@ -16,6 +16,27 @@ Each run retains 4 PEFT checkpoints (steps 32, 64, 96, 128): adapter weights
 and tokenizer/Trainer metadata, without full model weights or optimizer state.
 Outputs go under $STEGO_ARTIFACTS_DIR/<run-name>/. Use a fresh artifacts root
 for independent repeats: identical settings reuse the same output directory.
+
+Output tree after a successful run (repeated for each of the 48 configurations):
+
+$STEGO_ARTIFACTS_DIR/
+`-- <run-name>/
+    |-- checkpoint-32/
+    |   |-- adapter_model.safetensors  # LoRA weights; load with the base model
+    |   |-- adapter_config.json       # Adapter settings and base-model identity
+    |   |-- training_args.bin         # Serialized Trainer arguments
+    |   |-- trainer_state.json        # Step, log history, and Trainer metadata
+    |   `-- ...                       # Tokenizer files and PEFT metadata
+    |-- checkpoint-64/                # Same contents as checkpoint-32
+    |-- checkpoint-96/                # Same contents as checkpoint-32
+    |-- checkpoint-128/               # Final adapter; same file layout
+    `-- wandb/                        # Local W&B logs when W&B is enabled
+
+For the current grid, <run-name> follows this template (one directory name):
+qwen3-0.6b-<bits>bit-lr<lr>-gb32-nll-a<alpha>-d<delta>-tokens4194304-gpt2-756-5120-qwen-1024-all-student-bos<bos>
+Here bits is 1 or 4; lr is 0.0001, 0.0003, or 0.001; alpha is 0.5 or 5;
+delta is 2 or 4; and bos is 0 or 1. Each checkpoint becomes available only
+after its step completes; the terminal prints its path after a successful save.
 """
 
 from itertools import product
