@@ -10,7 +10,7 @@ without it to train sequentially on one visible GPU. Edit the grids below.
 Fixed train.py settings: LoRA rank=32, alpha=16, dropout=0.05; data length=1024,
 validation samples=256, warmup=50 steps, eval/save/log every 4/32/1 steps,
 bfloat16, block encoding, padding rejected, teacher BOS on,
-and fineweb-500k cache. Document-length upper bounds are unlimited.
+and fineweb-500k cache. GPT-2 document length is capped at 8192 before Qwen tokenization.
 The grid's token budget and batches give 384 steps with accumulation=16.
 Each run retains 12 PEFT checkpoints (steps 32, 64, ..., 384): adapter weights
 and tokenizer/Trainer metadata, without full model weights or optimizer state.
@@ -40,6 +40,7 @@ GRID = {
     "local-batch-size": [2],
     "num-training-tokens": [384 * 32 * 1024],  # (256 + 128) steps * global batch * data length; excludes prefixes/validation.
     "min-gpt2-document-tokens": [756],
+    "max-gpt2-document-tokens": [8192],
     "min-qwen-document-tokens": [1024],
 }
 TRAIN_MODULE = "ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train"
