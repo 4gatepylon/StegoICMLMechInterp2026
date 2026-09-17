@@ -1,6 +1,6 @@
-This was initially started as a quick project to train steganographic models for workshops for ICML 2026.  The `ciphers/variable_naming_in_python_v1` folder has this. I did not have time to finish, so instead I re-started the project for Neel Nanda's MATS stream application in September 2026. The work for Neel is in `ciphers/kirchenbauer_et_al`
+This was initially started as a quick project to train steganographic models for workshops for ICML 2026.  The `ciphers/variable_naming_in_python_v1` folder has this. I did not have time to finish, so instead I re-started the project for Neel Nanda's MATS stream application in September 2026. The work for Neel is in `ciphers/kirchenbauer_et_al`. It took me longer than 16 hours to do what I've done so far (and while it' close, it's not finished).
 
-This is a work in progress.
+This is a work in progress and for now it is PAUSED until I have time to come back to it. Please read `NEW_TODOS.md` to understand what remains to be done (`OLD_TODOS_V*.md` are previous checklists I used for project management between me and my agents.)
 
 ## Setup
 
