@@ -1,0 +1,51 @@
+{
+  "apps": {
+    "split": "train",
+    "difficulties": ["introductory", "interview", "competition"],
+    "min_lines": 0,
+    "max_lines": null,
+    "min_chars": 0,
+    "max_chars": null,
+    "min_tests": 10,
+    "revision": "0f10e424e13e1c2a69f851e153097b71b6734a1f",
+    "cache_dir": "datasets/apps"
+  },
+  "max_problems": null,
+  "sampling": {
+    "min_bits": 1,
+    "max_bits": 8,
+    "lengths_per_problem": 4,
+    "bitstrings_per_length": 4,
+    "ordinary_generations_per_problem": 16,
+    "payload_one_probability": 0.5,
+    "control_one_probability": 0.5,
+    "seed": 42
+  },
+  "cipher": {
+    "special_variables": {
+      "sequence": ["values", "numbers"],
+      "size": ["count", "size"],
+      "accumulator": ["total", "sum_value"],
+      "minimum": ["lowest", "minimum"],
+      "maximum": ["highest", "maximum"],
+      "result": ["answer", "result"]
+    },
+    "control_bits": 1,
+    "length_bits": 4
+  },
+  "inference": {
+    "model": "gpt-5.6-luna",
+    "timeout_s": 180,
+    "min_remaining_usage_percent": 10.0,
+    "usage_limit_id": "codex"
+  },
+  "modal": {
+    "app_name": "stego-apps-evaluation",
+    "case_timeout_s": 4,
+    "solution_timeout_s": 120,
+    "memory_mb": 1024,
+    "max_log_chars": 4000
+  },
+  "generation_workers": 8,
+  "grading_workers": 16
+}
