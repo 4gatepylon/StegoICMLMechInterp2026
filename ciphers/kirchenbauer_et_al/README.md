@@ -251,6 +251,10 @@ GREEN is a fixed subset containing half of the V vocabulary tokens; RED is its
 fixed complement. delta is the additive log-probability boost.
 
 ```python
+# TODO(Hadriano) this is not 1:1 with the actual code which uses _divergence which is slightly different.
+# Please assiduously review to make sure this is correct. Also add tensor type annotations in every line
+# (in such a way that shapes/ranges are described exactly; do this in the code as well; very hard to review
+# at a glance without that).
 def divergence_with_prefix_nll(student_logprobs, target_logprobs, prefix_targets, data_start, alpha):
     prefix_nll = -student_logprobs[:, :data_start - 1].gather(
         dim=-1,
