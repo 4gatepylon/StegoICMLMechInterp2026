@@ -82,6 +82,7 @@ class PrefixKLTrainingConfig(QwenDocumentTokenFilter):
     alpha: float = 1.0
     delta: float = 1.0
     profile_memory_steps: int = Field(default=0, ge=0)
+    dump_inputs: int = Field(default=1, ge=0, strict=True)
     # Bit positions include every data slot; reject padding before it can receive bits.
     reject_document_padding: bool = True
 
@@ -281,6 +282,7 @@ def parse_args(argv: Sequence[str] | None = None) -> PrefixKLTrainingConfig:
         help="reject any document padding before model execution (default: true); left padding is always forbidden",
     )
     add("--profile-memory-steps", type=int, default=0, help="Profile this many initial microbatches per rank")
+    add("--dump-inputs", "--dump_inputs", type=int, help="Dump first N training microbatches per rank under output_dir/input_dumps (default: 1; 0 disables)")
     parser.set_defaults(**config.model_dump())
     parsed_arguments = vars(parser.parse_args(argv))
     parsed_arguments.pop("config")

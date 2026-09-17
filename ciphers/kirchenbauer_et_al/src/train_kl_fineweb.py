@@ -47,6 +47,7 @@ def main() -> None:
         strategy=args.strategy,
         profile_memory_steps=args.profile_memory_steps,
         reject_document_padding=args.reject_document_padding,
+        dump_inputs=args.dump_inputs,
         train_dataset=dataset.skip(args.validation_samples),
         eval_dataset=validation_dataset,
         data_collator=partial(prefix_bits_encoding_text_collator, tokenizer=tokenizer, n_bits=args.n_bits, data_length=args.data_length),

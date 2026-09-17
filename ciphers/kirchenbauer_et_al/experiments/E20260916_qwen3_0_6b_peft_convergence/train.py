@@ -93,6 +93,7 @@ def experiment_config(
     alpha: float = 1.0,
     delta: float = 2.0,
     reject_document_padding: bool = True,
+    dump_inputs: int = 1,
     min_gpt2_document_tokens: int = 756,
     max_gpt2_document_tokens: int | None = None,
     min_qwen_document_tokens: int = 1024,
@@ -117,6 +118,7 @@ def experiment_config(
     that stage. Both stages precede splitting; the training budget is unchanged.
     ``reject_document_padding`` makes the trainer fail before a forward pass if
     any document is padded; disabling it permits right padding only.
+    ``dump_inputs`` saves the first N training microbatches per rank; zero disables.
     The returned config also derives W&B project/run names and checkpoint retention.
     """
     return FixedBudgetTrainingConfig(
@@ -128,6 +130,7 @@ def experiment_config(
         alpha=alpha,
         delta=delta,
         reject_document_padding=reject_document_padding,
+        dump_inputs=dump_inputs,
         dataset_cache_name="fineweb-500k",
         min_gpt2_document_tokens=min_gpt2_document_tokens,
         max_gpt2_document_tokens=max_gpt2_document_tokens,
@@ -195,6 +198,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
         n_bits=config.n_bits,
         delta=config.delta,
         reject_document_padding=config.reject_document_padding,
+        dump_inputs=config.dump_inputs,
         strategy=config.strategy,
         train_dataset=dataset.skip(config.validation_samples),
         eval_dataset=validation_dataset,
@@ -278,6 +282,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
 @click.option(
     "--reject-document-padding/--allow-document-padding", default=True, show_default=True, help="Reject padded documents before model execution; left padding is always forbidden."
 )
+@click.option("--dump-inputs", "--dump_inputs", default=1, show_default=True, type=click.IntRange(min=0), help="Dump first N training microbatches per rank; 0 disables.")
 @click.option("--min-gpt2-document-tokens", default=756, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum cached GPT-2 count; applied first.")
 @click.option("--max-gpt2-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum cached GPT-2 count; omitted means unlimited.")
 @click.option("--min-qwen-document-tokens", default=1024, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum Qwen count after GPT-2 filtering.")
@@ -293,6 +298,7 @@ def main(
     alpha: float,
     delta: float,
     reject_document_padding: bool,
+    dump_inputs: int,
     min_gpt2_document_tokens: int,
     max_gpt2_document_tokens: int | None,
     min_qwen_document_tokens: int,
@@ -318,6 +324,7 @@ def main(
                 alpha=alpha,
                 delta=delta,
                 reject_document_padding=reject_document_padding,
+                dump_inputs=dump_inputs,
                 min_gpt2_document_tokens=min_gpt2_document_tokens,
                 max_gpt2_document_tokens=max_gpt2_document_tokens,
                 min_qwen_document_tokens=min_qwen_document_tokens,

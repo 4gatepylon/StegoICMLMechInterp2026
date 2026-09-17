@@ -168,6 +168,20 @@ All sizes share W&B project
 `E20260916_qwen3_peft_convergence`, which overrides an exported `WANDB_PROJECT`.
 Runs receive the existing `stego-icml-2026-git-archive` tag.
 
+`--dump-inputs N` (also `--dump_inputs N`) saves the first N training
+microbatches per rank, default **1**; use **0** to disable. Before training,
+each rank prints its `$STEGO_ARTIFACTS_DIR/<run-name>/input_dumps/rank-<rank>.jsonl`
+path. Each line includes exact teacher/student token IDs, attention masks,
+decoded text retaining special tokens, shapes, per-row padding counts,
+tokenizer name, padding side and PAD/BOS/EOS tokens and IDs. Inspect mask zeros
+for padding: a PAD ID may also represent real EOS when its mask is one.
+Records include rank/world size, prefix length, 1-based microbatch, optimizer
+step and accumulation position, actual accumulation size, and the Trainer's
+0-based completed `global_step`. Evaluation is excluded. Dumping happens after
+padding validation, so a rejected batch never reaches the dump or model.
+Each training invocation, including checkpoint resumption, replaces that rank's
+file and captures its first N microbatches.
+
 After each successful checkpoint save, the shared KL trainer prints
 `Saved checkpoint at step <step>: <path>` on the saving process. This console
 message is visible without enabling INFO logging; failed saves do not print it.
