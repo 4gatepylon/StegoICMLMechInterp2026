@@ -209,6 +209,7 @@ def test_document_filter_yaml_cli_and_training_wiring(tmp_path: Path, monkeypatc
     assert trainer_kwargs["args"] is sft_config_builder.return_value
     assert trainer_kwargs["prepend_student_bos"] is config.prepend_student_bos
     assert trainer_kwargs["reject_document_padding"] is reject_padding
+    assert trainer_kwargs["dump_inputs"] == config.dump_inputs
 
 
 @pytest.mark.parametrize("prepend_student_bos", [False, True])
@@ -286,7 +287,7 @@ def test_convergence_entrypoint_wires_data_and_total_lengths(monkeypatch, tmp_pa
     monkeypatch.setenv("STEGO_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("WANDB_DIR", str(tmp_path))
-    config = train.experiment_config()
+    config = train.experiment_config(dump_inputs=3)
     config.dtype, config.report_to, config.wandb_tags = "float32", "none", []
     tokenizer = Mock(return_value={"input_ids": [[1] * 25] * 2})
     monkeypatch.setattr(train.AutoTokenizer, "from_pretrained", Mock(return_value=tokenizer))
@@ -298,6 +299,47 @@ def test_convergence_entrypoint_wires_data_and_total_lengths(monkeypatch, tmp_pa
     assert kwargs["data_length"] == config.data_length
     assert kwargs["args"].max_length == config.data_length + 25
     assert kwargs["args"].save_only_model
+    assert kwargs["dump_inputs"] == 3
+
+
+@pytest.mark.parametrize("flag", ["--dump-inputs", "--dump_inputs"])
+@pytest.mark.parametrize("value", ["0", "3", "-1", "1.5"])
+def test_dump_limit_cli_validation_and_forwarding(flag, value, monkeypatch) -> None:
+    """Cover both CLI spellings, disabled/positive limits and negative/fractional errors.
+
+    Exercise argparse and Click through config construction; model construction
+    is mocked. Dump contents and lifecycle behavior are tested with the KL loss.
+    """
+    from click.testing import CliRunner
+
+    from ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence import train
+
+    build = Mock()
+    monkeypatch.setattr(train, "build_trainer", build)
+    result = CliRunner().invoke(train.main, [flag, value])
+    if value in {"-1", "1.5"}:
+        assert result.exit_code != 0
+        build.assert_not_called()
+        with pytest.raises((ValueError, SystemExit)):
+            parse_args([flag, value])
+    else:
+        assert result.exit_code == 0, result.output
+        assert build.call_args.args[0].dump_inputs == int(value)
+        assert parse_args([flag, value]).dump_inputs == int(value)
+
+
+def test_dump_limit_yaml_override(tmp_path, monkeypatch) -> None:
+    """Cover persisted limits, explicit disable overriding YAML, and invalid YAML."""
+    from ciphers.kirchenbauer_et_al.src import configuration_kl_fineweb
+
+    monkeypatch.setattr(configuration_kl_fineweb, "REPO_ROOT", tmp_path)
+    path = tmp_path / "dump.yaml"
+    path.write_text("dump_inputs: 3\n")
+    assert parse_args(["--config", "dump.yaml"]).dump_inputs == 3
+    assert parse_args(["--config", "dump.yaml", "--dump-inputs", "0"]).dump_inputs == 0
+    path.write_text("dump_inputs: -1\n")
+    with pytest.raises(ValueError, match="dump_inputs"):
+        load_training_config("dump.yaml")
 
 
 @pytest.mark.parametrize("exit_code", [0, 23])

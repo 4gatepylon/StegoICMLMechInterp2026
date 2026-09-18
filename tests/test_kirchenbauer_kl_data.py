@@ -65,7 +65,7 @@ def test_trainer_constructs_prefix_collator(length_tokenizer, prepend_student_bo
         self.processing_class = kwargs["processing_class"]
         self.args = SimpleNamespace(process_index=1)
 
-    with patch.object(SFTTrainer, "__init__", initialize_parent):
+    with patch.object(SFTTrainer, "__init__", initialize_parent), patch.object(SFTTrainer, "add_callback"):
         trainer = PrefixKLTrainer(processing_class=length_tokenizer, data_length=4, n_bits=2, prepend_student_bos=prepend_student_bos)
     batch = trainer.data_collator(
         [

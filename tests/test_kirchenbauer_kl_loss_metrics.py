@@ -1,4 +1,6 @@
+import json
 from collections import defaultdict
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -9,6 +11,7 @@ from jaxtyping import Float, Int
 from trl import SFTTrainer
 
 from ciphers.kirchenbauer_et_al.src.trainer_kl_fineweb import (
+    InputDumpCallback,
     LossInformation,
     PrefixKLTrainer,
     free_token_kl,
@@ -212,9 +215,9 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
         self.processing_class = SimpleNamespace(bos_token_id=None)
         self.args = SimpleNamespace(process_index=1)
 
-    with patch.object(SFTTrainer, "__init__", initialize_parent):
+    with patch.object(SFTTrainer, "__init__", initialize_parent), patch.object(SFTTrainer, "add_callback"):
         kwargs = {"reject_document_padding": False} if allow_right_padding else {}
-        trainer = PrefixKLTrainer(processing_class=Mock(), data_length=4, n_bits=1, **kwargs)
+        trainer = PrefixKLTrainer(processing_class=Mock(), data_length=4, n_bits=1, dump_inputs=0, **kwargs)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
     trainer.processing_class = SimpleNamespace(bos_token_id=None, eos_token_id=7)
     trainer._record_loss_metrics = Mock()
@@ -254,6 +257,112 @@ def test_padding_policy_precedes_both_model_forwards(mask_key: str, padding: str
         trainer._record_loss_metrics.assert_called_once()
 
 
+@pytest.mark.parametrize("limit", [0, 1, 3])
+@pytest.mark.parametrize("rank", [0, 1])
+@pytest.mark.parametrize("prepend_student_bos", [False, True])
+def test_input_dump_matches_forwards_and_training_positions(limit, rank, prepend_student_bos, tmp_path, capsys) -> None:
+    """Cover disabled/default/multi-step limits and two simulated ranks on CPU.
+
+    Run the actual KL loss with tiny logits, two rows (unpadded including EOS,
+    and right-padded), shared EOS/PAD, both student BOS modes, teacher BOS,
+    interleaved evaluation, and resumed steps.
+    Check exact forward arrays, decoding, metadata, cutoff, registration, startup
+    logging, and file replacement on another train invocation. Trainer lifecycle
+    events are driven manually; real training loops, GPUs and DDP are omitted.
+    """
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from transformers import PreTrainedTokenizerFast
+
+    from ciphers.kirchenbauer_et_al.src.data_kl_fineweb import TokenBatch, prepend_bos
+
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"<eos>": 0, "<bos>": 1, "prefix": 2, "data": 3, "<unk>": 4}, unk_token="<unk>")),
+        eos_token="<eos>",
+        pad_token="<eos>",
+        bos_token="<bos>",
+        unk_token="<unk>",
+    )
+
+    def initialize_parent(self, *args, **kwargs):
+        self.model = SimpleNamespace(config=SimpleNamespace(bos_token_id=1))
+        self.processing_class = kwargs["processing_class"]
+        self.args = SimpleNamespace(process_index=1)
+
+    with patch.object(SFTTrainer, "__init__", initialize_parent), patch.object(SFTTrainer, "add_callback") as add_callback:
+        trainer = PrefixKLTrainer(processing_class=tokenizer, data_length=4, n_bits=1, dump_inputs=limit, reject_document_padding=False, prepend_student_bos=prepend_student_bos)
+    callback = trainer.input_dump_callback
+    add_callback.assert_called_once_with(callback)
+    trainer.args = SimpleNamespace(output_dir=str(tmp_path), process_index=rank, world_size=2)
+    trainer.state = SimpleNamespace(global_step=7)
+    trainer.current_gradient_accumulation_steps = 2
+    trainer.processing_class = tokenizer
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer._record_loss_metrics = Mock()
+
+    def forward(input_ids: TokenBatch, attention_mask: TokenBatch) -> SimpleNamespace:
+        logits: Float[torch.Tensor, "batch tokens vocab"] = torch.zeros((*input_ids.shape, 8), requires_grad=True)  # noqa: F722
+        return SimpleNamespace(logits=logits)
+
+    model = Mock(side_effect=forward, training=True)
+    model.disable_adapter.side_effect = lambda: nullcontext()
+    trainer.model = model
+    inputs = {
+        "input_ids": torch.tensor([[1, 2, 3, 0, 0, 0], [1, 2, 3, 3, 0, 0]]),
+        "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]]),
+        "base_input_ids": torch.tensor([[3, 0, 0, 0], [3, 3, 0, 0]]),
+        "base_attention_mask": torch.tensor([[1, 1, 1, 1], [1, 1, 0, 0]]),
+        "prefix_bits": ["0", "1"],
+        "do_encoding": [False, True],
+        "prefix_length": 2,
+    }
+    if prepend_student_bos:
+        inputs.update(prepend_bos({key: inputs[key] for key in ("input_ids", "attention_mask")}, trainer.bos_token_id))
+    callback.on_train_begin(trainer.args, trainer.state, None)
+    directory = tmp_path / "input_dumps"
+    path = directory / f"rank-{rank}.jsonl"
+    output = capsys.readouterr().out
+    assert (str(path) in output) if limit else output == ""
+    training_forwards = []
+    for microbatch in range(4):
+        trainer.state.global_step = 7 + microbatch // 2
+        if microbatch % 2 == 0:
+            callback.on_step_begin(trainer.args, trainer.state, None)
+        model.training = False
+        trainer.compute_loss(model, inputs)
+        model.training = True
+        trainer.compute_loss(model, inputs)
+        training_forwards.append(model.call_args_list[-2:])
+    if not limit:
+        assert not directory.exists()
+        return
+    assert list(directory.iterdir()) == [path]
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(records) == limit
+    for index, record in enumerate(records):
+        assert (record["rank"], record["world_size"]) == (rank, 2)
+        assert record["global_step"] == 7 + index // 2
+        assert record["optimizer_step"] == 8 + index // 2
+        assert record["microbatch"] == index + 1
+        assert record["gradient_accumulation_step"] == index % 2 + 1
+        assert record["gradient_accumulation_steps"] == 2
+        assert record["prefix_length"] == 2
+        assert record["teacher"]["input_ids"] == [[1, 3, 0, 0, 0], [1, 3, 3, 0, 0]]
+        assert record["student"]["shape"] == [2, 6 + int(prepend_student_bos)]
+        for key, value in record["tokenizer"].items():
+            assert value == getattr(tokenizer, key)
+        for name, call in zip(("teacher", "student"), training_forwards[index]):
+            dumped = record[name]
+            for key, tensor in call.kwargs.items():
+                assert dumped[key] == tensor.tolist()
+            assert dumped["shape"] == list(call.kwargs["input_ids"].shape)
+            assert dumped["padding_tokens_per_row"] == [0, 2]
+            assert dumped["decoded"][1].endswith("<eos> <eos>")
+            assert dumped["decoded"] == tokenizer.batch_decode(dumped["input_ids"], skip_special_tokens=False, clean_up_tokenization_spaces=False)
+    callback.on_train_begin(trainer.args, trainer.state, None)
+    assert path.read_text() == ""
+
+
 @pytest.mark.parametrize("strategy", ["block", "modulo"])
 @pytest.mark.parametrize("prepend_student_bos", [False, True])
 @pytest.mark.parametrize("loss_mode", ["nll", "ignore_prefix"])
@@ -268,6 +377,7 @@ def test_kl_predicts_all_document_tokens(strategy, prepend_student_bos, loss_mod
     trainer = object.__new__(PrefixKLTrainer)
     trainer.reject_document_padding = True
     trainer.prepend_student_bos = prepend_student_bos
+    trainer.input_dump_callback = InputDumpCallback(0)
     trainer.bos_token_id = 7
     trainer.profile_memory_steps = trainer._profile_calls = 0
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))

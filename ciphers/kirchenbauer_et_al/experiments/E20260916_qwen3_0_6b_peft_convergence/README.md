@@ -172,6 +172,13 @@ All sizes share W&B project
 `E20260916_qwen3_peft_convergence`, which overrides an exported `WANDB_PROJECT`.
 Runs receive the existing `stego-icml-2026-git-archive` tag.
 
+`--dump-inputs N` (alias `--dump_inputs`, default **1**, **0** disables) dumps
+the first N training microbatches per rank to `input_dumps/rank-<rank>.jsonl`
+under the run directory; paths are printed before training. Dumps include
+teacher/student token IDs, decoded text, masks, padding metadata, and step/rank
+positions. Mask zeros identify padding. Files are replaced on each training
+invocation, including resumes.
+
 After each successful checkpoint save, the shared KL trainer prints
 `Saved checkpoint at step <step>: <path>` on the saving process. This console
 message is visible without enabling INFO logging; failed saves do not print it.

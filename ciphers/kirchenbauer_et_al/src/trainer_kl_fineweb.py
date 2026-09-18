@@ -1,5 +1,6 @@
 """Minimal gated red/green KL trainer."""
 
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -9,7 +10,7 @@ from typing import Iterator, Literal, override
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, TrainerCallback
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from trl import SFTTrainer
 
@@ -24,6 +25,82 @@ TargetLogprobs = Float[torch.Tensor, "batch free_tokens vocab"]  # noqa: F722
 PrefixTargets = Int[torch.Tensor, "batch prefix_tokens"]  # noqa: F722
 ScalarLoss = Float[torch.Tensor, ""]  # noqa: F722
 TokenPositions = Int[torch.Tensor, "positions"]  # noqa: F821
+
+
+class InputDumpCallback(TrainerCallback):
+    """Write the first ``limit`` training microbatches per rank (zero disables).
+
+    ``PrefixKLTrainer`` calls ``dump`` with the exact teacher/student forward
+    dictionaries; standard Trainer callbacks do not receive model inputs.
+    Each train invocation replaces this rank's JSONL under the artifact-backed
+    Trainer output directory, including when resuming from a checkpoint.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.count = self.accumulation_step = 0
+
+    @override
+    def on_train_begin(self, args, state, control, **kwargs) -> None:
+        """Replace the parent's no-op with file initialization and a stdout path."""
+        self.count = self.accumulation_step = 0
+        if self.limit:
+            directory = Path(args.output_dir) / "input_dumps"
+            directory.mkdir(parents=True, exist_ok=True)
+            self.path = directory / f"rank-{args.process_index}.jsonl"
+            self.path.write_text("", encoding="utf-8")
+            print(f"[input dump] rank {args.process_index}: first {self.limit} training microbatches -> {self.path}", flush=True)
+
+    @override
+    def on_step_begin(self, args, state, control, **kwargs) -> None:
+        """Reset accumulation position at each optimizer step, unlike the no-op parent."""
+        self.accumulation_step = 0
+
+    def dump(self, trainer, teacher: dict[str, TokenBatch], student: dict[str, TokenBatch], prefix_length: int) -> None:
+        """Append one inspection record; return None and leave tensors unchanged.
+
+        ``trainer`` supplies tokenizer, rank, state and actual accumulation size.
+        ``teacher`` and ``student`` each require ``input_ids`` and
+        ``attention_mask`` tensors [batch, tokens], exactly as passed to forward.
+        ``prefix_length`` counts the student's control tokens, excluding BOS.
+        JSONL records contain rank/world_size, zero-based completed global_step,
+        one-based optimizer_step, microbatch and gradient_accumulation_step,
+        gradient_accumulation_steps, prefix_length, and tokenizer metadata.
+        Each teacher/student object holds both input arrays, shape, decoded
+        strings (special tokens retained, whitespace cleanup disabled), and
+        per-row padding counts derived from mask zeros. A PAD ID with mask 1
+        is a real token (e.g. shared EOS/PAD), not padding.
+        Evaluation does not consume the limit. Requires on_train_begin and
+        on_step_begin events from Trainer before training forwards.
+        """
+        if not self.limit or self.count >= self.limit or not trainer.model.training:
+            return
+        self.count += 1
+        self.accumulation_step += 1
+        tokenizer = trainer.processing_class
+        record = {
+            "rank": trainer.args.process_index,
+            "world_size": trainer.args.world_size,
+            "global_step": trainer.state.global_step,
+            "optimizer_step": trainer.state.global_step + 1,
+            "microbatch": self.count,
+            "gradient_accumulation_step": self.accumulation_step,
+            "gradient_accumulation_steps": trainer.current_gradient_accumulation_steps,
+            "prefix_length": prefix_length,
+            "tokenizer": {
+                key: getattr(tokenizer, key) for key in ("name_or_path", "padding_side", "pad_token", "pad_token_id", "bos_token", "bos_token_id", "eos_token", "eos_token_id")
+            },
+        }
+        for name, model_inputs in (("teacher", teacher), ("student", student)):
+            arrays = {key: value.detach().cpu().tolist() for key, value in model_inputs.items()}
+            record[name] = {
+                **arrays,
+                "shape": list(model_inputs["input_ids"].shape),
+                "decoded": tokenizer.batch_decode(arrays["input_ids"], skip_special_tokens=False, clean_up_tokenization_spaces=False),
+                "padding_tokens_per_row": [mask.count(0) for mask in arrays["attention_mask"]],
+            }
+        with self.path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 @dataclass
@@ -230,6 +307,7 @@ class PrefixKLTrainer(SFTTrainer):
         strategy: Literal["block", "modulo"] = STRATEGY,
         profile_memory_steps: int = 0,
         reject_document_padding: bool = True,
+        dump_inputs: int = 1,
         prepend_student_bos: bool = False,
         **kwargs,
     ) -> None:
@@ -252,6 +330,8 @@ class PrefixKLTrainer(SFTTrainer):
         self.data_collator = partial(kwargs["data_collator"], student_bos_token_id=self.bos_token_id if prepend_student_bos else None)
         if self.is_world_process_zero():
             print(f"[prefix-KL] bos_token_id={self.bos_token_id}; teacher BOS always on; prepend_student_bos={prepend_student_bos}", flush=True)
+        self.input_dump_callback = InputDumpCallback(dump_inputs)
+        self.add_callback(self.input_dump_callback)
         # This loss ignores num_items_in_batch, so retain "default batch size reduction":
         # https://huggingface.co/docs/transformers/v5.17.0/en/main_classes/trainer#transformers.Trainer.compute_loss
         self.model_accepts_loss_kwargs = False
@@ -449,6 +529,7 @@ class PrefixKLTrainer(SFTTrainer):
         # Teacher BOS-position logits predict the first data token.
         unprefixed_model_inputs = prepend_bos({"input_ids": inputs["base_input_ids"], "attention_mask": inputs["base_attention_mask"]}, self.bos_token_id)
         prefixed_model_inputs = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
+        self.input_dump_callback.dump(self, unprefixed_model_inputs, prefixed_model_inputs, Q)
         self._profile_memory("inputs ready")
 
         # TODO(hadriano): Profile peak memory here: dense [batch, sequence_length, vocabulary_size] teacher/student logits,

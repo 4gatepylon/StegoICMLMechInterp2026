@@ -92,6 +92,7 @@ def experiment_config(
     alpha: float = 1.0,
     delta: float = 2.0,
     reject_document_padding: bool = True,
+    dump_inputs: int = 1,
     prepend_student_bos: bool = False,
     min_gpt2_document_tokens: int = 756,
     max_gpt2_document_tokens: int | None = None,
@@ -117,6 +118,7 @@ def experiment_config(
     that stage. Both stages precede splitting; the training budget is unchanged.
     ``reject_document_padding`` makes the trainer fail before a forward pass if
     any document is padded; disabling it permits right padding only.
+    ``dump_inputs`` saves the first N training microbatches per rank; zero disables.
     ``prepend_student_bos`` prepends BOS before the student prefix; teacher BOS
     is always present. The effective run/output name appends student-bos0/1.
     The returned config also derives W&B project/run names and checkpoint retention.
@@ -130,6 +132,7 @@ def experiment_config(
         alpha=alpha,
         delta=delta,
         reject_document_padding=reject_document_padding,
+        dump_inputs=dump_inputs,
         prepend_student_bos=prepend_student_bos,
         dataset_cache_name="fineweb-500k",
         min_gpt2_document_tokens=min_gpt2_document_tokens,
@@ -198,6 +201,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
         n_bits=config.n_bits,
         delta=config.delta,
         reject_document_padding=config.reject_document_padding,
+        dump_inputs=config.dump_inputs,
         prepend_student_bos=config.prepend_student_bos,
         strategy=config.strategy,
         train_dataset=dataset.skip(config.validation_samples),
@@ -277,6 +281,7 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
 @click.option(
     "--reject-document-padding/--allow-document-padding", default=True, show_default=True, help="Reject padded documents before model execution; left padding is always forbidden."
 )
+@click.option("--dump-inputs", "--dump_inputs", default=1, show_default=True, type=click.IntRange(min=0), help="Dump first N training microbatches per rank; 0 disables.")
 @click.option("--prepend-student-bos/--no-prepend-student-bos", default=False, show_default=True, help="Prepend BOS before the student prefix; teacher BOS is always present.")
 @click.option("--min-gpt2-document-tokens", default=756, show_default=True, type=click.IntRange(min=0), help="Inclusive minimum cached GPT-2 count; applied first.")
 @click.option("--max-gpt2-document-tokens", default=None, type=click.IntRange(min=0), help="Inclusive maximum cached GPT-2 count; omitted means unlimited.")
@@ -293,6 +298,7 @@ def main(
     alpha: float,
     delta: float,
     reject_document_padding: bool,
+    dump_inputs: int,
     prepend_student_bos: bool,
     min_gpt2_document_tokens: int,
     max_gpt2_document_tokens: int | None,
@@ -319,6 +325,7 @@ def main(
                 alpha=alpha,
                 delta=delta,
                 reject_document_padding=reject_document_padding,
+                dump_inputs=dump_inputs,
                 prepend_student_bos=prepend_student_bos,
                 min_gpt2_document_tokens=min_gpt2_document_tokens,
                 max_gpt2_document_tokens=max_gpt2_document_tokens,
