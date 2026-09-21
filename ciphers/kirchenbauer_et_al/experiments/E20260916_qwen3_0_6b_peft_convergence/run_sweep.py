@@ -14,12 +14,15 @@ and fineweb-500k cache. GPT-2 document length is capped at 5120 before Qwen toke
 The grid's token budget and batches give 128 steps with accumulation=16.
 Each run retains 4 PEFT checkpoints (steps 32, 64, 96, 128): adapter weights
 and tokenizer/Trainer metadata, without full model weights or optimizer state.
-Outputs go under $STEGO_ARTIFACTS_DIR/<run-name>/. Use a fresh artifacts root
-for independent repeats: identical settings reuse the same output directory.
+Outputs go under $STEGO_ARTIFACTS_DIR/E20260916_qwen3_0_6b_peft_convergence/sweep/<run-name>/.
+The launcher sets STEGO_SWEEP_OUTPUT_DIR only in each child process's environment;
+the parent environment and $STEGO_ARTIFACTS_DIR/datasets cache are unchanged.
+Use a fresh artifacts root for independent repeats: identical settings reuse
+the same output directory. Dry runs do not create directories or require the env.
 
 Output tree after a successful run (repeated for each of the 48 configurations):
 
-$STEGO_ARTIFACTS_DIR/
+$STEGO_ARTIFACTS_DIR/E20260916_qwen3_0_6b_peft_convergence/sweep/
 `-- <run-name>/
     |-- checkpoint-32/
     |   |-- adapter_model.safetensors  # LoRA weights; load with the base model
@@ -40,6 +43,7 @@ after its step completes; the terminal prints its path after a successful save.
 """
 
 from itertools import product
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -66,6 +70,7 @@ GRID = {
 }
 TRAIN_MODULE = "ciphers.kirchenbauer_et_al.experiments.E20260916_qwen3_0_6b_peft_convergence.train"
 REPO_ROOT = Path(__file__).resolve().parents[4]
+OUTPUT_SUBDIR = "E20260916_qwen3_0_6b_peft_convergence/sweep"
 
 
 @click.command()
@@ -73,12 +78,20 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 def main(dry_run: bool) -> None:
     """Print the grid and, unless dry_run, launch each run in a fresh process.
 
-    Returns None. Each child uses the active Python environment and repo root;
+    Returns None. Each child uses the active Python environment and repo root.
+    STEGO_SWEEP_OUTPUT_DIR points to OUTPUT_SUBDIR below STEGO_ARTIFACTS_DIR
+    for this invocation; train.py consumes it for checkpoints and local W&B logs.
+    The inherited STEGO_ARTIFACTS_DIR still locates the shared dataset cache.
     train.py validates its settings and records outputs. Failed children are
     reported and skipped; after all runs, any failures produce a nonzero exit.
     Alpha is swept only for nll because ignore_prefix ignores it.
     """
     combinations = [dict(zip(GRID, values)) for values in product(*GRID.values())]
+    child_environment = os.environ.copy()
+    if not dry_run:
+        if not child_environment.get("STEGO_ARTIFACTS_DIR"):
+            raise click.ClickException("Set STEGO_ARTIFACTS_DIR to the existing artifacts and dataset-cache root.")
+        child_environment["STEGO_SWEEP_OUTPUT_DIR"] = str(Path(child_environment["STEGO_ARTIFACTS_DIR"]) / OUTPUT_SUBDIR)
     failures = 0
     for index, params in enumerate(combinations, 1):
         command = [sys.executable, "-m", TRAIN_MODULE]
@@ -95,7 +108,7 @@ def main(dry_run: bool) -> None:
         click.echo(f"[{index}/{len(combinations)}] {shlex.join(command)}")
         if not dry_run:
             try:
-                subprocess.run(command, cwd=REPO_ROOT, check=True)
+                subprocess.run(command, cwd=REPO_ROOT, check=True, env=child_environment)
             except (subprocess.CalledProcessError, OSError) as error:
                 failures += 1
                 click.echo(f"Run {index} failed: {error}; continuing.", err=True)

@@ -160,6 +160,9 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
         config: Validated model, data, objective, batching, and logging settings,
             normally from ``experiment_config``. ``WORLD_SIZE`` determines
             accumulation; ``STEGO_ARTIFACTS_DIR`` locates data and outputs.
+            When set, ``STEGO_SWEEP_OUTPUT_DIR`` replaces only the output root;
+            the sweep launcher supplies a subdirectory of STEGO_ARTIFACTS_DIR.
+            Direct callers omit it to keep outputs at the original root.
             ``config.wandb_project`` selects the destination W&B project.
 
     Returns:
@@ -175,6 +178,8 @@ def build_trainer(config: PrefixKLTrainingConfig) -> PrefixKLTrainer:
     tokenizer = AutoTokenizer.from_pretrained(config.model)
     tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
     training_args = build_sft_config(config, accumulation_steps, tokenizer)
+    if sweep_output_directory := os.environ.get("STEGO_SWEEP_OUTPUT_DIR"):
+        training_args.output_dir = str(Path(sweep_output_directory) / Path(training_args.output_dir).name)
     training_args.save_only_model = True
     configure_wandb_environment(config, os.environ)
     # W&B otherwise writes its local logs relative to the working directory.

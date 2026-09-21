@@ -161,8 +161,12 @@ best. Run independent recovery and text-quality evaluations on saved adapters.
 
 ## Outputs and analysis
 
-Outputs are under
-`$STEGO_ARTIFACTS_DIR/<run-name>/`, including local W&B logs. Names encode the
+Direct training outputs are under
+`$STEGO_ARTIFACTS_DIR/<run-name>/`, including local W&B logs.
+When launched through `run_sweep.py`, outputs instead go
+under `$STEGO_ARTIFACTS_DIR/E20260916_qwen3_0_6b_peft_convergence/sweep/<run-name>/`.
+The launcher sets `STEGO_SWEEP_OUTPUT_DIR` only in its child processes; the shell
+environment and dataset-cache root stay unchanged. Run names encode the
 selected model, bits, learning rate, global batch, loss type, alpha, delta,
 training-token budget, and a `-student-bos0`/`-student-bos1` suffix added to the
 configured base run name. Different budgets and BOS modes use separate checkpoint
