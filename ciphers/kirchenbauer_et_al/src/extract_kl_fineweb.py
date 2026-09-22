@@ -38,30 +38,29 @@ Example call stacks, with 64 content tokens and 4 secret bits:
 
     bitstring_distribution(base_model, tokens, green_mask, delta=2.0, n_bits=4, strategy="block")
     ├── base_model(input_ids=bos_prefixed_tokens)
-    │   └── outputs.logits[0, :-1] -> base_logits [64, vocab]
     ├── _token_bit_log_probs(base_logits, tokens, green_mask, delta=2.0)
-    │   └── token_log_probs [64, 2]
     └── _message_log_distribution(token_log_probs, n_bits=4, strategy="block")
-        ├── _group_bit_log_probs(token_log_probs[0:16])  -> bit 0 log probabilities [2]
-        ├── _group_bit_log_probs(token_log_probs[16:32]) -> bit 1 log probabilities [2]
-        ├── _group_bit_log_probs(token_log_probs[32:48]) -> bit 2 log probabilities [2]
-        ├── _group_bit_log_probs(token_log_probs[48:64]) -> bit 3 log probabilities [2]
-        └── Independent(Bernoulli(...), 1) -> distribution over 4-bit messages
+        ├── _group_bit_log_probs(token_log_probs[0:16])
+        ├── _group_bit_log_probs(token_log_probs[16:32])
+        ├── _group_bit_log_probs(token_log_probs[32:48])
+        ├── _group_bit_log_probs(token_log_probs[48:64])
+        ├── Bernoulli(logits=bit_logits)
+        └── Independent(bit_distributions, reinterpreted_batch_ndims=1)
 
     bitstring_distribution(base_logits, tokens, green_mask, delta=2.0, n_bits=4, strategy="modulo")
     ├── _token_bit_log_probs(base_logits, tokens, green_mask, delta=2.0)
-    │   └── token_log_probs [64, 2]
     └── _message_log_distribution(token_log_probs, n_bits=4, strategy="modulo")
-        ├── _group_bit_log_probs(token_log_probs[0::4]) -> bit 0 log probabilities [2]
-        ├── _group_bit_log_probs(token_log_probs[1::4]) -> bit 1 log probabilities [2]
-        ├── _group_bit_log_probs(token_log_probs[2::4]) -> bit 2 log probabilities [2]
-        ├── _group_bit_log_probs(token_log_probs[3::4]) -> bit 3 log probabilities [2]
-        └── Independent(Bernoulli(...), 1) -> distribution over 4-bit messages
+        ├── _group_bit_log_probs(token_log_probs[0::4])
+        ├── _group_bit_log_probs(token_log_probs[1::4])
+        ├── _group_bit_log_probs(token_log_probs[2::4])
+        ├── _group_bit_log_probs(token_log_probs[3::4])
+        ├── Bernoulli(logits=bit_logits)
+        └── Independent(bit_distributions, reinterpreted_batch_ndims=1)
 
-    Siblings execute top to bottom. bos_prefixed_tokens has shape [1, 65];
-    base_logits has shape [64, vocab] with each row predicting tokens[t].
-    Both public calls return only the distribution. distribution.log_prob(m)
-    gives log P(M=m | D,E=1,C); distribution.sample() returns a bitstring.
+Siblings execute top to bottom. bos_prefixed_tokens has shape [1, 65];
+base_logits has shape [64, vocab] with each row predicting tokens[t].
+Both public calls return only the distribution. distribution.log_prob(m)
+gives log P(M=m | D,E=1,C); distribution.sample() returns a bitstring.
 
 All other functions are private. _probability_of_bit_deprecated retains the
 legacy single-bit calculation and is not part of this call chain.
