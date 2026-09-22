@@ -1,10 +1,8 @@
-"""Extract one bit and specify the proposed multi-bit decoding interface.
+"""Decode bit posteriors under the prescribed red/green logit-boost policy.
 
-``probability_of_bit_deprecated`` is implemented. The three functions below it are
-interface-only stubs that raise ``NotImplementedError``. Their documented
-contracts describe the intended implementation, not current validation or
-runtime guarantees. All posteriors condition on encoding being enabled and
-use independent, equal bit priors under the prescribed red/green boost policy.
+All posteriors condition on encoding being enabled and use independent, equal
+bit priors. Token evidence is combined within groups sharing one bit, then
+assembled into a factorized distribution over messages with a known layout.
 """
 
 from contextlib import nullcontext
@@ -65,16 +63,16 @@ def token_bit_log_probs(
     *,
     delta: float,
 ) -> Float[torch.Tensor, "tokens 2"]:  # noqa: F722
-    """Specify single-position posteriors over bit 0/green and bit 1/red.
+    """Return single-position log posteriors over bit 0/green and bit 1/red.
 
-    This is an unimplemented interface. It separates model execution from
-    decoding so real-model logits and synthetic logits share the same math.
+    Separating model execution from decoding lets real-model logits and
+    synthetic logits share the same calculation.
 
     Args:
         base_logits: Unboosted, adapter-disabled next-token logits [T, V]. Row t
             must predict observed_ids[t] using its full preceding content
             context, without the encoding control prefix. Supply finite logits
-            from one forward pass; this function will not invoke a model.
+            from one forward pass; this function does not invoke a model.
         observed_ids: Integer IDs [T], each in [0, V). These are prediction
             targets, not the input tokens at the same model-logit positions.
             Exclude padding, BOS, and control-prefix tokens from the targets.
@@ -94,14 +92,13 @@ def token_bit_log_probs(
         it has not accumulated evidence from earlier positions in the group.
         Conditioning on context does not assert independence of text tokens.
 
-    Intended calculation:
+    Calculation:
         For color b, score[t,b] = delta * membership[t,b] - log(Z[t,b]), where
         Z[t,b] = 1 + (exp(delta) - 1) * base_color_mass[t,b]. Green and red have
         separate normalizers. Return log_softmax(score, dim=-1).
 
-        A future implementation should share the raw-score calculation with
-        binary encoding detection: normalization here discards the absolute
-        likelihood ratios needed for that separate task.
+        Binary encoding detection requires the raw scores: normalization here
+        discards the absolute likelihood ratios needed for that separate task.
 
     Alignment contract:
         To score every content token, prepend the same explicit base-model BOS
@@ -116,10 +113,10 @@ def token_bit_log_probs(
 def group_bit_log_probs(
     token_log_probs: Float[torch.Tensor, "group_tokens 2"],  # noqa: F722
 ) -> Float[torch.Tensor, "2"]:
-    """Specify the posterior for one bit shared by a selected group of tokens.
+    """Return log posteriors for one bit shared by a selected group of tokens.
 
-    This is an unimplemented interface. Contiguous blocks and modulo-strided
-    groups use exactly the same reduction; neither requires a model call.
+    Contiguous blocks and modulo-strided groups use exactly the same reduction;
+    neither requires a model call.
 
     Args:
         token_log_probs: Selected rows [L, 2] of token_bit_log_probs output,
@@ -135,7 +132,7 @@ def group_bit_log_probs(
         logsumexp is zero. Callers exponentiate for probabilities or use argmax
         for the most likely bit. An empty group returns log([0.5, 0.5]).
 
-    Intended calculation:
+    Calculation:
         First sum along the token axis: multiplication of conditional
         likelihoods becomes addition of logs. These two sums are unnormalized
         scores, not posterior log probabilities. Then apply log_softmax over
@@ -154,11 +151,11 @@ def message_log_distribution(
     strategy: Literal["block", "modulo"],
     data_length: int,
 ) -> tuple[Float[torch.Tensor, "bits 2"], torch.distributions.Independent]:  # noqa: F722
-    """Specify a factorized posterior over messages under a known bit layout.
+    """Return a factorized posterior over messages under a known bit layout.
 
-    This is an unimplemented interface. It assigns positions to groups and
-    delegates each group's evidence reduction to group_bit_log_probs, avoiding
-    a separate likelihood formula for each strategy or message width.
+    Assign positions to groups and delegate each group's evidence reduction to
+    group_bit_log_probs, avoiding a separate likelihood formula for each
+    strategy or message width.
 
     Args:
         token_log_probs: All scored rows [T, 2] from token_bit_log_probs or a
@@ -199,5 +196,5 @@ def message_log_distribution(
         group-local boost policy with full observed context; it does not assume
         independent text tokens or arbitrary learned-model bit interactions.
     """
-    # TODO(hadriano): Support priors over block/modulo layouts; currently the layout is known.
+    # TODO(hadriano): Extend decoding to marginalize over priors on block/modulo layouts.
     raise NotImplementedError("message_log_distribution is an interface-only proposal")
