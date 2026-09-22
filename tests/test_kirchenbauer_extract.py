@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from ciphers.kirchenbauer_et_al.src.extract_kl_fineweb import probability_of_bit
+from ciphers.kirchenbauer_et_al.src.extract_kl_fineweb import _probability_of_bit_deprecated
 
 GREEN = torch.tensor([0, 1])
 RED = torch.tensor([2, 3])
@@ -45,7 +45,7 @@ def uniform_model() -> FixedBaseModel:
 
 
 def probability(text: str, bit: int, model: FixedBaseModel) -> float:
-    return probability_of_bit(text, bit, model, Tokenizer(), RED, GREEN, DELTA)
+    return _probability_of_bit_deprecated(text, bit, model, Tokenizer(), RED, GREEN, DELTA)
 
 
 def test_all_red_and_all_green_have_equal_opposite_posteriors(uniform_model: FixedBaseModel) -> None:
@@ -81,4 +81,4 @@ def test_base_color_mass_normalizes_the_posterior() -> None:
 
 def test_red_and_green_must_partition_the_vocabulary(uniform_model: FixedBaseModel) -> None:
     with pytest.raises(AssertionError, match="cover every vocabulary token exactly once"):
-        probability_of_bit("all red", 1, uniform_model, Tokenizer(), RED[:-1], GREEN, DELTA)
+        _probability_of_bit_deprecated("all red", 1, uniform_model, Tokenizer(), RED[:-1], GREEN, DELTA)
