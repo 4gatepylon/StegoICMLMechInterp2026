@@ -10,7 +10,7 @@ bitstring control prefix using per-bit red/green token policies.
 src/
 ├── configuration_kl_fineweb.py       # Defines and validates configuration for KL training on FineWeb.
 ├── data_kl_fineweb.py                # Loads FineWeb and prepares control-prefixed model inputs.
-├── extract_kl_fineweb.py             # Computes one-bit posteriors from encoded FineWeb text.
+├── extract_kl_fineweb.py             # Computes one-bit posteriors; declares proposed multi-bit interfaces.
 ├── inspect_prefix_tokenization.ipynb # Inspects how the tokenizer represents control prefixes.
 ├── smoke_test_kl_trainer.py          # Runs one lightweight CPU training step through the KL trainer.
 ├── train_kl_fineweb.py               # Launches configurable prefix-KL LoRA training on FineWeb.
@@ -28,6 +28,59 @@ Filtering precedes shuffle and splitting; too few survivors raises an error. Set
 ## Padding guard
 
 `reject_document_padding: true` (default) rejects padding before model execution. Set it to `false` to allow right padding, which remains included in the loss and bit partition; left/internal padding is always forbidden.
+
+## Proposed multi-bit decoding interface (not implemented)
+
+The three new functions in [`extract_kl_fineweb.py`](src/extract_kl_fineweb.py)
+are interface-only stubs: **each raises `NotImplementedError`**. Their docstrings
+specify the intended contracts; the stubs do not yet perform validation or
+decoding. The existing function is renamed to `probability_of_bit_deprecated(...)`
+and retains its original behavior. Callers must use the renamed entry point;
+the old name is not an alias, and the proposed replacements are not yet callable.
+
+All three functions assume encoding is enabled, use equal independent bit
+priors, and operate on one sequence at a time. Column 0 means green/zero;
+column 1 means red/one. Values are **log probabilities**, so exponentiate them
+to obtain probabilities; do not subtract a log probability from one.
+
+| Function | Inputs | Output |
+| --- | --- | --- |
+| `token_bit_log_probs` | Base logits `[T, V]`, observed token IDs `[T]`, boolean green vocabulary mask `[V]`, known `delta` | Per-position log probabilities `[T, 2]` |
+| `group_bit_log_probs` | Selected per-position log probabilities `[L, 2]` | Log probabilities `[2]` for one bit shared by the entire group |
+| `message_log_distribution` | Per-position log probabilities `[T, 2]`, original content positions `[T]`, known `n_bits`, `strategy`, and `data_length` | Per-bit log probabilities `[N, 2]` and an `Independent(Bernoulli, 1)` distribution over `[N]`-bit messages |
+
+Only the caller supplying the first function needs a model forward pass.
+Align logits with their observed next-token targets and preserve full preceding
+content context before selecting groups. The current training teacher uses
+explicit BOS context to predict the first content token; the existing one-bit
+decoder instead leaves its first token unscored. The position argument makes
+either alignment explicit without shifting chunk boundaries. Exact generated
+token IDs should be retained rather than recovered by decoding and re-tokenizing.
+
+The group function first sums the token log probabilities into two unnormalized
+scores, then uses `log_softmax` to normalize the hypotheses **one shared zero**
+versus **one shared one**. The message function reuses that reduction for every
+block or modulo-strided group. The posterior factors over message bits under
+the prescribed boost policy; this does not require independent text tokens.
+
+`data_length` is the original content-frame length, excluding BOS and the XML
+prefix. Keep it fixed after early stopping. `"block"` requires it to be divisible
+by `n_bits`; `"modulo"` uses original position modulo `n_bits`. Unobserved groups
+retain an equal bit posterior. See the function docstrings for exact shape,
+alignment, numerical, and return-value contracts.
+
+The work is deliberately staged into separate reviewable PRs:
+
+1. Define these interfaces and their contracts (this change).
+2. Add tests for known cases: analytical posteriors, normalization, grouping,
+   position alignment, absent evidence, and invalid inputs. No sampling yet.
+3. Implement the shared calculations against those tests.
+4. Generate model samples with a ground-truth policy applied by explicit logit boosts.
+5. Test that a large boost produces high posterior probability for the correct color.
+6. Evaluate progressively weaker or less obvious encoding cases.
+
+This interface does not introduce encoding-presence detection, ROC/AUROC,
+generation, or a training callback.
 
 ## Extracting one bit
 
@@ -156,7 +209,7 @@ Neyman–Pearson lemma identifies likelihood-ratio thresholding as the most
 powerful test between two simple hypotheses at a fixed false-positive rate.
 
 ```python
-def probability_of_bit(text, bit, model, tokenizer, RED, GREEN, delta):
+def probability_of_bit_deprecated(text, bit, model, tokenizer, RED, GREEN, delta):
     tokens = tokenizer(text)
 
     with torch.no_grad(), model.disable_adapter():
