@@ -31,31 +31,72 @@ Filtering precedes shuffle and splitting; too few survivors raises an error. Set
 
 ## Proposed multi-bit decoding interface (not implemented)
 
-The three new functions in [`extract_kl_fineweb.py`](src/extract_kl_fineweb.py)
-are interface-only stubs: **each raises `NotImplementedError`**. Their docstrings
-specify the intended contracts; the stubs do not yet perform validation or
-decoding. The existing function is renamed to `probability_of_bit_deprecated(...)`
-and retains its original behavior. Callers must use the renamed entry point;
-the old name is not an alias, and the proposed replacements are not yet callable.
+[`extract_kl_fineweb.py`](src/extract_kl_fineweb.py) exposes one public function,
+`bitstring_distribution`, backed by three private helpers. These four functions
+are interface-only stubs: **each raises `NotImplementedError`**. The legacy
+one-bit function is private and named `_probability_of_bit_deprecated`; its
+calculation is unchanged. No aliases retain the old public function names.
 
-All three functions assume encoding is enabled, use equal independent bit
-priors, and operate on one sequence at a time. Column 0 means green/zero;
-column 1 means red/one. Values are **log probabilities**, so exponentiate them
-to obtain probabilities; do not subtract a log probability from one.
+The public call takes a base model or aligned base logits, actual content token
+IDs, the green vocabulary mask, `delta`, `n_bits`, and the known strategy:
+
+```python
+distribution = bitstring_distribution(
+    base_model_or_logits=base_model,
+    tokens=content_token_ids,
+    green_mask=green_mask,
+    delta=2.0,
+    n_bits=4,
+    strategy="block",  # Or "modulo".
+)
+# distribution.log_prob(message): log P(M=message | tokens, encoding=yes, C)
+# distribution.base_dist.probs[j]: P(B_j=1 | D_j, encoding=yes, C)
+```
+
+Here `n_bits` is the secret-message length and `n_tokens = len(tokens)` is the
+actual content length. Require `n_tokens > 0`, `n_bits > 0`, and
+`n_tokens % n_bits == 0` for both strategies. Content excludes BOS, XML controls,
+and padding. This API accepts complete frames, not truncation plus a separate
+frame length. It returns only a distribution over bitstrings, not a tuple or
+an enumerated table with `2**n_bits` entries.
+
+The decoder is a maximum-likelihood calculation using an **unboosted reference
+distribution**. With `p(v | h) = P_base(v | h)` and `G_b` the vocabulary set for
+bit `b`, its assumption is:
+
+```text
+P_encoding(v | h, bit=b, encoding=yes)
+    = p(v | h) * exp(delta * indicator(v in G_b)) / Z(h,b)
+
+Z(h,b) = 1 + (exp(delta) - 1) * sum(p(u | h) for u in G_b)
+```
+
+Thus "base" means the encoding model's conditional distribution with the color
+boosts removed. It does not mean any model with the same architecture. Delta is
+always used to construct the two candidate policies from the base logits;
+there is no flag for skipping it when tokens came from a trained generator.
+The module docstring states this relation, its limits for imperfectly trained
+generators, and the call order.
+
+All probabilities condition on encoding=yes and use equal independent bit
+priors. Private helpers use column 0 for green/zero and column 1 for red/one.
+Their tensor values are log probabilities; exponentiate them to obtain
+probabilities rather than subtracting a log probability from one.
 
 | Function | Inputs | Output |
 | --- | --- | --- |
-| `token_bit_log_probs` | Base logits `[T, V]`, observed token IDs `[T]`, boolean green vocabulary mask `[V]`, known `delta` | Per-position log probabilities `[T, 2]` |
-| `group_bit_log_probs` | Selected per-position log probabilities `[L, 2]` | Log probabilities `[2]` for one bit shared by the entire group |
-| `message_log_distribution` | Per-position log probabilities `[T, 2]`, original content positions `[T]`, known `n_bits`, `strategy`, and `data_length` | Per-bit log probabilities `[N, 2]` and an `Independent(Bernoulli, 1)` distribution over `[N]`-bit messages |
+| `bitstring_distribution` | Base model or logits `[T, V]`, content IDs `[T]`, mask `[V]`, `delta`, `n_bits`, `strategy`, optional BOS ID for model input | `Independent(Bernoulli, 1)` representing `P(M=m given tokens, encoding=yes, C)` |
+| `_token_bit_log_probs` | Base logits `[T, V]`, observed token IDs `[T]`, boolean green vocabulary mask `[V]`, known `delta` | Per-position log probabilities `[T, 2]` |
+| `_group_bit_log_probs` | Selected per-position log probabilities `[L, 2]` | Log probabilities `[2]` for one bit shared by the entire group |
+| `_message_log_distribution` | Per-position log probabilities `[T, 2]`, known `n_bits` and `strategy` | `Independent(Bernoulli, 1)` over `[N]`-bit messages |
 
-Only the caller supplying the first function needs a model forward pass.
-Align logits with their observed next-token targets and preserve full preceding
-content context before selecting groups. The current training teacher uses
-explicit BOS context to predict the first content token; the existing one-bit
-decoder instead leaves its first token unscored. The position argument makes
-either alignment explicit without shifting chunk boundaries. Exact generated
-token IDs should be retained rather than recovered by decoding and re-tokenizing.
+The public function runs one base-model forward pass when given a model and
+reuses logits directly otherwise. Both paths must align each row with the
+observed token it predicts and retain full preceding content context. Model
+input prepends explicit BOS to score the first content token; precomputed
+logits must follow the same convention. The private legacy one-bit function
+instead leaves the first token unscored. Retain generated token IDs rather
+than recovering them by decoding and re-tokenizing.
 
 The group function first sums the token log probabilities into two unnormalized
 scores, then uses `log_softmax` to normalize the hypotheses **one shared zero**
@@ -64,11 +105,8 @@ block or modulo-strided group. Using the symbols defined in the module docstring
 `P(M=m | D,E=1,C) = product_j P(B_j=m[j] | D_j,E=1,C)` under the prescribed boost
 policy; this does not require independent text tokens.
 
-`data_length` is the original content-frame length, excluding BOS and the XML
-prefix. Keep it fixed after early stopping. `"block"` requires it to be divisible
-by `n_bits`; `"modulo"` uses original position modulo `n_bits`. Unobserved groups
-have `P(B_j=0 | D_j,E=1,C) = P(B_j=1 | D_j,E=1,C) = 0.5`.
-See the module docstring for call order and the function docstrings for shape,
+For position `t`, `"block"` selects bit `t // (n_tokens // n_bits)` and
+`"modulo"` selects bit `t % n_bits`. The function docstrings specify the shape,
 alignment, numerical, and return-value contracts.
 
 The work is deliberately staged into separate reviewable PRs:
@@ -211,7 +249,7 @@ Neyman–Pearson lemma identifies likelihood-ratio thresholding as the most
 powerful test between two simple hypotheses at a fixed false-positive rate.
 
 ```python
-def probability_of_bit_deprecated(text, bit, model, tokenizer, RED, GREEN, delta):
+def _probability_of_bit_deprecated(text, bit, model, tokenizer, RED, GREEN, delta):
     tokens = tokenizer(text)
 
     with torch.no_grad(), model.disable_adapter():
