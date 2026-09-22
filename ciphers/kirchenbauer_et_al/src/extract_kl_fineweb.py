@@ -1,8 +1,32 @@
-"""Decode bit posteriors under the prescribed red/green logit-boost policy.
+"""Compute P(bits | observed tokens, encoding=yes, known cipher settings).
 
-All posteriors condition on encoding being enabled and use independent, equal
-bit priors. Token evidence is combined within groups sharing one bit, then
-assembled into a factorized distribution over messages with a known layout.
+Notation used below:
+    E=1 means encoding is enabled. C contains the known base model, vocabulary
+    partition, delta, and (when grouping tokens) message length and layout.
+    x_t is an observed token and h_t is its full preceding content context.
+    D_j contains the scored token/context pairs assigned to group j; D is the
+    collection of all groups. B_j is the one bit shared by group j, and
+    M=(B_0, ..., B_{N-1}) is the message. P(B_j=0 | E=1,C) =
+    P(B_j=1 | E=1,C) = 0.5, independently across groups. Probabilities use the
+    prescribed logit-boost policy, not an arbitrary learned encoding policy.
+
+Call order:
+    1. Run the unboosted base model once on the full content with its preceding
+       context. Align each logit row with the token it predicts. Retain the
+       original content positions, excluding BOS and the XML control prefix.
+    2. Call token_bit_log_probs(base_logits, observed_ids, green_mask,
+       delta=delta) to obtain [T, 2] single-position log probabilities.
+    3. For a complete message, pass those same [T, 2] rows and their original
+       positions to message_log_distribution(..., n_bits=N, strategy=...,
+       data_length=...). It selects each group's rows and calls
+       group_bit_log_probs on them. For just one group, select its rows and
+       call group_bit_log_probs directly instead. Do not pass already-combined
+       group probabilities as token rows to message_log_distribution.
+    4. Exponentiate the returned [N, 2] tensor for P(B_j=b | D_j,E=1,C).
+       Use distribution.log_prob(message) for log P(M=message | D,E=1,C).
+
+probability_of_bit_deprecated is a separate legacy entry point: it accepts text
+and a model and returns P(B=bit | tokenized text,E=1,C) for one shared bit.
 """
 
 from contextlib import nullcontext
@@ -22,7 +46,11 @@ def probability_of_bit_deprecated(
     green: torch.Tensor,
     delta: float,
 ) -> float:
-    """Return P(bit | text), assuming equal priors and GREEN=0, RED=1."""
+    """Return P(B=bit | tokenized text,E=1,C) for one shared bit B.
+
+    P(B=0 | E=1,C) = P(B=1 | E=1,C) = 0.5; green means zero and red means one.
+    The first token supplies context and is not itself scored.
+    """
     if bit not in (0, 1):
         raise ValueError("bit must be 0 or 1")
 
@@ -63,10 +91,12 @@ def token_bit_log_probs(
     *,
     delta: float,
 ) -> Float[torch.Tensor, "tokens 2"]:  # noqa: F722
-    """Return single-position log posteriors over bit 0/green and bit 1/red.
+    """Return log P(B_t=b | x_t,h_t,E=1,C) for b=0 and b=1 at each position.
 
     Separating model execution from decoding lets real-model logits and
-    synthetic logits share the same calculation.
+    synthetic logits share the same calculation. B_t is the bit hypothesis
+    tested at this position with P(B_t=b | h_t,E=1,C)=0.5. It is not B_j after
+    conditioning on all earlier observations belonging to the same group.
 
     Args:
         base_logits: Unboosted, adapter-disabled next-token logits [T, V]. Row t
@@ -84,9 +114,10 @@ def token_bit_log_probs(
 
     Returns:
         Floating log probabilities [T, 2], on the input device with at least
-        float32 precision. Columns are bit 0 and bit 1; each row has logsumexp
-        zero. T may be zero. Pass selected rows to group_bit_log_probs or the
-        full tensor and original positions to message_log_distribution.
+        float32 precision. Entry [t,b] is log P(B_t=b | x_t,h_t,E=1,C);
+        columns are zero/one and each row has logsumexp zero. T may be zero.
+        Pass selected rows to group_bit_log_probs or the full tensor and
+        original positions to message_log_distribution.
 
         Each row uses a fresh 50/50 bit prior and only that position's evidence;
         it has not accumulated evidence from earlier positions in the group.
@@ -113,21 +144,21 @@ def token_bit_log_probs(
 def group_bit_log_probs(
     token_log_probs: Float[torch.Tensor, "group_tokens 2"],  # noqa: F722
 ) -> Float[torch.Tensor, "2"]:
-    """Return log posteriors for one bit shared by a selected group of tokens.
+    """Return log P(B_j=b | D_j,E=1,C) for one shared bit and b in {0,1}.
 
     Contiguous blocks and modulo-strided groups use exactly the same reduction;
-    neither requires a model call.
+    neither requires a model call. D_j and C are defined in the module docstring.
 
     Args:
         token_log_probs: Selected rows [L, 2] of token_bit_log_probs output,
             in bit-0/bit-1 column order. A replacement producer must supply the
-            same normalized, equal-prior, single-position log posteriors. Rows
-            must contain no NaNs and have logsumexp zero. Accumulated group
-            posteriors cannot be used as though they were individual tokens.
+            same log P(B_t=b | x_t,h_t,E=1,C), with P(B_t=b | h_t,E=1,C)=0.5.
+            Rows must contain no NaNs and have logsumexp zero. Do not supply
+            log P(B_j=b | D_j,E=1,C) in place of individual token rows.
 
     Returns:
         Floating log probabilities [2] on the input device with at least
-        float32 precision. The entries describe the alternatives that one shared
+        float32 precision. Entry [b] is log P(B_j=b | D_j,E=1,C): one shared
         zero bit or one shared one bit generated the whole group. Their
         logsumexp is zero. Callers exponentiate for probabilities or use argmax
         for the most likely bit. An empty group returns log([0.5, 0.5]).
@@ -135,10 +166,14 @@ def group_bit_log_probs(
     Calculation:
         First sum along the token axis: multiplication of conditional
         likelihoods becomes addition of logs. These two sums are unnormalized
-        scores, not posterior log probabilities. Then apply log_softmax over
+        scores, not log P(B_j=b | D_j,E=1,C). Then apply log_softmax over
         the two hypotheses. Equivalently, subtract logsumexp of the two sums.
         The per-token normalization constants cancel between hypotheses;
         equal bit priors are essential to this stated contract.
+
+        Explicitly, L_j(b) = product over t in group j of
+        P(x_t | h_t,B_j=b,E=1,C), and
+        P(B_j=b | D_j,E=1,C) = L_j(b) / (L_j(0) + L_j(1)).
     """
     raise NotImplementedError("group_bit_log_probs is an interface-only proposal")
 
@@ -151,7 +186,7 @@ def message_log_distribution(
     strategy: Literal["block", "modulo"],
     data_length: int,
 ) -> tuple[Float[torch.Tensor, "bits 2"], torch.distributions.Independent]:  # noqa: F722
-    """Return a factorized posterior over messages under a known bit layout.
+    """Return P(M=m | D,E=1,C) as per-bit log probabilities and a distribution.
 
     Assign positions to groups and delegate each group's evidence reduction to
     group_bit_log_probs, avoiding a separate likelihood formula for each
@@ -165,8 +200,8 @@ def message_log_distribution(
             in [0, data_length). Exclude BOS, control-prefix tokens and padding
             from the coordinate system. Do not renumber retained positions
             when the first token is unscored or some positions are omitted.
-            Omitted evidence contributes no score; this is a posterior based
-            on the supplied evidence, not a marginalization over missing text.
+            Omitted evidence contributes no score: D contains only supplied
+            token/context pairs. This does not marginalize over missing text.
         n_bits: Known positive message width N. Bits have independent uniform
             priors. No length inference or candidate strategy inference occurs.
         strategy: "block" assigns position t to t // (data_length // N);
@@ -181,17 +216,19 @@ def message_log_distribution(
         Tuple (bit_log_probs, distribution):
 
         * bit_log_probs: Floating tensor [N, 2] on the input device with at least
-          float32 precision. Columns are zero/one and rows have logsumexp zero.
+          float32 precision. Entry [j,b] is log P(B_j=b | D_j,E=1,C).
+          Columns are zero/one and rows have logsumexp zero.
           Groups without evidence have log([0.5, 0.5]). Exponentiate for the
-          per-bit probability table; argmax(dim=-1) gives the MAP message.
+          per-bit probability table; argmax(dim=-1) maximizes P(M=m | D,E=1,C).
         * distribution: Independent(Bernoulli(...), 1), with batch_shape []
           and event_shape [N], using bit_log_probs[:,1] - bit_log_probs[:,0]
           as Bernoulli logits. log_prob accepts floating binary messages
-          [..., N] on the same device and returns log probabilities [...].
+          [..., N] on the same device and returns log P(M=m | D,E=1,C) [...].
           sample(sample_shape) returns binary floating samples [*sample_shape, N].
 
-        The distribution compactly represents all 2**N messages. A message's
-        log probability is the sum of its selected per-bit log probabilities.
+        The distribution compactly represents all 2**N messages:
+        P(M=m | D,E=1,C) = product_j P(B_j=m[j] | D_j,E=1,C).
+        Its log probability is the sum of the selected per-bit log probabilities.
         Factorization follows from independent bit priors and the prescribed
         group-local boost policy with full observed context; it does not assume
         independent text tokens or arbitrary learned-model bit interactions.

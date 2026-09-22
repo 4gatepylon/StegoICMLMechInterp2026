@@ -10,7 +10,7 @@ bitstring control prefix using per-bit red/green token policies.
 src/
 ├── configuration_kl_fineweb.py       # Defines and validates configuration for KL training on FineWeb.
 ├── data_kl_fineweb.py                # Loads FineWeb and prepares control-prefixed model inputs.
-├── extract_kl_fineweb.py             # Computes one-bit posteriors; declares proposed multi-bit interfaces.
+├── extract_kl_fineweb.py             # Computes P(bit | text, encoding=yes); declares multi-bit interfaces.
 ├── inspect_prefix_tokenization.ipynb # Inspects how the tokenizer represents control prefixes.
 ├── smoke_test_kl_trainer.py          # Runs one lightweight CPU training step through the KL trainer.
 ├── train_kl_fineweb.py               # Launches configurable prefix-KL LoRA training on FineWeb.
@@ -60,23 +60,25 @@ token IDs should be retained rather than recovered by decoding and re-tokenizing
 The group function first sums the token log probabilities into two unnormalized
 scores, then uses `log_softmax` to normalize the hypotheses **one shared zero**
 versus **one shared one**. The message function reuses that reduction for every
-block or modulo-strided group. The posterior factors over message bits under
-the prescribed boost policy; this does not require independent text tokens.
+block or modulo-strided group. Using the symbols defined in the module docstring,
+`P(M=m | D,E=1,C) = product_j P(B_j=m[j] | D_j,E=1,C)` under the prescribed boost
+policy; this does not require independent text tokens.
 
 `data_length` is the original content-frame length, excluding BOS and the XML
 prefix. Keep it fixed after early stopping. `"block"` requires it to be divisible
 by `n_bits`; `"modulo"` uses original position modulo `n_bits`. Unobserved groups
-retain an equal bit posterior. See the function docstrings for exact shape,
+have `P(B_j=0 | D_j,E=1,C) = P(B_j=1 | D_j,E=1,C) = 0.5`.
+See the module docstring for call order and the function docstrings for shape,
 alignment, numerical, and return-value contracts.
 
 The work is deliberately staged into separate reviewable PRs:
 
 1. Define these interfaces and their contracts (this change).
-2. Add tests for known cases: analytical posteriors, normalization, grouping,
+2. Add tests for known cases: analytical `P(B_j=b | D_j,E=1,C)`, normalization, grouping,
    position alignment, absent evidence, and invalid inputs. No sampling yet.
 3. Implement the shared calculations against those tests.
 4. Generate model samples with a ground-truth policy applied by explicit logit boosts.
-5. Test that a large boost produces high posterior probability for the correct color.
+5. Test that a large boost produces high `P(B_j=correct_bit | D_j,E=1,C)`.
 6. Evaluate progressively weaker or less obvious encoding cases.
 
 This interface does not introduce encoding-presence detection, ROC/AUROC,
@@ -189,15 +191,15 @@ $$
 \Pr(B=b\mid x)=\frac{\pi_be^{A+s_b}}{\pi_0e^{A+s_0}+\pi_1e^{A+s_1}}=\frac{\pi_be^{s_b}}{\pi_0e^{s_0}+\pi_1e^{s_1}}.
 $$
 
-With equal GREEN and RED priors, the priors also cancel and the GREEN posterior
-is simply
+With equal GREEN and RED priors, the priors also cancel and `P(B=0 | x)`
+(conditioning on encoding=yes and the known cipher settings) is simply
 
 $$
 \Pr(B=0\mid x)=\frac{L_0}{L_0+L_1}=\frac{e^{s_0}}{e^{s_0}+e^{s_1}}.
 $$
 
-If the priors differ, Bayesian MAP decoding retains their ratio in the posterior
-log-odds:
+If the priors differ, retain their ratio when calculating
+`log(P(B=1 | x) / P(B=0 | x))`:
 
 $$
 \log\frac{\Pr(B=1\mid x)}{\Pr(B=0\mid x)} = \delta(N_1-N_0) - \sum_{t=1}^{T-1}\log\frac{Z_t^{(1)}}{Z_t^{(0)}} + \log\frac{\pi_1}{\pi_0}.
