@@ -34,19 +34,34 @@ Notation used below:
     P(B_j=1 | E=1,C) = 0.5, independently across groups. Probabilities use the
     prescribed logit-boost policy, not an arbitrary learned encoding policy.
 
-Call order:
-    1. Call bitstring_distribution(base_model_or_logits, tokens, green_mask,
-       delta, n_bits=..., strategy=...). Supply the base model or already
-       aligned base logits [n_tokens, vocab]. The actual content length
-       n_tokens = len(tokens) must be positive and divisible by n_bits.
-    2. The public function obtains base logits if needed, then calls
-       _token_bit_log_probs to compute per-position log probabilities [T, 2].
-    3. It passes those rows to _message_log_distribution, which assigns each
-       position to a group and calls _group_bit_log_probs for that group.
-       Each group sums log evidence, then normalizes its zero/one alternatives.
-    4. The public function returns only an Independent(Bernoulli, 1)
-       distribution. Use distribution.log_prob(message) for
-       log P(M=message | D,E=1,C), or distribution.sample() for a bitstring.
+Example call stacks, with 64 content tokens and 4 secret bits:
+
+    bitstring_distribution(base_model, tokens, green_mask, delta=2.0, n_bits=4, strategy="block")
+    ├── base_model(input_ids=bos_prefixed_tokens)
+    │   └── outputs.logits[0, :-1] -> base_logits [64, vocab]
+    ├── _token_bit_log_probs(base_logits, tokens, green_mask, delta=2.0)
+    │   └── token_log_probs [64, 2]
+    └── _message_log_distribution(token_log_probs, n_bits=4, strategy="block")
+        ├── _group_bit_log_probs(token_log_probs[0:16])  -> bit 0 log probabilities [2]
+        ├── _group_bit_log_probs(token_log_probs[16:32]) -> bit 1 log probabilities [2]
+        ├── _group_bit_log_probs(token_log_probs[32:48]) -> bit 2 log probabilities [2]
+        ├── _group_bit_log_probs(token_log_probs[48:64]) -> bit 3 log probabilities [2]
+        └── Independent(Bernoulli(...), 1) -> distribution over 4-bit messages
+
+    bitstring_distribution(base_logits, tokens, green_mask, delta=2.0, n_bits=4, strategy="modulo")
+    ├── _token_bit_log_probs(base_logits, tokens, green_mask, delta=2.0)
+    │   └── token_log_probs [64, 2]
+    └── _message_log_distribution(token_log_probs, n_bits=4, strategy="modulo")
+        ├── _group_bit_log_probs(token_log_probs[0::4]) -> bit 0 log probabilities [2]
+        ├── _group_bit_log_probs(token_log_probs[1::4]) -> bit 1 log probabilities [2]
+        ├── _group_bit_log_probs(token_log_probs[2::4]) -> bit 2 log probabilities [2]
+        ├── _group_bit_log_probs(token_log_probs[3::4]) -> bit 3 log probabilities [2]
+        └── Independent(Bernoulli(...), 1) -> distribution over 4-bit messages
+
+    Siblings execute top to bottom. bos_prefixed_tokens has shape [1, 65];
+    base_logits has shape [64, vocab] with each row predicting tokens[t].
+    Both public calls return only the distribution. distribution.log_prob(m)
+    gives log P(M=m | D,E=1,C); distribution.sample() returns a bitstring.
 
 All other functions are private. _probability_of_bit_deprecated retains the
 legacy single-bit calculation and is not part of this call chain.
