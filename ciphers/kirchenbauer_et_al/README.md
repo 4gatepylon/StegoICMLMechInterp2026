@@ -156,7 +156,7 @@ Neyman–Pearson lemma identifies likelihood-ratio thresholding as the most
 powerful test between two simple hypotheses at a fixed false-positive rate.
 
 ```python
-def probability_of_bit(text, bit, model, tokenizer, RED, GREEN, delta):
+def probability_of_bit_deprecated(text, bit, model, tokenizer, RED, GREEN, delta):
     tokens = tokenizer(text)
 
     with torch.no_grad(), model.disable_adapter():

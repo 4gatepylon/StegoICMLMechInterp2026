@@ -6,7 +6,7 @@ import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 
-def probability_of_bit(
+def probability_of_bit_deprecated(
     text: str,
     bit: int,
     model: PreTrainedModel,
