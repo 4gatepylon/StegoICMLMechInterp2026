@@ -54,18 +54,7 @@ def probability_of_bit_deprecated(
     return torch.stack(scores).softmax(dim=0)[bit].item()
 
 
-def _get_base_model_logits(
-    base_model_or_base_model_logits: PreTrainedModel | Float[torch.Tensor, "n_tokens d_vocab"],
-    tokens_to_analyze: Int[torch.Tensor, "n_tokens"],
-) -> Float[torch.Tensor, "n_tokens d_vocab"]:
-    if isinstance(base_model_or_base_model_logits, PreTrainedModel):
-        # TODO(hadriano): [high] this is not a base-model forward: no disable_adapter/eval/inference_mode, and HF logits are often (1, T, V).
-        return base_model_or_base_model_logits(tokens_to_analyze).logits
-    else:
-        return base_model_or_base_model_logits
-
-
-def _get_bit_index_to_token_indices_map(strategy: Literal["modulus", "chunk"], n_bits: int, n_tokens: int) -> Int[torch.Tensor, "n_tokens"]:
+def _get_bit_index_to_token_indices_map(strategy: Literal["modulus", "block"], n_bits: int, n_tokens: int) -> Int[torch.Tensor, "n_tokens"]:
     """Return a tensor like [0, 0, 1, 1, 2, 2] or [0, 1, 2, 0, 1, 2] based on strategy and n_bits. VALUE = bit index; INDEX = token index."""
     assert n_tokens % n_bits == 0, f"n_tokens must be a multiple of n_bits. You had {n_tokens} tokens and {n_bits} bits."
     tokens_per_bit = n_tokens // n_bits
@@ -73,12 +62,13 @@ def _get_bit_index_to_token_indices_map(strategy: Literal["modulus", "chunk"], n
     if strategy == "modulus":
         # [0, 1, 2, ..., 0, 1, 2, ...] INTERPRET as (flat) [[0, 1, 2, ...], [0, 1, 2, ...]] -> transpose cols x rows -> [[0, 0], [1, 1], [2, 2], ...]]
         return repeat(token_ids, "n_bits -> (tokens_per_bit n_bits)", tokens_per_bit=tokens_per_bit)
-    if strategy == "chunk":
+    if strategy == "block":
         # [0, 0, 1, 1, 2, 2, ...] INTERPRET as (flat) [[0, 0], [1, 1], [2, 2], ...] -> [[0, 0], [1, 1], [2, 2], ...]]
         return repeat(token_ids, "n_bits -> (n_bits tokens_per_bit)", tokens_per_bit=tokens_per_bit)
     raise ValueError(f"Invalid strategy: {strategy}")
 
 
+# TODO(hadriano) add shitty "brute force over ALL bit sequences" option
 def probability_over_bit_sequences(
     tokens_to_analyze: Int[torch.Tensor, "n_tokens"],
     base_model_or_base_model_logits: PreTrainedModel | Float[torch.Tensor, "n_tokens d_vocab"],
@@ -87,18 +77,19 @@ def probability_over_bit_sequences(
     green_mask_as_token_ids: Int[torch.Tensor, "n_tokens_divided_by_2"],
     delta: float,
     *,
-    strategy: Literal["modulus", "chunk"] = "chunk",  # TODO(hadriano): [low] trainer names are block/modulo; docstring modulus line should be token_index % n_bits == i.
+    strategy: Literal["modulus", "block"] = "block",
     assume_encoding_equals_true: bool = True,
     probabilities_of_1s: Optional[Float[torch.Tensor, "n_bits"]] = None,
 ) -> Float[torch.Tensor, "n_bits"]:
-    # TODO(hadriano): [low] one-liner says P(bit_sequence) but this is independent P(bit_i == 1), not the 2^K joint.
-    """Return distribution of P(bit_sequence | tokens_to_analyze).
+    """Return joint (product) distribution of P(bit_sequence | tokens_to_analyze).
 
     It is assumed that the tokens_to_analyze were generated from a model such that if it was operating under do_encoding=False, it produces logits
     equivalent to our "base model" (the identity or producer of `base_model_or_base_model_logits`). Otherwise, it adds delta to the logits at the
     logit-axis (d_vocab) indices corresponding to `red_mask_as_token_ids` on the strategy-defined token indices for each bit (and bit index) that has
     a value of 1; for bits (and bit indices) with a value of 0, it adds delta to the `green_mask_as_token_ids` logit-axis indices (and the
     corresponding token indices) instead.
+
+    XXX(hadriano) write up the probability here better.
 
     Preconditions:
         tokens_to_analyze: 1D integer tensor. Must be a multiple of n_bits.
@@ -116,7 +107,7 @@ def probability_over_bit_sequences(
             vocabulary (i.e. size d_vocab and equal to the the output of the model's logits on `tokens_to_analyze`).
         delta: the amount the model boosts RED tokens for 1's and GREEN tokens for 0's.
         strategy: how to MAP from bit INDEX to token INDICES. Per strategy:
-            - Chunk: Map bit index i to token indices in the range: [i * (n_tokens // n_bits), (i + 1) * (n_tokens // n_bits)).
+            - Block: Map bit index i to token indices in the range: [i * (n_tokens // n_bits), (i + 1) * (n_tokens // n_bits)).
             - Modulus: Map bit index i to token indices where (i % n_bits) == i.
         assume_encoding_equals_true: if False, raise a NotImplementedError. This only supports the probabiliy of a bit sequence conditioned on the
             assumption that a bit sequence was encoded at all.
@@ -134,8 +125,12 @@ def probability_over_bit_sequences(
         raise NotImplementedError(
             "This only supports the probabiliy of a bit sequence conditioned on the assumption that a bit sequence was encoded at all."
         )
+    if not isinstance(base_model_or_base_model_logits, torch.Tensor):
+        raise NotImplementedError(
+            "Passing a base MODEL is not supported because that would require proper off-by-1 leveraging context " "BEFORE the data section."
+        )
     # Do forward pass if needed (in part needed for the validation)
-    base_model_logits: Float[torch.Tensor, "n_tokens d_vocab"] = _get_base_model_logits(base_model_or_base_model_logits, tokens_to_analyze)
+    base_model_logits: Float[torch.Tensor, "n_tokens d_vocab"] = base_model_or_base_model_logits
     if len(base_model_logits.shape) != 2:
         raise ValueError(f"Base model logits must be 2D. Maybe you tried to batch? Your shape was: {base_model_logits.shape}")
     n_tokens, d_vocab = base_model_logits.shape
@@ -149,7 +144,6 @@ def probability_over_bit_sequences(
     _overlap = torch.intersect1d(red_mask_as_token_ids, green_mask_as_token_ids)
     if _overlap.numel() > 0:
         raise ValueError(f"Red and green masks must be disjoint. Overlap size was {_overlap.numel()}. d_vocab={d_vocab}")
-    bit_index_to_token_indices_map: Int[torch.Tensor, "n_tokens"] = _get_bit_index_to_token_indices_map(strategy, n_bits, n_tokens)  # TODO(hadriano): [low] unused after boosting all positions with [:, color].
     # Get the prior over bit-strings and validate it
     if probabilities_of_1s is None:
         probabilities_of_1s = torch.ones(n_bits) / 2
@@ -158,65 +152,78 @@ def probability_over_bit_sequences(
             raise ValueError(f"Probabilities of 1s must be a tensor of shape (n_bits,). You had {probabilities_of_1s.shape}.")
         if not torch.all(probabilities_of_1s >= 0) or not torch.all(probabilities_of_1s <= 1):
             raise ValueError("Probabilities of 1s must be in [0, 1].")
-        # TODO(hadriano): [high] independent Bernoulli P(bit_i == 1) must not be required to sum to 1; default ones/2 would fail this for n_bits != 2.
-        if not torch.allclose(probabilities_of_1s.sum(), 1.0):
-            raise ValueError("Probabilities of 1s must sum to 1.0.")
-    ################ Validation and preprocessing ################
-    # 1. Find the boosted (delta-added) logits under assumption of bits 1111... vs. 0000...
+
+    ################ Actual probabilities computation ################
+    # 1. Find the boosted (delta-added) logprobs
     boosted_logits_assuming_1s: Float[torch.Tensor, "n_tokens d_vocab"] = base_model_logits.clone()
     boosted_logits_assuming_0s: Float[torch.Tensor, "n_tokens d_vocab"] = base_model_logits.clone()
     boosted_logits_assuming_1s[:, red_mask_as_token_ids] += delta
     boosted_logits_assuming_0s[:, green_mask_as_token_ids] += delta
     boosted_logits = torch.stack((boosted_logits_assuming_1s, boosted_logits_assuming_0s), dim=0)
     assert boosted_logits.shape == (2, n_tokens, d_vocab), f"Boosted logits must have shape (2, n_tokens, d_vocab). Shape: {boosted_logits.shape}."
-    #  2. Find log(P(observed token | bit was 1)) and log(P(observed token | bit was 0)) for each bit index in parallel
+
+    #  2. Find the probabilities of each token conditioned on bit being 1 or 0 AND all preceding tokens (per token)
     boosted_logprobs = boosted_logits.log_softmax(dim=-1)
     assert boosted_logprobs.shape == boosted_logits.shape
     d_identity = boosted_logprobs.shape[0]
 
-    # TODO(hadriano): [critical] causal off-by-one: logits[t] predicts tokens[t+1]; scoring tokens[t] and the first token with no context is wrong unless the caller already shifted.
     observed_token_ids = tokens_to_analyze.to(device=boosted_logprobs.device, dtype=torch.long)
     # NOTE: repeating on d_identity is FINE because it's length-2 which is short
     observed_token_ids_repeated = repeat(observed_token_ids, "n_tokens -> d_identity n_tokens 1", d_identity=d_identity)
-    log_p_observed_token_given_bit_was_X: Float[torch.Tensor, "d_identity n_tokens"] = rearrange(
+    log_p_observed_token_given_bit_was_X_ungrouped: Float[torch.Tensor, "d_identity n_tokens"] = rearrange(
         # https://docs.pytorch.org/docs/2.14/generated/torch.gather.html =>
         # log_p_observed_token_given_bit_was_X[i][j][k] = boosted_logprobs[i][j][tokens_to_analyze[k]]
         boosted_logprobs.gather(dim=-1, index=observed_token_ids_repeated),
         # This rearrange is just a sequeeze
         "d_identity n_tokens 1 -> d_identity n_tokens",
     )
-    assert log_p_observed_token_given_bit_was_X.shape == (d_identity, n_tokens), f"Shape: {log_p_observed_token_given_bit_was_X.shape}."
-    # 3. For X in [0, 1], find P(bit was X | all observed tokens in ONLY that bit's token indices) using Bayes' rule. In other words:
-    #   P(bit was X | all observed tokens in ONLY that bit's token indices) = (
-    #     P(all observed tokens in ONLY that bit's token indices | bit was X) P(bit was X) /  (
-    #       sum(P(all observed tokens in ONLY that bit's token indices | bit was Y) P(bit was Y) for Y in [0, 1])
-    #     )
-    #   )
-    # In this formula:
-    #  - P(bit was X) comes from the prior over bit-strings above
-    #  - P(all observed tokens | bit was X) comes from the appropriated delta-boosted logits above. You (a) turn them into log-probs, (b) get the
-    #    sum in log-space (corresponding to P(first token | bit was X) * P(second token | bit was X, first token) * ... *
-    #    P(last token | bit was X, all previous tokens in ONLY that bit's token indices)), (c) use softmax to turn it back into a probability along
-    #    d_bit_identity.
-    device = log_p_observed_token_given_bit_was_X.device
-    # > Get log-probs reduced
-    token_groups = "(n_bits tokens_per_bit)" if strategy == "chunk" else "(tokens_per_bit n_bits)"
-    log_p_observed_tokens_given_bit_was_X: Float[torch.Tensor, "d_identity n_bits"] = rearrange(
-        log_p_observed_token_given_bit_was_X,
-        # Read `_get_bit_index_to_token_indices_map` to understand this and `token_groups` in more detail.
+    assert log_p_observed_token_given_bit_was_X_ungrouped.shape == (d_identity, n_tokens), str(log_p_observed_token_given_bit_was_X_ungrouped.shape)
+
+    # 3. Reshape bases on the groups of tokens per bit
+    token_groups = "(n_bits tokens_per_bit)" if strategy == "block" else "(tokens_per_bit n_bits)"
+    tokens_per_bit = n_tokens // n_bits
+    log_p_observed_token_given_bit_was_X_grouped = rearrange(
+        log_p_observed_token_given_bit_was_X_ungrouped,
         f"d_identity {token_groups} -> d_identity n_bits tokens_per_bit",
         n_bits=n_bits,
-    ).sum(-1)
-    assert log_p_observed_tokens_given_bit_was_X.shape == (d_identity, n_bits), f"Shape: {log_p_observed_tokens_given_bit_was_X.shape}."
-    # > Get equal-shape prior
-    prior_bit_is_1 = probabilities_of_1s.to(device=device, dtype=log_p_observed_tokens_given_bit_was_X.dtype)
-    log_prior_bit_was_X: Float[torch.Tensor, "d_identity n_bits"] = torch.stack((prior_bit_is_1.log(), (1.0 - prior_bit_is_1).log()), dim=0)
-    assert log_prior_bit_was_X.shape == (d_identity, n_bits), f"Shape: {log_prior_bit_was_X.shape}."
-    # TODO(hadriano): [medium] this independent-bit Bayes is exact only with no cross-bit effects; otherwise score all 2^K messages.
-    # > Get log(P(bit was X AND all observed tokens)) then apply bayes rule AND extract it as probability
-    p_bit_was_X: Float[torch.Tensor, "d_identity n_bits"] = (log_p_observed_tokens_given_bit_was_X + log_prior_bit_was_X).softmax(dim=0)
-    assert p_bit_was_X.shape == (d_identity, n_bits), f"Shape: {p_bit_was_X.shape}."
-    assert torch.allclose(p_bit_was_X.sum(dim=0), 1.0), "Probabilities must sum to 1.0."
-    # > Extract probability of bit being 1
-    probability_bit_is_1: Float[torch.Tensor, "n_bits"] = p_bit_was_X[0]
-    return probability_bit_is_1
+    )
+    assert log_p_observed_token_given_bit_was_X_grouped.shape == (d_identity, n_bits, tokens_per_bit), str(
+        log_p_observed_token_given_bit_was_X_grouped.shape
+    )
+
+    # 4. Reduce within the group to get `log(P(tokens were as observed in the group | bit was X and preceding/interleaved/etc, materialized tokens))`
+    log_p_pre_prod_per_token_group_reduced = log_p_observed_token_given_bit_was_X_grouped.sum(-1)
+    assert log_p_pre_prod_per_token_group_reduced.shape == (d_identity, n_bits), str(log_p_pre_prod_per_token_group_reduced.shape)
+
+    # 5. Multiply (add in log-space) by the probability of the bit being 1 or 0 to get ^ alongside the P(bit was X).
+    log_prior_bit_was_X: Float[torch.Tensor, "d_identity n_bits"] = torch.stack((probabilities_of_1s.log(), (1.0 - probabilities_of_1s).log()), dim=0)
+    assert log_prior_bit_was_X.shape == (d_identity, n_bits), str(log_prior_bit_was_X.shape)
+    log_p_prod_per_token_group_reduced = log_p_pre_prod_per_token_group_reduced + log_prior_bit_was_X
+
+    # 6. P(bit j == X | observed tokens) is what we now calculate. Note the steps:
+    #   > For a given message, our tensor gives us the ability (via gather) to get P(observed tokens | message)
+    #   > P(bit j = X | observed tokens) = sum(all != j possibilities(P(bit j = X | observed tokens, all !=j possibilities) P(all != j possibilities))
+    #     (where X is in {0, 1}). That's using marginalization with an intersection.
+    #   > This is sum(for all messages where bit j is X of P(message|tokens)).
+    #   > Any individual message' in this sum is such that P(message'|tokens) = P(tokens|message')P(message') / sum(over all messages). Let's
+    #     look at the NUMERATOR first. Using the independence assumption for our message yields the following:
+    #     ```
+    #     P(tokens in group 1|other tokens)P(tokens in group2 | other tokens)...P(tokens in groupK|other tokens)P(bit 1)P(bit 2)...P(bit K).
+    #     ```
+    #     In our OUTER sum, everything varies except one bit, so you get basically: P(group j)P(bit j = X) * sum(the other stuff in ^).
+    #     Using a nifty trick, the other stuff is just:
+    #     ```
+    #     Prod over all i != j if (
+    #       P(group i tokens|other tokens, bit i = 0)P(bit i = 0) +
+    #       P(group i tokens|other tokens, bit i = 1)P(bit i = 1)
+    #     )
+    #     In log-space this is just the sum/reduction (over dim=-1) over the logsumexp(log_p_prod_per_token_group_reduced, dim=0). Let's call this
+    #     resulting constant Z_j. We may also calculate such a variant over ALL POSSIBLE MESSAGES by not fixing j and get Z (this can be generalized
+    #     to any set of indices but whatever). Z is the DENOMINATOR sum value. Z is one global constant. We therefore get:
+    #     P(bit j | tokens) = P(group j)P(bit j = X) * exp(Z_j - Z). In logspace this is simply
+    #     ```
+    #     log_p_prod_per_token_group_reduced[j, X] + (
+    #       + logsumexp(log_p_prod_per_token_group_reduced, dim=0).sum() - logsumexp(log_p_prod_per_token_group_reduced, dim=0)[j] # Z_j
+    #       - logsumexp(log_p_prod_per_token_group_reduced, dim=0).sum()                                                           # Z
+    #     )
+    #     ```
