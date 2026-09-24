@@ -202,28 +202,56 @@ def probability_over_bit_sequences(
 
     # 6. P(bit j == X | observed tokens) is what we now calculate. Note the steps:
     #   > For a given message, our tensor gives us the ability (via gather) to get P(observed tokens | message)
-    #   > P(bit j = X | observed tokens) = sum(all != j possibilities(P(bit j = X | observed tokens, all !=j possibilities) P(all != j possibilities))
+    #   > P(bit j = X | observed tokens) =
+    #     ```
+    #     sum(
+    #       over all messages v where bit j = X of P(secret message | observed tokens)
+    #     )
+    #     ```
     #     (where X is in {0, 1}). That's using marginalization with an intersection.
-    #   > This is sum(for all messages where bit j is X of P(message|tokens)).
-    #   > Any individual message' in this sum is such that P(message'|tokens) = P(tokens|message')P(message') / sum(over all messages). Let's
-    #     look at the NUMERATOR first. Using the independence assumption for our message yields the following:
+    #   > Any individual message' in this sum is such that P(message'|tokens) = P(tokens|message')P(message') / sum(over ALL possible messages). Call
+    #     the denominator Z, and note that it's basically a global constnat. Let's look for any fixed message "message" at P(tokens|message)P(message)
+    #     first. Using the independence assumption for our message yields the following:
     #     ```
     #     P(tokens in group 1|other tokens)P(tokens in group2 | other tokens)...P(tokens in groupK|other tokens)P(bit 1)P(bit 2)...P(bit K).
     #     ```
-    #     In our OUTER sum, everything varies except one bit, so you get basically: P(group j)P(bit j = X) * sum(the other stuff in ^).
-    #     Using a nifty trick, the other stuff is just:
+    #     Therefore, in any sum where we fix indices i_0, i_1, ... i_L (L could be 0) we get that the sum over all messages that have those indices
+    #     set to values v_0, v_1, ... v_L is:
     #     ```
-    #     Prod over all i != j if (
-    #       P(group i tokens|other tokens, bit i = 0)P(bit i = 0) +
-    #       P(group i tokens|other tokens, bit i = 1)P(bit i = 1)
+    #      (
+    #        # SPECIFIC PROBABILITIES FOR REALIZED VALUES ARE FIXED INDICES
+    #        P(group i_0 | other tokens, bit i_0 = v_0) * P(bit i_0 = v_0)
+    #        * P(group i_1 | other tokens, bit i_1 = v_1) * P(bit i_1 = v_1)
+    #        * ...
+    #        * P(bit i_L = v_L) * P(group i_L | other tokens, bit i_L = v_L)
+    #      ) * (
+    #        # SUM AS A PRODUCT OVER ALL POSSIBLE VALUES (CARTESIAN PRODUCT) IF NON-FIXED INDICES
+    #        Prod over all i' NOT in L of (
+    #         P(group i tokens|other tokens, bit i = 0)P(bit i = 0) +
+    #         P(group i tokens|other tokens, bit i = 1)P(bit i = 1)
+    #       )
     #     )
-    #     In log-space this is just the sum/reduction (over dim=-1) over the logsumexp(log_p_prod_per_token_group_reduced, dim=0). Let's call this
-    #     resulting constant Z_j. We may also calculate such a variant over ALL POSSIBLE MESSAGES by not fixing j and get Z (this can be generalized
-    #     to any set of indices but whatever). Z is the DENOMINATOR sum value. Z is one global constant. We therefore get:
-    #     P(bit j | tokens) = P(group j)P(bit j = X) * exp(Z_j - Z). In logspace this is simply
     #     ```
-    #     log_p_prod_per_token_group_reduced[j, X] + (
-    #       + logsumexp(log_p_prod_per_token_group_reduced, dim=0).sum() - logsumexp(log_p_prod_per_token_group_reduced, dim=0)[j] # Z_j
-    #       - logsumexp(log_p_prod_per_token_group_reduced, dim=0).sum()                                                           # Z
-    #     )
+    #     To get Z we pick L = empty set. Of course, since Z is a constant, we get P(message'|tokens) = (a product) / Z, and then we get the outer sum
+    #     (over all messages where bit j = X) as being (1/Z) * sum(these products). These products are of the same form as Z but with j fixed, and
+    #     therefore have a value that is a function of j and X. Call it: Z[j, X]. Z[j, X] = a product of terms that depend on X (the fixed index)
+    #     times a product that overall does not depend on X (i.e. the cartesian product sum-to-product trick output for non-fixed indices). Let
+    #     C[j, X] = P(bit j = X) * P(group j | other tokens, bit j = X). Then Z[j, X] = C[j, X] * Z[j]. and Z[j] = Z / (C[j, 0] + C[j, 1]).
+    #     Observe that log(C[j, X]) = log_p_prod_per_token_group_reduced[X, j]. Therefore, because:
     #     ```
+    #     log(P(bit j = X | tokens)) = log(C[j, X]) + log(Z) - logsumexp(log(C[j, 0]), log(C[j, 1])) - log(Z)
+    #       = log(C[j, X]) - logsumexp(log(C[j, 0]), log(C[j, 1]))
+    #     ```
+    #    where Z is reduced over all those logsumexp outputs via a sum.
+    logsumexp_p_prod_per_token_group_reduced = rearrange(torch.logsumexp(log_p_prod_per_token_group_reduced, dim=0), "n_bits -> 1, n_bits")
+    assert logsumexp_p_prod_per_token_group_reduced.shape == (1, n_bits), str(logsumexp_p_prod_per_token_group_reduced.shape)
+    log_p_bit_j_equals_X_given_tokens = log_p_prod_per_token_group_reduced - logsumexp_p_prod_per_token_group_reduced
+    assert log_p_bit_j_equals_X_given_tokens.shape == (d_identity, n_bits), str(log_p_bit_j_equals_X_given_tokens.shape)
+    p_bit_j_equals_X_given_tokens = log_p_bit_j_equals_X_given_tokens.softmax(dim=-1)
+    # We should get probabilties, and in theory they were already normalized.
+    assert torch.allclose(p_bit_j_equals_X_given_tokens, log_p_bit_j_equals_X_given_tokens.exp()), str(p_bit_j_equals_X_given_tokens)
+    assert torch.allclose(p_bit_j_equals_X_given_tokens.sum(dim=0), torch.ones(n_bits)), str(p_bit_j_equals_X_given_tokens.sum(dim=0))
+    assert p_bit_j_equals_X_given_tokens.shape == (d_identity, n_bits), str(p_bit_j_equals_X_given_tokens.shape)
+    p_bit_j_equals_1 = p_bit_j_equals_X_given_tokens[1, :].flatten()
+    assert p_bit_j_equals_1.shape == (n_bits,), str(p_bit_j_equals_1.shape)
+    return p_bit_j_equals_1
